@@ -1609,6 +1609,13 @@ select.folder-input {
   margin: 1rem 0 0.85rem;
 }
 
+.stat-grid[hidden],
+.grok-toggle[hidden],
+.hint[hidden],
+.overlay-stats > [data-grok-dependent][hidden] {
+  display: none !important;
+}
+
 .stat-grid li {
   background: var(--window-bg);
   border: 1px solid var(--border);

@@ -21,6 +21,10 @@ if ($runMode === '1' || $runMode === 'unidentified' || $runMode === 'retry') {
 }
 $grokAvailable = grok_resolve_available();
 $grokOn = grok_live_enabled();
+$showGrokUi = $grokAvailable && $grokOn;
+$idleCopy = $showGrokUi
+    ? 'One scan: TMDB lookups queue Grok work. Every 25 queued titles, Grok runs a batch. Continue after each Grok batch.'
+    : 'Scan uses TMDB only. Unmatched titles stay unmatched unless you turn Grok on.';
 
 render_start('Scan · Video');
 render_header(['section' => 'config', 'branches' => true]);
@@ -33,7 +37,7 @@ render_header(['section' => 'config', 'branches' => true]);
   <section class="panel" data-scan-panel data-scan-run-url="<?= h(app_href('video/scan-run.php')) ?>" data-grok-toggle-url="<?= h(app_href('video/scan-grok-toggle.php')) ?>" data-grok-pause-url="<?= h(app_href('video/scan-grok-pause.php')) ?>"<?= $runMode !== '' ? ' data-scan-start="retry"' : '' ?>>
     <p class="scan-kicker" data-scan-kicker><?= $stopping ? 'Stopping' : ($running ? 'In progress' : 'Ready') ?></p>
     <h1 data-scan-title><?= $stopping ? 'Stopping' : ($running ? 'Scanning' : 'Video scan') ?></h1>
-    <p class="scan-live-copy" data-scan-message><?= h((string) ($status['message'] !== '' ? $status['message'] : 'One scan: TMDB lookups queue Grok work. Every 25 queued titles, Grok runs a batch. Continue after each Grok batch.')) ?></p>
+    <p class="scan-live-copy" data-scan-message><?= h((string) ($status['message'] !== '' ? $status['message'] : $idleCopy)) ?></p>
     <div class="scan-bar<?= $running && empty($status['pending']) ? ' is-indeterminate' : '' ?>" aria-hidden="true"><span class="scan-bar-fill" data-scan-bar style="width: 0%"></span></div>
     <ul class="stat-grid">
       <li>
@@ -49,7 +53,7 @@ render_header(['section' => 'config', 'branches' => true]);
         <span class="stat-label">Unmatched</span>
       </li>
     </ul>
-    <ul class="stat-grid">
+    <ul class="stat-grid" data-grok-dependent<?= $showGrokUi ? '' : ' hidden' ?>>
       <li>
         <span class="stat-value" data-scan-grok-matched><?= (int) ($status['grok_matched'] ?? 0) ?></span>
         <span class="stat-label">Grok matched</span>
@@ -73,12 +77,13 @@ render_header(['section' => 'config', 'branches' => true]);
         <input type="checkbox" data-grok-toggle<?= $grokOn ? ' checked' : '' ?>>
         <span>Use Grok in this scan</span>
       </label>
-      <label class="grok-toggle">
-        <input type="checkbox" data-grok-pause-toggle<?= grok_dev_pause_each_batch() ? ' checked' : '' ?>>
+      <label class="grok-toggle" data-grok-dependent<?= $showGrokUi ? '' : ' hidden' ?>>
+        <input type="checkbox" data-grok-pause-toggle<?= grok_dev_pause_each_batch() ? ' checked' : '' ?><?= $showGrokUi ? '' : ' disabled' ?>>
         <span>Pause after each Grok batch</span>
       </label>
     </div>
-    <p class="hint">Grok runs after every 25 TMDB failures. Both toggles apply immediately without stopping the scan; the current xAI request finishes. Pause shows Continue after each batch.</p>
+    <p class="hint" data-grok-hint-on<?= $showGrokUi ? '' : ' hidden' ?>>Grok runs after every 25 TMDB failures. Both toggles apply immediately without stopping the scan; the current xAI request finishes. Pause shows Continue after each batch.</p>
+    <p class="hint" data-grok-hint-off<?= $showGrokUi ? ' hidden' : '' ?>>Grok is off. Scan uses TMDB only. You can turn Grok on at any time; the current TMDB work continues.</p>
     <?php else: ?>
     <p class="hint">Set an xAI Grok key in Config to enable stage 2. TMDB still runs on Scan.</p>
     <?php endif; ?>

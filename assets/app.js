@@ -997,6 +997,29 @@
     }
   }
 
+  function grokUiEnabled() {
+    var toggle = document.querySelector('[data-grok-toggle]');
+    return !!(toggle && toggle.checked);
+  }
+
+  function setGrokDependentUi(on) {
+    on = !!on;
+    document.querySelectorAll('[data-grok-dependent]').forEach(function (el) {
+      if (on) el.removeAttribute('hidden');
+      else el.setAttribute('hidden', 'hidden');
+    });
+    var pause = document.querySelector('[data-grok-pause-toggle]');
+    if (pause) {
+      pause.disabled = !on;
+    }
+    document.querySelectorAll('[data-grok-hint-on]').forEach(function (el) {
+      el.hidden = !on;
+    });
+    document.querySelectorAll('[data-grok-hint-off]').forEach(function (el) {
+      el.hidden = on;
+    });
+  }
+
   function paintScan(data) {
     if (!data) return;
     var state = data.state || 'idle';
@@ -1093,7 +1116,10 @@
     setText('[data-scan-grok-cost]', grokCost);
     setText('[data-scan-overlay-grok-cost]', grokCost);
 
-    var showWait = running && !stopping && !scanStopRequested && !!data.paused;
+    var grokOn = typeof data.grok_enabled === 'boolean' ? data.grok_enabled : grokUiEnabled();
+    setGrokDependentUi(grokOn);
+
+    var showWait = grokOn && running && !stopping && !scanStopRequested && !!data.paused;
     document.querySelectorAll('[data-grok-wait-actions]').forEach(function (el) {
       el.classList.toggle('is-visible', showWait);
       if (showWait) el.removeAttribute('hidden');
@@ -1359,15 +1385,24 @@
 
   var grokToggle = document.querySelector('[data-grok-toggle]');
   var grokToggleUrl = scanPanel ? scanPanel.getAttribute('data-grok-toggle-url') : '';
+  if (grokToggle) {
+    setGrokDependentUi(grokToggle.checked);
+  } else {
+    setGrokDependentUi(false);
+  }
   if (grokToggle && grokToggleUrl) {
     grokToggle.addEventListener('change', function () {
+      setGrokDependentUi(grokToggle.checked);
       fetch(grokToggleUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ enabled: grokToggle.checked ? '1' : '0' })
       }).then(function (r) { return r.json(); }).then(function (data) {
-        if (data && typeof data.enabled === 'boolean') grokToggle.checked = data.enabled;
+        if (data && typeof data.enabled === 'boolean') {
+          grokToggle.checked = data.enabled;
+          setGrokDependentUi(data.enabled);
+        }
       }).catch(function () {});
     });
   }
