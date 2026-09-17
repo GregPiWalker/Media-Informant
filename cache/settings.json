@@ -1,0 +1,55 @@
+{
+    "version": 1,
+    "video_categories": [
+        {
+            "id": "movies",
+            "label": "Movies"
+        },
+        {
+            "id": "tv-shows",
+            "label": "TV Shows"
+        },
+        {
+            "id": "documentaries",
+            "label": "Documentaries"
+        },
+        {
+            "id": "music-videos",
+            "label": "Music Videos"
+        },
+        {
+            "id": "interviews",
+            "label": "Interviews"
+        },
+        {
+            "id": "fitness",
+            "label": "Fitness"
+        },
+        {
+            "id": "home-videos",
+            "label": "Home Videos"
+        }
+    ],
+    "music_categories": [],
+    "video_roots": [
+        {
+            "path": "/volume1/Video/M O V I E S",
+            "category": "movies"
+        },
+        {
+            "path": "/volume1/Video/T E L E V I S I O N",
+            "category": "tv-shows"
+        }
+    ],
+    "music_roots": [
+        {
+            "path": "/volume1/Music",
+            "category": ""
+        }
+    ],
+    "video_excludes": [],
+    "music_excludes": [],
+    "tmdb_api_key": "4d425ce89ae18873eabcda0890c8a1dc",
+    "tmdb_language": "en-US",
+    "xai_api_key": "xai-suoExMnkCyPlvI9PknTBeNa44fBwWxjns8AQKvVOq7QbxGv6rbxgpmHyJY64cXZRBl2rE992woe1qGFJ"
+}
