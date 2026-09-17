@@ -7,6 +7,7 @@ require dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/catalog.php';
 
 cache_init();
+$dbError = function_exists('db_last_error') ? db_last_error() : '';
 
 $library = cache_read_library();
 $allowedRoots = settings_video_roots();

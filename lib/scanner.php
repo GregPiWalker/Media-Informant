@@ -599,7 +599,7 @@ function scan_job_write_library(array $job): void
         'items' => $items,
     ];
     if (!cache_write_library($library)) {
-        throw new RuntimeException('Could not write library.json. Check cache/ permissions.');
+        throw new RuntimeException('Could not write the video catalog database. Check cache/ permissions.');
     }
     if (function_exists('cache_prune_orphan_titles')) {
         cache_prune_orphan_titles($items);
@@ -1135,7 +1135,7 @@ function scan_job_finalize(array $job, bool $cancelled): array
         'items' => $items,
     ];
     if (!cache_write_library($library)) {
-        throw new RuntimeException('Could not write library.json. Check cache/ permissions.');
+        throw new RuntimeException('Could not write the video catalog database. Check cache/ permissions.');
     }
     $orphans = function_exists('cache_prune_orphan_titles') ? cache_prune_orphan_titles($items) : 0;
     if ($dropped > 0 && function_exists('app_log')) {
@@ -1173,6 +1173,9 @@ function scan_job_finalize(array $job, bool $cancelled): array
             . 'TMDB found ' . $found . '. Grok matched ' . (int) ($job['grok_matched'] ?? 0)
             . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.',
     ], scan_grok_cost_fields($job)));
+    if (function_exists('catalog_store_record_scan')) {
+        catalog_store_record_scan('video', $job, $cancelled);
+    }
     $batches = (int) ($job['grok_batches'] ?? 0);
     if ($batches > 0 && function_exists('app_log')) {
         $usd = (float) ($job['grok_cost_usd'] ?? 0);

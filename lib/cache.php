@@ -1,12 +1,18 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/catalog_store.php';
+
 function cache_init(): void
 {
     foreach ([CACHE_DIR, CACHE_DIR . '/titles'] as $dir) {
         if (!is_dir($dir)) {
             mkdir($dir, 0775, true);
         }
+    }
+    if (function_exists('db_migrate_on_open')) {
+        db_migrate_on_open();
     }
 }
 
@@ -77,25 +83,26 @@ function cache_read_json(string $path): ?array
 
 function cache_read_library(): array
 {
-    $data = cache_read_json(cache_library_path());
-    if ($data === null) {
-        return [
-            'version' => 1,
-            'scanned_at' => null,
-            'video_roots' => function_exists('settings_video_roots') ? settings_video_roots() : [VIDEO_ROOT],
-            'items' => [],
-        ];
+    $out = [
+        'version' => 1,
+        'scanned_at' => null,
+        'video_roots' => function_exists('settings_video_roots') ? settings_video_roots() : [VIDEO_ROOT],
+        'items' => [],
+    ];
+    $items = catalog_store_load('video');
+    $meta = catalog_store_meta('video');
+    $out['items'] = $items;
+    if (isset($meta['updated_at']) && $meta['updated_at'] !== null && $meta['updated_at'] !== '') {
+        $out['scanned_at'] = (int) $meta['updated_at'];
     }
-    if (!isset($data['items']) || !is_array($data['items'])) {
-        $data['items'] = [];
-    }
-    return $data;
+    return $out;
 }
 
 function cache_write_library(array $library): bool
 {
-    $library['version'] = 1;
-    return cache_write_atomic(cache_library_path(), $library);
+    $items = is_array($library['items'] ?? null) ? $library['items'] : [];
+    $scanned = isset($library['scanned_at']) ? (int) $library['scanned_at'] : time();
+    return catalog_store_save('video', $items, $scanned);
 }
 
 function cache_read_title(int $tmdbId): ?array
@@ -191,6 +198,10 @@ function cache_prune_orphan_titles(array $items): int
 
 function cache_find_item(array $library, string $id): ?array
 {
+    $row = catalog_store_find('video', $id);
+    if ($row !== null) {
+        return $row;
+    }
     foreach ($library['items'] as $item) {
         if (($item['id'] ?? '') === $id) {
             return $item;
@@ -466,22 +477,18 @@ function cache_string_list(mixed $value): array
 
 function cache_update_item(string $id, callable $mutator): ?array
 {
-    $library = cache_read_library();
-    foreach ($library['items'] as $i => $item) {
-        if (!is_array($item) || ($item['id'] ?? '') !== $id) {
-            continue;
-        }
-        $next = $mutator($item);
-        if (!is_array($next)) {
-            return null;
-        }
-        $library['items'][$i] = $next;
-        if (!cache_write_library($library)) {
-            return null;
-        }
-        return $next;
+    $item = catalog_store_find('video', $id);
+    if ($item === null) {
+        return null;
     }
-    return null;
+    $next = $mutator($item);
+    if (!is_array($next)) {
+        return null;
+    }
+    if (!catalog_store_update_one('video', $next)) {
+        return null;
+    }
+    return $next;
 }
 
 function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'direct'): array

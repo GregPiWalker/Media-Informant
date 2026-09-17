@@ -641,6 +641,10 @@ function grok_collect_unmatched_ids(array $library): array
         if (library_item_status($item) !== 'unmatched') {
             continue;
         }
+        $cands = grok_compact_candidates($item['tmdb_candidates'] ?? []);
+        if ($cands === []) {
+            continue;
+        }
         $id = (string) ($item['id'] ?? '');
         if ($id !== '') {
             $ids[] = $id;

@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var bool $categoryHasNone */
 /** @var array<string, list<CatalogGroup>> $genreGroups */
 /** @var int|null $scannedAt */
+/** @var string $dbError */
 
 function catalog_thumb(CatalogRecord $record, string $size): string
 {
@@ -25,7 +26,7 @@ function catalog_thumb_button(CatalogRecord $record, string $size, string $label
     if ($extra !== '') {
         $bits[] = $extra;
     } else {
-        $bits[] = $record->kind === 'show' ? 'TV show' : 'Movie';
+        $bits[] = $record->kind === 'show' ? 'TV show' : ($record->kind === 'documentary' ? 'Documentary' : 'Movie');
     }
     $year = $record->cells['year'] ?? '';
     $genres = $record->cells['genres'] ?? '';
@@ -68,6 +69,9 @@ $groupCount = count($groups);
 $view = $prefs->view;
 ?>
 <main class="page">
+  <?php if (!empty($dbError)): ?>
+  <p class="form-banner is-error" role="alert"><?= h($dbError) ?></p>
+  <?php endif; ?>
   <?php if ($fileCount === 0): ?>
   <section class="empty-state">
     <div class="empty-art" aria-hidden="true">

@@ -61,8 +61,14 @@ define('GROK_VERIFY_SINGLES', true);
 /** Default when cache/grok.pause is missing. The Scan page toggle overrides this live. */
 define('GROK_DEV_PAUSE_EACH_BATCH', true);
 
+define('SQLITE_VIDEO_PATH', CACHE_DIR . '/video.sqlite');
+define('SQLITE_MUSIC_PATH', CACHE_DIR . '/music.sqlite');
+/** If non-empty, migrate-json.php requires this key. Leave empty to disable. */
+define('MIGRATE_KEY', '');
+
 require_once __DIR__ . '/view.php';
 require_once __DIR__ . '/log.php';
+require_once __DIR__ . '/db.php';
 define('VIDEO_EXTENSIONS', ['mkv', 'mp4', 'avi', 'm4v', 'mov', 'wmv', 'ts', 'm2ts']);
 define('AUDIO_EXTENSIONS', ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wma', 'wav', 'aiff']);
 
@@ -152,6 +158,9 @@ function format_scanned_at(?int $timestamp): string
 
 function render_start(string $title): void
 {
+    if (function_exists('db_migrate_on_open')) {
+        db_migrate_on_open();
+    }
     $pref = theme_pref();
     $resolved = $pref === 'dark' ? 'dark' : 'light';
     $themeColor = $resolved === 'dark' ? '#2c2c31' : '#ffffff';
