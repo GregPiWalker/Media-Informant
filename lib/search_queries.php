@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/parser.php';
+
 /**
  * Shared TMDB query variants for scan auto-match and Grok candidate fetch.
  *
@@ -18,6 +20,8 @@ declare(strict_types=1);
  * - Wall-E.m4v → includes WALL-E or Wall-E, not only Wall E
  * - The Naked Gun 33 and a Third → includes The Naked Gun, Naked Gun, and a
  *     33 1/3 variant; must not win on “and a Third” / “33 and a Third”.
+ * - TV: Show/Season 1/Rose.mkv → includes the show title from the grandparent
+ *     folder, not only the episode filename.
  */
 
 function search_query_junk_pattern(): string
@@ -246,6 +250,165 @@ function search_query_hyphen_variants(string $title, string $raw): array
     return $out;
 }
 
+function search_query_path_parts(string $path): array
+{
+    $path = str_replace('\\', '/', $path);
+    $parts = explode('/', $path);
+    $out = [];
+    foreach ($parts as $part) {
+        if ($part !== '' && $part !== '.') {
+            $out[] = $part;
+        }
+    }
+    return $out;
+}
+
+function search_query_is_season_folder(string $name): bool
+{
+    $name = trim($name);
+    if ($name === '') {
+        return false;
+    }
+    if (function_exists('season_folder_number') && season_folder_number($name) !== null) {
+        return true;
+    }
+    return (bool) preg_match('/^(?:(?:seasons?|series)\s*\.?\s*\d{1,2}|specials|s\s*\.?\s*\d{1,2})$/i', $name);
+}
+
+function search_query_is_episode_code(string $s): bool
+{
+    $s = strtolower(str_replace(' ', '', search_query_clean($s)));
+    return $s !== '' && (bool) preg_match('/^(?:s\d{1,2}e\d{1,3}|e\d{1,3}|\d{1,2}x\d{1,3}|\d{1,3})$/', $s);
+}
+
+function search_query_strip_episode_codes(string $s): string
+{
+    $s = preg_replace('/\bS\d{1,2}\s*E\d{1,3}\b/i', ' ', $s) ?? $s;
+    $s = preg_replace('/\b\d{1,2}\s*x\s*\d{1,3}\b/i', ' ', $s) ?? $s;
+    $s = preg_replace('/\b(?:e|ep|episode)\s*\d{1,3}\b/i', ' ', $s) ?? $s;
+    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+    return trim($s);
+}
+
+function search_query_filename_looks_like_episode(string $name): bool
+{
+    $name = search_query_clean($name);
+    if ($name === '') {
+        return false;
+    }
+    if (preg_match('/\bS\d{1,2}\s*E\d{1,3}\b/i', $name) || preg_match('/\b\d{1,2}\s*x\s*\d{1,3}\b/i', $name)) {
+        return true;
+    }
+    if (preg_match('/\b(?:e|ep|episode)\s*\d{1,3}\b/i', $name)) {
+        return true;
+    }
+    return search_query_is_episode_code($name);
+}
+
+function search_query_folder_is_title(string $name): bool
+{
+    $name = trim($name);
+    if ($name === '' || search_query_is_season_folder($name)) {
+        return false;
+    }
+    if (function_exists('is_generic_folder') && is_generic_folder($name)) {
+        return false;
+    }
+    $clean = search_query_clean($name);
+    return $clean !== '' && !search_query_is_episode_code($clean);
+}
+
+/**
+ * Show title from grandparent when parent is a season folder
+ * (Show/Season 1/file.mkv). Season folder names are never returned.
+ */
+function search_query_tv_show_from_path(string $path): string
+{
+    $parts = search_query_path_parts($path);
+    if ($parts === []) {
+        return '';
+    }
+    $last = (string) array_pop($parts);
+    if (!str_contains($last, '.')) {
+        $parts[] = $last;
+    }
+    if ($parts === []) {
+        return '';
+    }
+    $n = count($parts);
+    $parent = $parts[$n - 1];
+    $grand = $n >= 2 ? $parts[$n - 2] : '';
+    $great = $n >= 3 ? $parts[$n - 3] : '';
+    if (search_query_is_season_folder($parent) && search_query_folder_is_title($grand)) {
+        return search_query_clean($grand);
+    }
+    if (search_query_is_season_folder($grand) && search_query_folder_is_title($great)) {
+        return search_query_clean($great);
+    }
+    return '';
+}
+
+/**
+ * Parent folder as show when there is no season directory
+ * (Show/S01E05.mkv). Only used after the path is already known to be TV.
+ */
+function search_query_parent_show_from_path(string $path): string
+{
+    $fromSeason = search_query_tv_show_from_path($path);
+    if ($fromSeason !== '') {
+        return $fromSeason;
+    }
+    $parts = search_query_path_parts($path);
+    if ($parts === []) {
+        return '';
+    }
+    $last = (string) array_pop($parts);
+    if (!str_contains($last, '.')) {
+        $parts[] = $last;
+    }
+    if ($parts === []) {
+        return '';
+    }
+    $parent = $parts[count($parts) - 1];
+    if (!search_query_folder_is_title($parent)) {
+        return '';
+    }
+    return search_query_clean($parent);
+}
+
+function search_query_path_is_tv(string $path, array $meta): bool
+{
+    if (($meta['kind'] ?? '') === 'show') {
+        return true;
+    }
+    if (($meta['season'] ?? null) !== null || ($meta['episode'] ?? null) !== null) {
+        return true;
+    }
+    if (search_query_tv_show_from_path($path) !== '') {
+        return true;
+    }
+    $base = basename(str_replace('\\', '/', $path));
+    return search_query_filename_looks_like_episode($base);
+}
+
+function search_query_episode_title_from_filename(string $filename, string $show = ''): string
+{
+    $s = search_query_strip_episode_codes(search_query_clean($filename));
+    $s = preg_replace('/\s+/', ' ', $s) ?? $s;
+    $s = trim($s, " \t-");
+    if ($show !== '') {
+        $s = trim((string) preg_replace('/^' . preg_quote($show, '/') . '\s*/iu', '', $s));
+        $noArt = search_query_drop_article($show);
+        if ($noArt !== '' && strcasecmp($noArt, $show) !== 0) {
+            $s = trim((string) preg_replace('/^' . preg_quote($noArt, '/') . '\s*/iu', '', $s));
+        }
+    }
+    if ($s === '' || search_query_is_episode_code($s) || search_query_is_season_folder($s)) {
+        return '';
+    }
+    return $s;
+}
+
 function search_query_push(array &$out, string $q, array &$seen, bool $allowWeak = false): void
 {
     $q = trim(preg_replace('/\s+/', ' ', $q) ?? $q);
@@ -264,22 +427,66 @@ function search_query_push(array &$out, string $q, array &$seen, bool $allowWeak
 }
 
 /**
+ * @param array{kind?:string,path?:string,season?:?int,episode?:?int,episode_title?:string} $meta
  * @return list<string> unique queries, cascade order, max 6
  */
-function tmdb_search_queries(string $parsedTitle, string $rawFilename = '', ?int $year = null): array
+function tmdb_search_queries(string $parsedTitle, string $rawFilename = '', ?int $year = null, array $meta = []): array
 {
     unset($year);
     $out = [];
     $seen = [];
+    $path = (string) ($meta['path'] ?? $rawFilename);
+    $isTv = search_query_path_is_tv($path, $meta);
+    $showFromPath = $isTv ? search_query_parent_show_from_path($path) : search_query_tv_show_from_path($path);
+    $episodeTitle = search_query_clean((string) ($meta['episode_title'] ?? ''));
     $cleanTitle = search_query_clean($parsedTitle);
-    $cleanFile = search_query_clean($rawFilename);
-    $primary = $cleanTitle !== '' ? $cleanTitle : $cleanFile;
-    if ($primary === '' && $cleanFile !== '') {
-        $primary = $cleanFile;
-    }
+    $cleanFile = search_query_strip_episode_codes(search_query_clean($rawFilename));
 
-    search_query_push($out, $primary, $seen, true);
-    if ($cleanFile !== '' && strcasecmp($cleanFile, $primary) !== 0) {
+    if ($isTv) {
+        $show = $cleanTitle;
+        if ($showFromPath !== '' && ($show === '' || search_query_is_episode_code($show) || ($episodeTitle !== '' && strcasecmp($show, $episodeTitle) === 0))) {
+            $show = $showFromPath;
+        } elseif ($showFromPath !== '' && $show !== '' && search_query_is_weak($show)) {
+            $show = $showFromPath;
+        }
+        if ($show === '' && $showFromPath !== '') {
+            $show = $showFromPath;
+        }
+        if ($show !== '' && search_query_is_season_folder($show)) {
+            $show = $showFromPath;
+        }
+        if ($episodeTitle === '' || search_query_is_episode_code($episodeTitle)) {
+            $fromFile = search_query_episode_title_from_filename($rawFilename, $show);
+            if ($fromFile !== '') {
+                $episodeTitle = $fromFile;
+            }
+        }
+        // Season folder names are detection-only, never sent as a query.
+        search_query_push($out, $show, $seen, true);
+        $noArticle = search_query_drop_article($show);
+        search_query_push($out, $noArticle, $seen);
+        if ($episodeTitle !== '' && strcasecmp($episodeTitle, $show) !== 0 && !search_query_is_episode_code($episodeTitle)) {
+            search_query_push($out, trim($show . ' ' . $episodeTitle), $seen);
+            search_query_push($out, $episodeTitle, $seen);
+        }
+        if ($cleanFile !== '' && !search_query_is_episode_code($cleanFile) && strcasecmp($cleanFile, $show) !== 0 && strcasecmp($cleanFile, $episodeTitle) !== 0) {
+            $remainder = search_query_episode_title_from_filename($cleanFile, $show);
+            if ($remainder !== '' && strcasecmp($remainder, $episodeTitle) !== 0) {
+                search_query_push($out, trim($show . ' ' . $remainder), $seen);
+            }
+        }
+        $primary = $show !== '' ? $show : $cleanTitle;
+        if ($primary === '') {
+            $primary = $cleanFile;
+        }
+    } else {
+        $primary = $cleanTitle !== '' ? $cleanTitle : $cleanFile;
+        if ($primary === '' && $cleanFile !== '') {
+            $primary = $cleanFile;
+        }
+        search_query_push($out, $primary, $seen, true);
+    }
+    if (!$isTv && $cleanFile !== '' && strcasecmp($cleanFile, $primary) !== 0) {
         search_query_push($out, $cleanFile, $seen, true);
     }
 

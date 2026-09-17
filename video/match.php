@@ -45,7 +45,11 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $tmdbId = (int) ($_POST['tmdb_id'] ?? 0);
         $meta = $tmdbId > 0 ? cache_read_title($tmdbId) : null;
         if ($meta === null && $tmdbId > 0) {
-            $meta = tmdb_fetch_details($tmdbId);
+            $postedType = (string) ($_POST['media_type'] ?? '');
+            $mediaType = $postedType === 'tv' || $postedType === 'movie'
+                ? $postedType
+                : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
+            $meta = tmdb_fetch_details($tmdbId, $mediaType);
             if ($meta !== null) {
                 cache_write_title($tmdbId, $meta);
             }
@@ -81,7 +85,9 @@ if ($parsedYear !== null && $parsedYear < 1870) {
 $browse = (string) ($_GET['browse'] ?? '') === 'popular';
 $q = isset($_GET['q']) ? trim((string) $_GET['q']) : ($browse ? '' : $parsedTitle);
 $yearRaw = isset($_GET['year']) ? trim((string) $_GET['year']) : '';
-if ($yearRaw === '' && !isset($_GET['q']) && !isset($_GET['browse']) && $parsedYear !== null) {
+$isShow = is_array($item) && (string) ($item['kind'] ?? '') === 'show';
+$searchMedia = $isShow ? 'tv' : 'movie';
+if ($yearRaw === '' && !isset($_GET['q']) && !isset($_GET['browse']) && $parsedYear !== null && !$isShow) {
     $yearRaw = (string) $parsedYear;
 }
 $year = $yearRaw !== '' && ctype_digit($yearRaw) ? (int) $yearRaw : null;
@@ -94,11 +100,11 @@ $hasKey = tmdb_has_key();
 
 if ($item !== null && $hasKey) {
     if ($q !== '') {
-        $payload = tmdb_search_results($q, $year, $page);
+        $payload = tmdb_search_results($q, $year, $page, $searchMedia);
         $relaxedYear = !empty($payload['relaxed_year']);
     } else {
         $mode = 'popular';
-        $payload = tmdb_popular_results($page);
+        $payload = tmdb_popular_results($page, $searchMedia);
     }
 }
 

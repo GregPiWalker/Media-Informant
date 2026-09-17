@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/parser.php';
+require_once __DIR__ . '/folders.php';
 
 final class SkipJunkFilter extends RecursiveFilterIterator
 {
@@ -173,6 +174,190 @@ function scan_match_key(string $title, ?int $year): string
     return lower($title) . '|' . ($year ?? '');
 }
 
+function scan_item_key(array $row): string
+{
+    return (string) ($row['root'] ?? '') . "\n" . (string) ($row['path'] ?? '');
+}
+
+/**
+ * Library rows for this job. Files gone from a walked source are omitted.
+ * Items on a configured root we could not read are kept. Roots no longer
+ * in Config are omitted.
+ *
+ * @return list<array<string, mixed>>
+ */
+function scan_job_catalog_items(array $job): array
+{
+    $files = is_array($job['files'] ?? null) ? $job['files'] : [];
+    $live = [];
+    foreach ($files as $file) {
+        if (!is_array($file) || (string) ($file['path'] ?? '') === '') {
+            continue;
+        }
+        $live[scan_item_key($file)] = true;
+    }
+
+    $walked = [];
+    foreach (is_array($job['walked_roots'] ?? null) ? $job['walked_roots'] : [] as $root) {
+        $root = (string) $root;
+        if ($root !== '') {
+            $walked[$root] = true;
+        }
+    }
+    if ($walked === []) {
+        foreach ($files as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+            $root = (string) ($file['root'] ?? '');
+            if ($root !== '') {
+                $walked[$root] = true;
+            }
+        }
+    }
+
+    $configured = [];
+    foreach (is_array($job['roots'] ?? null) ? $job['roots'] : [] as $root) {
+        $root = function_exists('settings_normalize_path')
+            ? settings_normalize_path((string) $root)
+            : (string) $root;
+        if ($root !== '') {
+            $configured[$root] = true;
+        }
+    }
+
+    $processed = [];
+    foreach (is_array($job['items'] ?? null) ? $job['items'] : [] as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
+        }
+        $processed[scan_item_key($item)] = $item;
+    }
+
+    $out = [];
+    $seen = [];
+    foreach ($processed as $key => $item) {
+        $out[] = $item;
+        $seen[$key] = true;
+    }
+
+    $old = cache_read_library();
+    foreach (is_array($old['items'] ?? null) ? $old['items'] : [] as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
+        }
+        $key = scan_item_key($item);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $root = (string) ($item['root'] ?? '');
+        if ($root !== '' && isset($walked[$root])) {
+            if (!isset($live[$key])) {
+                continue;
+            }
+            $out[] = $item;
+            $seen[$key] = true;
+            continue;
+        }
+        if ($root !== '' && isset($configured[$root])) {
+            $out[] = $item;
+            $seen[$key] = true;
+        }
+    }
+    return $out;
+}
+
+function scan_job_strip_excluded(): void
+{
+    $job = scan_job_read();
+    if (($job['state'] ?? '') !== 'running') {
+        return;
+    }
+    $excludes = settings_video_excludes();
+    if ($excludes === []) {
+        return;
+    }
+    $changed = false;
+    $droppedIds = [];
+    if (isset($job['files']) && is_array($job['files'])) {
+        $files = [];
+        foreach ($job['files'] as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+            if (settings_path_is_excluded(format_source_path($file), $excludes)) {
+                $changed = true;
+                continue;
+            }
+            $files[] = $file;
+        }
+        $job['files'] = $files;
+    }
+    if (isset($job['items']) && is_array($job['items'])) {
+        $items = [];
+        foreach ($job['items'] as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            if (settings_item_excluded($item, $excludes, [])) {
+                $id = (string) ($item['id'] ?? '');
+                if ($id !== '') {
+                    $droppedIds[$id] = true;
+                }
+                $changed = true;
+                continue;
+            }
+            $items[] = $item;
+        }
+        $job['items'] = $items;
+    }
+    if (isset($job['grok_queue']) && is_array($job['grok_queue'])) {
+        $queue = [];
+        $removedBeforeIndex = 0;
+        $gIndex = (int) ($job['grok_index'] ?? 0);
+        foreach ($job['grok_queue'] as $i => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = (string) ($row['id'] ?? '');
+            if ($id !== '' && isset($droppedIds[$id])) {
+                if ($i < $gIndex) {
+                    $removedBeforeIndex++;
+                }
+                $changed = true;
+                continue;
+            }
+            $queue[] = $row;
+        }
+        $job['grok_queue'] = $queue;
+        $job['grok_index'] = max(0, $gIndex - $removedBeforeIndex);
+        $job['grok_index'] = min((int) $job['grok_index'], count($queue));
+    }
+    if ($changed) {
+        scan_job_write($job);
+    }
+}
+
+function scan_count_dropped_items(array $before, array $after): int
+{
+    $keep = [];
+    foreach ($after as $item) {
+        if (is_array($item)) {
+            $keep[scan_item_key($item)] = true;
+        }
+    }
+    $n = 0;
+    foreach ($before as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
+        }
+        if (!isset($keep[scan_item_key($item)])) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
 function library_is_manual(array $item): bool
 {
     return library_match_source($item) === 'manual';
@@ -192,17 +377,24 @@ function library_touch(array $item, array $file): array
 function library_carry_file(array $item, array $file): array
 {
     $item = library_touch($item, $file);
-    $parsed = parse_media($item['path']);
+    $parsed = scan_parse_path((string) ($item['root'] ?? ''), $item['path'], (string) ($item['category'] ?? ''));
     $item['season'] = $parsed['season'];
     $item['episode'] = $parsed['episode'];
-    $item['kind'] = (string) ($parsed['kind'] ?? $item['kind'] ?? 'movie');
     $item['episode_title'] = (string) ($parsed['episode_title'] ?? '');
     $item['part'] = (string) ($parsed['part'] ?? '');
-    if ($parsed['title'] !== '') {
-        $item['title'] = $parsed['title'];
-        if (($item['status'] ?? '') !== 'matched') {
-            $item = library_set_auto_title($item, $parsed['title']);
+    if (!library_has_user_kind($item)) {
+        $item['kind'] = (string) ($parsed['kind'] ?? $item['kind'] ?? 'movie');
+        if ($parsed['title'] !== '') {
+            $item['title'] = $parsed['title'];
+            if (($item['status'] ?? '') !== 'matched') {
+                $item = library_set_auto_title($item, $parsed['title']);
+            }
         }
+    }
+    if (library_item_kind($item) === 'show') {
+        $item['grouped'] = true;
+    } elseif (!library_has_user_grouped($item)) {
+        $item['grouped'] = !empty($parsed['grouped']);
     }
     return $item;
 }
@@ -230,6 +422,36 @@ function scan_status_defaults(): array
         'started_at' => null,
         'updated_at' => null,
         'cancel_requested' => false,
+        'paused' => false,
+        'grok_queued' => 0,
+        'grok_attempted' => 0,
+        'grok_matched' => 0,
+        'grok_cleared' => 0,
+        'grok_skipped' => 0,
+        'grok_left' => 0,
+        'grok_batches' => 0,
+        'grok_prompt_tokens' => 0,
+        'grok_completion_tokens' => 0,
+        'grok_cached_tokens' => 0,
+        'grok_cost_usd' => 0.0,
+        'grok_cost_label' => '$0.0000',
+        'grok_enabled' => false,
+        'grok_pause' => true,
+        'kind' => 'scan',
+    ];
+}
+
+function scan_grok_cost_fields(array $job): array
+{
+    $usd = (float) ($job['grok_cost_usd'] ?? 0);
+    $label = function_exists('grok_format_usd') ? grok_format_usd($usd) : ('$' . number_format($usd, 4, '.', ''));
+    return [
+        'grok_batches' => (int) ($job['grok_batches'] ?? 0),
+        'grok_prompt_tokens' => (int) ($job['grok_prompt_tokens'] ?? 0),
+        'grok_completion_tokens' => (int) ($job['grok_completion_tokens'] ?? 0),
+        'grok_cached_tokens' => (int) ($job['grok_cached_tokens'] ?? 0),
+        'grok_cost_usd' => $usd,
+        'grok_cost_label' => $label,
     ];
 }
 
@@ -237,9 +459,25 @@ function scan_status_read(): array
 {
     $data = cache_read_json(scan_status_path());
     if (!is_array($data)) {
-        return scan_status_defaults();
+        $data = scan_status_defaults();
+    } else {
+        $data = array_merge(scan_status_defaults(), $data);
     }
-    return array_merge(scan_status_defaults(), $data);
+    if (function_exists('grok_live_enabled')) {
+        $data['grok_enabled'] = grok_live_enabled();
+    }
+    $pause = function_exists('grok_dev_pause_each_batch') ? grok_dev_pause_each_batch() : true;
+    $data['grok_pause'] = $pause;
+    if (!$pause || !empty($data['cancel_requested'])) {
+        $data['paused'] = false;
+    } elseif (($data['state'] ?? '') === 'running' && empty($data['paused'])) {
+        $job = function_exists('scan_job_read') ? scan_job_read() : [];
+        if (($job['state'] ?? '') === 'running' && !empty($job['wait_continue'])) {
+            $data['paused'] = true;
+        }
+    }
+    $data['kind'] = 'scan';
+    return $data;
 }
 
 function scan_normalize_mode(string $mode): string
@@ -351,6 +589,68 @@ function scan_index_library(array $library): array
     return [$oldByPath, $known];
 }
 
+function scan_job_write_library(array $job): void
+{
+    $items = scan_job_catalog_items($job);
+    $library = [
+        'version' => 1,
+        'scanned_at' => time(),
+        'video_roots' => $job['roots'] ?? settings_video_roots(),
+        'items' => $items,
+    ];
+    if (!cache_write_library($library)) {
+        throw new RuntimeException('Could not write library.json. Check cache/ permissions.');
+    }
+    if (function_exists('cache_prune_orphan_titles')) {
+        cache_prune_orphan_titles($items);
+    }
+}
+
+function scan_queue_grok(array &$job, array $item, string $mode): void
+{
+    if (($item['id'] ?? '') === '') {
+        return;
+    }
+    if (!isset($job['grok_queue']) || !is_array($job['grok_queue'])) {
+        $job['grok_queue'] = [];
+    }
+    $job['grok_queue'][] = [
+        'id' => (string) $item['id'],
+        'mode' => $mode === 'verify' ? 'verify' : 'choose',
+    ];
+}
+
+function scan_grok_pending(array $job): int
+{
+    $queue = is_array($job['grok_queue'] ?? null) ? $job['grok_queue'] : [];
+    return max(0, count($queue) - (int) ($job['grok_index'] ?? 0));
+}
+
+function scan_grok_batch_size(): int
+{
+    return function_exists('grok_batch_size') ? grok_batch_size() : 25;
+}
+
+function scan_grok_on(): bool
+{
+    return function_exists('grok_live_enabled') && grok_live_enabled();
+}
+
+function scan_grok_batch_ready(array $job, bool $filesDone = false): bool
+{
+    if (!scan_grok_on()) {
+        return false;
+    }
+    $pending = scan_grok_pending($job);
+    if ($pending < 1) {
+        return false;
+    }
+    if ($filesDone) {
+        return true;
+    }
+    return $pending >= scan_grok_batch_size();
+}
+
 function scan_job_publish(array $job, array $extra = []): void
 {
     $stopping = scan_cancelled() || !empty($job['cancel']);
@@ -359,6 +659,11 @@ function scan_job_publish(array $job, array $extra = []): void
     $pending = (int) ($job['pending'] ?? 0);
     $found = (int) ($job['found'] ?? 0);
     $phase = (string) ($job['phase'] ?? 'lookup');
+    $grokQueue = is_array($job['grok_queue'] ?? null) ? $job['grok_queue'] : [];
+    $grokIndex = (int) ($job['grok_index'] ?? 0);
+    $grokLeft = max(0, count($grokQueue) - $grokIndex);
+    $pauseEach = function_exists('grok_dev_pause_each_batch') && grok_dev_pause_each_batch();
+    $paused = !empty($job['wait_continue']) && !$stopping && $pauseEach;
     $message = (string) ($job['message'] ?? '');
     if ($message === '') {
         if ($stopping) {
@@ -384,7 +689,17 @@ function scan_job_publish(array $job, array $extra = []): void
         'unidentified' => (int) ($job['unidentified'] ?? 0),
         'mode' => scan_normalize_mode((string) ($job['mode'] ?? 'retry')),
         'message' => $message,
-    ], $extra));
+        'paused' => $paused,
+        'kind' => 'scan',
+        'grok_queued' => count($grokQueue),
+        'grok_attempted' => (int) ($job['grok_attempted'] ?? 0),
+        'grok_matched' => (int) ($job['grok_matched'] ?? 0),
+        'grok_cleared' => (int) ($job['grok_cleared'] ?? 0),
+        'grok_skipped' => (int) ($job['grok_skipped'] ?? 0),
+        'grok_left' => $grokLeft,
+        'grok_enabled' => function_exists('grok_live_enabled') && grok_live_enabled(),
+        'grok_pause' => $pauseEach,
+    ], scan_grok_cost_fields($job), $extra));
 }
 
 function scan_job_begin(string $mode = 'retry'): array
@@ -419,11 +734,25 @@ function scan_job_begin(string $mode = 'retry'): array
         'unmatched' => 0,
         'unidentified' => 0,
         'mode' => $mode,
+        'paused' => false,
+        'grok_queued' => 0,
+        'grok_attempted' => 0,
+        'grok_matched' => 0,
+        'grok_cleared' => 0,
+        'grok_skipped' => 0,
+        'grok_left' => 0,
+        'grok_batches' => 0,
+        'grok_prompt_tokens' => 0,
+        'grok_completion_tokens' => 0,
+        'grok_cached_tokens' => 0,
+        'grok_cost_usd' => 0.0,
+        'grok_cost_label' => '$0.0000',
         'message' => 'Walking video folders…',
     ]);
 
     $files = [];
     $unreadable = [];
+    $walkedRoots = [];
     foreach ($roots as $root) {
         if (scan_cancelled()) {
             break;
@@ -432,6 +761,7 @@ function scan_job_begin(string $mode = 'retry'): array
             $unreadable[] = $root;
             continue;
         }
+        $walkedRoots[] = settings_normalize_path($root);
         $base = count($files);
         $batch = scan_files($root, null, static function (int $n) use ($base, $started): void {
             $count = $base + $n;
@@ -476,6 +806,8 @@ function scan_job_begin(string $mode = 'retry'): array
         throw new RuntimeException('Cannot read any video folder (' . implode(', ', $unreadable) . '). Check the paths in Config and that the http user has read access.');
     }
 
+    folder_learn_from_files($files);
+
     $old = cache_read_library();
     [$oldByPath] = scan_index_library($old);
     $pending = 0;
@@ -496,6 +828,7 @@ function scan_job_begin(string $mode = 'retry'): array
         'mode' => $mode,
         'started_at' => $started,
         'roots' => $roots,
+        'walked_roots' => $walkedRoots,
         'files' => $files,
         'index' => 0,
         'items' => [],
@@ -505,6 +838,19 @@ function scan_job_begin(string $mode = 'retry'): array
         'unidentified' => 0,
         'reused' => 0,
         'pending' => $pending,
+        'grok_queue' => [],
+        'grok_index' => 0,
+        'grok_attempted' => 0,
+        'grok_matched' => 0,
+        'grok_cleared' => 0,
+        'grok_skipped' => 0,
+        'grok_batches' => 0,
+        'grok_prompt_tokens' => 0,
+        'grok_completion_tokens' => 0,
+        'grok_cached_tokens' => 0,
+        'grok_cost_usd' => 0.0,
+        'tmdb_item' => 0,
+        'wait_continue' => false,
         'message' => scan_lookup_message(0, $pending, $mode),
     ];
     scan_job_write($job);
@@ -531,16 +877,15 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
     $needsLookup = scan_file_needs_lookup($prev, $unchanged, $mode);
 
     if ($prev && (!$needsLookup || $skipLookup)) {
-        $kept = ($unchanged && library_item_status($prev) === 'matched')
-            ? library_touch($prev, $file)
-            : library_carry_file($prev, $file);
+        $kept = library_carry_file($prev, $file);
         $job['items'][] = $kept;
         $job['reused'] = (int) $job['reused'] + 1;
         scan_tally_status($job, library_item_status($kept));
         return false;
     }
 
-    $parsed = parse_media($path);
+    $category = settings_category_for_root($root);
+    $parsed = scan_parse_path($root, $path, $category);
     $title = $parsed['title'] !== '' ? $parsed['title'] : strip_extension((string) ($file['filename'] ?? ''));
     $year = $parsed['year'];
     $key = scan_match_key($title, $year);
@@ -563,9 +908,10 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         'season' => $parsed['season'],
         'episode' => $parsed['episode'],
         'kind' => (string) ($parsed['kind'] ?? 'movie'),
+        'grouped' => library_item_kind(['kind' => (string) ($parsed['kind'] ?? 'movie')]) === 'show' || !empty($parsed['grouped']),
         'episode_title' => (string) ($parsed['episode_title'] ?? ''),
         'part' => (string) ($parsed['part'] ?? ''),
-        'category' => settings_category_for_root($root),
+        'category' => $category,
         'tmdb_id' => null,
         'status' => 'unidentified',
         'poster_path' => null,
@@ -583,6 +929,22 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         if (library_has_custom_title($prev)) {
             $item['display_title'] = (string) $prev['display_title'];
             $item['title_source'] = 'user';
+        }
+        if (library_item_hidden($prev)) {
+            $item['hidden'] = true;
+        }
+        if (library_has_user_kind($prev)) {
+            $item['kind'] = library_item_kind($prev);
+            $item['kind_source'] = 'user';
+            if (!empty($prev['title'])) {
+                $item['title'] = (string) $prev['title'];
+            }
+        }
+        if (library_has_user_grouped($prev) && library_item_kind($item) !== 'show') {
+            $item['grouped'] = library_item_grouped($prev);
+            $item['grouped_source'] = 'user';
+        } elseif (library_item_kind($item) === 'show') {
+            $item['grouped'] = true;
         }
     }
 
@@ -632,32 +994,110 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         return false;
     }
 
-    $meta = tmdb_lookup($title, $year, (string) ($file['filename'] ?? $path));
-    $job['lookups'] = (int) $job['lookups'] + 1;
+    if (function_exists('grok_live_enabled')) {
+        grok_live_enabled();
+    }
 
-    if ($meta !== null && !empty($meta['tmdb_id'])) {
-        $tmdbId = (int) $meta['tmdb_id'];
-        cache_write_title($tmdbId, $meta);
-        $item['tmdb_id'] = $tmdbId;
-        $item['status'] = 'matched';
-        $item['poster_path'] = $meta['poster_path'] ?? null;
-        $item = library_set_auto_title($item, (string) ($meta['title'] ?? $title));
-        if (!empty($meta['year'])) {
-            $item['year'] = (int) $meta['year'];
+    $filename = (string) ($file['filename'] ?? $path);
+    $job['tmdb_item'] = (int) ($job['tmdb_item'] ?? 0) + 1;
+    $itemNo = (int) $job['tmdb_item'];
+    if (function_exists('tmdb_scan_item_begin')) {
+        tmdb_scan_item_begin($itemNo, $filename, $path);
+    }
+    if (function_exists('app_log')) {
+        app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
+    }
+    try {
+        $payload = tmdb_search_first_results($title, $year, $filename, tmdb_search_meta_from_item($item));
+        $job['lookups'] = (int) $job['lookups'] + 1;
+        $query = (string) ($payload['query'] ?? '');
+        $weak = $query !== '' && function_exists('search_query_is_weak') && search_query_is_weak($query);
+        $cands = [];
+        foreach ($payload['results'] as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $cid = (int) ($row['tmdb_id'] ?? 0);
+            if ($cid < 1) {
+                continue;
+            }
+            $cands[] = [
+                'id' => $cid,
+                'title' => (string) ($row['title'] ?? ''),
+                'year' => $row['year'] ?? null,
+                'media_type' => (string) ($row['media_type'] ?? 'movie'),
+            ];
+            if (count($cands) >= (function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6)) {
+                break;
+            }
         }
-        $item['genres'] = cache_string_list($meta['genres'] ?? []);
-        $item['match_source'] = 'direct';
-        $knownMatches[$key] = $item;
-        $knownMatches[scan_match_key($item['display_title'], $item['year'])] = $item;
-        $job['found'] = (int) $job['found'] + 1;
-    } else {
+        $usable = ($weak || $cands === []) ? [] : $cands;
+        $item['tmdb_candidates'] = $usable;
+
+        if ($usable === []) {
+            $item['status'] = 'unmatched';
+            $item['match_source'] = 'none';
+            $job['unmatched'] = (int) $job['unmatched'] + 1;
+            scan_queue_grok($job, $item, 'choose');
+            if (function_exists('app_log')) {
+                app_log('tmdb', 'TMDB item ' . $itemNo . ' no usable hits; queued for Grok (' . scan_grok_pending($job) . ' waiting) file=' . $filename);
+            }
+            $job['items'][] = $item;
+            return true;
+        }
+
+        if (count($usable) === 1) {
+            $tmdbId = (int) $usable[0]['id'];
+            $meta = cache_read_title($tmdbId);
+            if ($meta === null) {
+                $mediaType = (string) ($usable[0]['media_type'] ?? (($item['kind'] ?? '') === 'show' ? 'tv' : 'movie'));
+                $meta = tmdb_fetch_details($tmdbId, $mediaType);
+                if ($meta !== null) {
+                    cache_write_title($tmdbId, $meta);
+                }
+                usleep(TMDB_REQUEST_SLEEP_US);
+            }
+            if ($meta !== null && !empty($meta['tmdb_id'])) {
+                $item['tmdb_id'] = (int) $meta['tmdb_id'];
+                $item['status'] = 'matched';
+                $item['poster_path'] = $meta['poster_path'] ?? null;
+                $item = library_set_auto_title($item, (string) ($meta['title'] ?? $title));
+                if (!empty($meta['year'])) {
+                    $item['year'] = (int) $meta['year'];
+                }
+                $item['genres'] = cache_string_list($meta['genres'] ?? []);
+                $item['match_source'] = 'tmdb';
+                $knownMatches[$key] = $item;
+                $knownMatches[scan_match_key($item['display_title'], $item['year'])] = $item;
+                $job['found'] = (int) $job['found'] + 1;
+                if (defined('GROK_VERIFY_SINGLES') && GROK_VERIFY_SINGLES) {
+                    scan_queue_grok($job, $item, 'verify');
+                }
+                $job['items'][] = $item;
+                return true;
+            }
+            $item['status'] = 'unmatched';
+            $item['match_source'] = 'none';
+            $job['unmatched'] = (int) $job['unmatched'] + 1;
+            scan_queue_grok($job, $item, 'choose');
+            $job['items'][] = $item;
+            return true;
+        }
+
         $item['status'] = 'unmatched';
         $item['match_source'] = 'none';
         $job['unmatched'] = (int) $job['unmatched'] + 1;
+        scan_queue_grok($job, $item, 'choose');
+        if (function_exists('app_log')) {
+            app_log('tmdb', 'TMDB item ' . $itemNo . ' queued for Grok (' . scan_grok_pending($job) . ' waiting) file=' . $filename);
+        }
+        $job['items'][] = $item;
+        return true;
+    } finally {
+        if (function_exists('tmdb_scan_item_end')) {
+            tmdb_scan_item_end();
+        }
     }
-
-    $job['items'][] = $item;
-    return true;
 }
 
 function scan_job_finalize(array $job, bool $cancelled): array
@@ -685,21 +1125,31 @@ function scan_job_finalize(array $job, bool $cancelled): array
         $job['index'] = $index;
     }
 
+    $beforeItems = is_array($old['items'] ?? null) ? $old['items'] : [];
+    $items = scan_job_catalog_items($job);
+    $dropped = scan_count_dropped_items($beforeItems, $items);
     $library = [
         'version' => 1,
         'scanned_at' => time(),
         'video_roots' => $job['roots'] ?? settings_video_roots(),
-        'items' => $job['items'],
+        'items' => $items,
     ];
     if (!cache_write_library($library)) {
         throw new RuntimeException('Could not write library.json. Check cache/ permissions.');
+    }
+    $orphans = function_exists('cache_prune_orphan_titles') ? cache_prune_orphan_titles($items) : 0;
+    if ($dropped > 0 && function_exists('app_log')) {
+        app_log('scan', 'Removed ' . $dropped . ' missing file' . ($dropped === 1 ? '' : 's') . ' from the catalog.', [
+            'dropped' => $dropped,
+            'title_cache' => $orphans,
+        ]);
     }
 
     $found = (int) ($job['found'] ?? 0);
     $pending = (int) ($job['pending'] ?? 0);
     scan_job_clear();
     scan_clear_cancel();
-    scan_status_write([
+    scan_status_write(array_merge([
         'state' => $cancelled ? 'stopped' : 'done',
         'phase' => $cancelled ? 'stopped' : 'done',
         'cancel_requested' => false,
@@ -713,11 +1163,26 @@ function scan_job_finalize(array $job, bool $cancelled): array
         'unmatched' => (int) ($job['unmatched'] ?? 0),
         'unidentified' => (int) ($job['unidentified'] ?? 0),
         'mode' => scan_normalize_mode((string) ($job['mode'] ?? 'retry')),
+        'paused' => false,
+        'grok_matched' => (int) ($job['grok_matched'] ?? 0),
+        'grok_attempted' => (int) ($job['grok_attempted'] ?? 0),
+        'grok_cleared' => (int) ($job['grok_cleared'] ?? 0),
+        'grok_queued' => is_array($job['grok_queue'] ?? null) ? count($job['grok_queue']) : 0,
+        'grok_left' => 0,
         'message' => ($cancelled ? 'Scan stopped. ' : 'Scan finished. ')
-            . 'Found ' . $found . ' of ' . $pending . ' '
-            . (scan_normalize_mode((string) ($job['mode'] ?? 'retry')) === 'unidentified' ? 'unidentified' : 'unresolved')
-            . ' titles.',
-    ]);
+            . 'TMDB found ' . $found . '. Grok matched ' . (int) ($job['grok_matched'] ?? 0)
+            . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.',
+    ], scan_grok_cost_fields($job)));
+    $batches = (int) ($job['grok_batches'] ?? 0);
+    if ($batches > 0 && function_exists('app_log')) {
+        $usd = (float) ($job['grok_cost_usd'] ?? 0);
+        $label = function_exists('grok_format_usd') ? grok_format_usd($usd) : ('$' . number_format($usd, 4, '.', ''));
+        app_log('grok', 'Grok done batches=' . $batches
+            . ' prompt=' . (int) ($job['grok_prompt_tokens'] ?? 0)
+            . ' completion=' . (int) ($job['grok_completion_tokens'] ?? 0)
+            . ' cached=' . (int) ($job['grok_cached_tokens'] ?? 0)
+            . ' est=' . $label);
+    }
     if (function_exists('app_log')) {
         app_log('scan', ($cancelled ? 'Scan stopped. ' : 'Scan finished. ')
             . 'Found ' . $found . ' of ' . $pending . ', lookups ' . (int) ($job['lookups'] ?? 0) . '.', [
@@ -730,7 +1195,7 @@ function scan_job_finalize(array $job, bool $cancelled): array
     return scan_status_read();
 }
 
-function scan_job_continue(): array
+function scan_job_continue(bool $resumePause = false): array
 {
     $job = scan_job_read();
     if (($job['state'] ?? '') !== 'running') {
@@ -742,10 +1207,38 @@ function scan_job_continue(): array
         $job['phase'] = 'stopping';
         $job['message'] = 'Stop requested. Saving progress…';
         scan_job_publish($job);
+        scan_job_write_library($job);
         return scan_job_finalize($job, true);
     }
 
+    $pauseOn = function_exists('grok_dev_pause_each_batch') && grok_dev_pause_each_batch();
+    if (!empty($job['wait_continue'])) {
+        if ($pauseOn && !$resumePause) {
+            $job['phase'] = 'lookup';
+            scan_job_write($job);
+            scan_job_publish($job, ['paused' => true]);
+            $status = scan_status_read();
+            $status['paused'] = true;
+            return $status;
+        }
+        $job['wait_continue'] = false;
+        $job['phase'] = 'lookup';
+        $job['message'] = 'Continuing scan…';
+        scan_job_write($job);
+    }
+
     $files = is_array($job['files'] ?? null) ? $job['files'] : [];
+    $total = count($files);
+    $index = (int) ($job['index'] ?? 0);
+    $filesDone = $index >= $total;
+
+    if (scan_grok_batch_ready($job, $filesDone)) {
+        return scan_job_run_grok_batch($job, $filesDone);
+    }
+    if ($filesDone) {
+        return scan_job_finalize($job, false);
+    }
+
     $old = cache_read_library();
     [$oldByPath, $known] = scan_index_library($old);
     foreach ($job['items'] as $item) {
@@ -757,20 +1250,29 @@ function scan_job_continue(): array
         }
     }
 
-    $deadline = hrtime(true) + 1800000000;
+    $lookupDeadline = hrtime(true) + 1800000000;
+    $drainDeadline = hrtime(true) + 8000000000;
     $lookupsThisTick = 0;
     $progress = 0;
-    $total = count($files);
-    $index = (int) ($job['index'] ?? 0);
+    $pending = (int) ($job['pending'] ?? 0);
+    $lookupsDone = (int) ($job['lookups'] ?? 0);
+    $draining = $pending > 0 && $lookupsDone >= $pending;
 
     while ($index < $total) {
         if ($progress > 0 && scan_cancelled()) {
             $job['index'] = $index;
             $job['cancel'] = true;
             scan_job_write($job);
+            scan_job_write_library($job);
             return scan_job_finalize($job, true);
         }
-        if ($progress > 0 && ($lookupsThisTick >= 3 || hrtime(true) >= $deadline)) {
+        if ($lookupsThisTick >= 3) {
+            break;
+        }
+        if ($lookupsThisTick > 0 && hrtime(true) >= $lookupDeadline) {
+            break;
+        }
+        if ($lookupsThisTick === 0 && $progress > 0 && hrtime(true) >= $drainDeadline) {
             break;
         }
         $file = $files[$index];
@@ -783,19 +1285,132 @@ function scan_job_continue(): array
         $progress++;
         if ($didLookup) {
             $lookupsThisTick++;
+            $draining = false;
+            $waiting = scan_grok_pending($job);
             $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], (string) ($job['mode'] ?? 'retry'));
+            if ($waiting > 0) {
+                $job['message'] .= ' Grok queue ' . $waiting . '/' . scan_grok_batch_size() . '.';
+            }
+            scan_job_publish($job);
+            if (scan_grok_batch_ready($job, $index >= $total)) {
+                scan_job_write($job);
+                return scan_job_run_grok_batch($job, $index >= $total);
+            }
+        } elseif ($draining && $progress === 1) {
+            $job['message'] = 'Updating catalog… ' . $index . ' / ' . $total . ' files.';
             scan_job_publish($job);
         }
     }
 
     if ($index >= $total) {
+        if (scan_grok_batch_ready($job, true)) {
+            scan_job_write($job);
+            return scan_job_run_grok_batch($job, true);
+        }
         return scan_job_finalize($job, false);
     }
 
-    $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], (string) ($job['mode'] ?? 'retry'));
+    if ($draining) {
+        $job['message'] = 'Updating catalog… ' . $index . ' / ' . $total . ' files.';
+    } else {
+        $waiting = scan_grok_pending($job);
+        $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], (string) ($job['mode'] ?? 'retry'));
+        if ($waiting > 0) {
+            $job['message'] .= ' Grok queue ' . $waiting . '/' . scan_grok_batch_size() . '.';
+        }
+    }
     scan_job_write($job);
-    scan_job_publish($job);
+    scan_job_publish($job, ['paused' => false]);
     return scan_status_read();
+}
+
+function scan_job_run_grok_batch(array $job, bool $filesDone): array
+{
+    if (scan_cancelled()) {
+        scan_job_write_library($job);
+        return scan_job_finalize($job, true);
+    }
+    if (!scan_grok_on()) {
+        if ($filesDone) {
+            return scan_job_finalize($job, false);
+        }
+        $job['phase'] = 'lookup';
+        $job['wait_continue'] = false;
+        scan_job_write($job);
+        scan_job_publish($job, ['paused' => false]);
+        return scan_status_read();
+    }
+    $pending = scan_grok_pending($job);
+    if ($pending < 1) {
+        if ($filesDone) {
+            return scan_job_finalize($job, false);
+        }
+        $job['phase'] = 'lookup';
+        scan_job_write($job);
+        scan_job_publish($job, ['paused' => false]);
+        return scan_status_read();
+    }
+
+    $batch = min($pending, scan_grok_batch_size());
+    $job['phase'] = 'grok';
+    $job['wait_continue'] = false;
+    $job['message'] = 'Grok: resolving ' . $batch . ' queued titles…';
+    scan_job_write($job);
+    scan_job_publish($job, ['paused' => false]);
+    if (function_exists('app_log')) {
+        app_log('grok', 'Grok batch starting (' . $batch . ' titles, ' . $pending . ' waiting).');
+    }
+
+    if (function_exists('grok_run_scan_batch')) {
+        grok_run_scan_batch($job);
+    }
+    scan_job_write_library($job);
+
+    $left = scan_grok_pending($job);
+    $moreWork = !$filesDone || $left > 0;
+    $pause = $moreWork
+        && function_exists('grok_dev_pause_each_batch')
+        && grok_dev_pause_each_batch();
+
+    if (!$moreWork) {
+        $job['phase'] = 'lookup';
+        $job['wait_continue'] = false;
+        $job['message'] = 'Grok finished. Matched ' . (int) ($job['grok_matched'] ?? 0)
+            . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.';
+        scan_job_write($job);
+        return scan_job_finalize($job, false);
+    }
+
+    $job['phase'] = 'lookup';
+    if ($pause) {
+        $job['wait_continue'] = true;
+        $job['message'] = 'Grok batch done. Matched ' . (int) ($job['grok_matched'] ?? 0)
+            . ' of ' . (int) ($job['grok_attempted'] ?? 0)
+            . ' (' . $left . ' Grok left). Press Continue.';
+        scan_job_write($job);
+        scan_job_publish($job, ['paused' => true]);
+        if (function_exists('app_log')) {
+            app_log('grok', (string) $job['message']);
+        }
+        $status = scan_status_read();
+        $status['paused'] = true;
+        return $status;
+    }
+
+    $job['wait_continue'] = false;
+    $job['message'] = 'Grok batch done. Continuing TMDB…';
+    scan_job_write($job);
+    scan_job_publish($job, ['paused' => false]);
+    $status = scan_status_read();
+    $status['paused'] = false;
+    return $status;
+}
+
+function scan_job_continue_grok(array $job): array
+{
+    $files = is_array($job['files'] ?? null) ? $job['files'] : [];
+    $filesDone = (int) ($job['index'] ?? 0) >= count($files);
+    return scan_job_run_grok_batch($job, $filesDone);
 }
 
 function scan_grok_is_running(): bool
@@ -806,24 +1421,13 @@ function scan_grok_is_running(): bool
     return (grok_status_read()['state'] ?? '') === 'running';
 }
 
-function scan_tick(bool $allowStart = false, string $mode = 'retry'): array
+function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false): array
 {
     cache_init();
     $mode = scan_normalize_mode($mode);
     $job = scan_job_read();
     if (($job['state'] ?? '') === 'running') {
-        return scan_job_continue();
-    }
-    if ($allowStart && scan_grok_is_running()) {
-        $status = scan_status_read();
-        $status['ok'] = false;
-        $status['blocked'] = 'grok';
-        $status['kind'] = 'tmdb';
-        $status['message'] = 'Grok resolve is running. Wait for it to finish before starting a TMDB scan.';
-        if (function_exists('app_log')) {
-            app_log('scan', 'TMDB scan blocked because Grok resolve is running.', [], 'warn');
-        }
-        return $status;
+        return scan_job_continue($resumePause);
     }
     if (!$allowStart) {
         $status = scan_status_read();
@@ -847,7 +1451,7 @@ function scan_build_library(?callable $progress = null): array
         if ($progress && !empty($status['message'])) {
             $progress((string) $status['message']);
         }
-        $status = scan_job_continue();
+        $status = scan_job_continue(true);
     }
     $old = cache_read_library();
     return [
@@ -892,10 +1496,12 @@ function library_sync_video_catalog(): array
 
     $items = [];
     $seen = [];
+    $walkedRoots = [];
     foreach ($roots as $root) {
         if (settings_path_status($root) !== 'ok') {
             continue;
         }
+        $walkedRoots[settings_normalize_path($root)] = true;
         foreach (scan_files($root) as $file) {
             $path = $file['path'];
             $fileRoot = (string) $file['root'];
@@ -913,7 +1519,8 @@ function library_sync_video_catalog(): array
                 continue;
             }
 
-            $parsed = parse_media($path);
+            $category = settings_category_for_root($fileRoot);
+            $parsed = scan_parse_path($fileRoot, $path, $category);
             $title = $parsed['title'] !== '' ? $parsed['title'] : strip_extension($file['filename']);
             $year = $parsed['year'];
             $item = [
@@ -928,9 +1535,10 @@ function library_sync_video_catalog(): array
                 'season' => $parsed['season'],
                 'episode' => $parsed['episode'],
                 'kind' => (string) ($parsed['kind'] ?? 'movie'),
+                'grouped' => ((string) ($parsed['kind'] ?? '') === 'show') || !empty($parsed['grouped']),
                 'episode_title' => (string) ($parsed['episode_title'] ?? ''),
                 'part' => (string) ($parsed['part'] ?? ''),
-                'category' => settings_category_for_root($fileRoot),
+                'category' => $category,
                 'tmdb_id' => null,
                 'status' => 'unidentified',
                 'poster_path' => null,
@@ -961,6 +1569,29 @@ function library_sync_video_catalog(): array
         }
     }
 
+    $configured = [];
+    foreach ($roots as $root) {
+        $configured[settings_normalize_path($root)] = true;
+    }
+    foreach ($oldItems as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
+        }
+        $root = settings_item_root($item, $old);
+        $path = (string) ($item['path'] ?? '');
+        $key = $root . "\n" . $path;
+        if (isset($seen[$key])) {
+            continue;
+        }
+        if ($root !== '' && isset($walkedRoots[$root])) {
+            continue;
+        }
+        if ($root !== '' && isset($configured[$root])) {
+            $items[] = $item;
+            $seen[$key] = true;
+        }
+    }
+
     $library = [
         'version' => 1,
         'scanned_at' => $items === [] ? null : (int) ($old['scanned_at'] ?? time()),
@@ -973,6 +1604,9 @@ function library_sync_video_catalog(): array
 
     if (!cache_write_library($library)) {
         throw new RuntimeException('Could not update the video catalog. Check cache/ permissions.');
+    }
+    if (function_exists('cache_prune_orphan_titles')) {
+        cache_prune_orphan_titles($items);
     }
 
     $newCount = count($items);

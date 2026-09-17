@@ -24,6 +24,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         'tmdb_api_key' => $_POST['tmdb_api_key'] ?? '',
         'tmdb_language' => $_POST['tmdb_language'] ?? TMDB_LANGUAGE,
         'xai_api_key' => $_POST['xai_api_key'] ?? '',
+        'show_hidden' => isset($_POST['show_hidden']),
     ];
     if (!is_array($payload['video_root_categories'])) {
         $payload['video_root_categories'] = [];
@@ -55,7 +56,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 'music_roots' => is_array($payload['music_roots']) ? count($payload['music_roots']) : 0,
             ]);
         }
-        header('Location: index.php?saved=1', true, 303);
+        $tab = (string) ($_POST['config_tab'] ?? 'video');
+        if ($tab !== 'music' && $tab !== 'general') {
+            $tab = 'video';
+        }
+        header('Location: index.php?saved=1&tab=' . rawurlencode($tab), true, 303);
         exit;
     }
 }
@@ -78,6 +83,11 @@ if ($videoExcludes === []) {
 }
 if ($musicExcludes === []) {
     $musicExcludes = [''];
+}
+
+$configTab = (string) ($_GET['tab'] ?? $_POST['config_tab'] ?? 'video');
+if ($configTab !== 'music' && $configTab !== 'general') {
+    $configTab = 'video';
 }
 
 require app_view('config');

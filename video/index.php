@@ -18,6 +18,9 @@ foreach ($library['items'] as $item) {
     if (!settings_item_in_roots($item, $allowedRoots, $library)) {
         continue;
     }
+    if (!settings_show_hidden() && library_item_hidden($item)) {
+        continue;
+    }
     $items[] = $item;
 }
 

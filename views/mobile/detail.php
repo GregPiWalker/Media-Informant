@@ -96,6 +96,60 @@ render_header(['section' => 'video']);
           <button type="submit" class="page-menu-item" role="menuitem">Clear Match</button>
         </form>
         <?php endif; ?>
+        <?php if (library_item_kind($item) !== 'show'): ?>
+        <?php if (library_item_grouped($item)): ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="treat_individual">
+          <button type="submit" class="page-menu-item" role="menuitem">Treat Individually</button>
+        </form>
+        <?php else: ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="treat_series">
+          <button type="submit" class="page-menu-item" role="menuitem">Treat as Series</button>
+        </form>
+        <?php endif; ?>
+        <?php endif; ?>
+        <?php
+        $folderHome = function_exists('folder_home_for_file') ? folder_home_for_file((string) ($item['path'] ?? '')) : '';
+        $folderKind = ($folderHome !== '' && function_exists('folder_kind_for_file'))
+            ? folder_kind_for_file((string) ($item['root'] ?? ''), (string) ($item['path'] ?? ''))
+            : '';
+        if ($folderHome !== ''):
+        ?>
+        <?php if ($folderKind === 'show'): ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="folder_as_movie">
+          <button type="submit" class="page-menu-item" role="menuitem">Treat Folder as Movies</button>
+        </form>
+        <?php else: ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="folder_as_show">
+          <button type="submit" class="page-menu-item" role="menuitem">Treat Folder as TV Show</button>
+        </form>
+        <?php endif; ?>
+        <?php endif; ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="exclude_parent">
+          <button type="submit" class="page-menu-item" role="menuitem">Exclude Parent Dir</button>
+        </form>
+        <?php if (library_item_hidden($item)): ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="unhide">
+          <button type="submit" class="page-menu-item" role="menuitem">Unhide</button>
+        </form>
+        <?php else: ?>
+        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+          <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <input type="hidden" name="action" value="hide">
+          <button type="submit" class="page-menu-item" role="menuitem">Hide</button>
+        </form>
+        <?php endif; ?>
       </div>
     </div>
     <?php endif; ?>
@@ -127,6 +181,9 @@ render_header(['section' => 'video']);
       <h1><?= h($display) ?></h1>
       <?php endif; ?>
       <p class="detail-year"><?= $year ? h((string) $year) : 'Year unknown' ?></p>
+      <?php if (library_item_hidden($item)): ?>
+      <p class="hint">This file is hidden from the catalog.</p>
+      <?php endif; ?>
       <?php if ($status === 'unidentified'): ?>
       <p class="unmatched-note">Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.</p>
       <?php elseif ($status !== 'matched'): ?>

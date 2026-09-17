@@ -24,6 +24,26 @@ function tmdb_verbose_log(string $message): void
     app_log('tmdb', $message, [], 'debug');
 }
 
+function tmdb_scan_item_begin(int $n, string $file, string $path = ''): void
+{
+    $GLOBALS['tmdb_scan_item'] = [
+        'n' => $n,
+        'file' => $file,
+        'path' => $path,
+    ];
+}
+
+function tmdb_scan_item_end(): void
+{
+    unset($GLOBALS['tmdb_scan_item']);
+}
+
+function tmdb_scan_item(): array
+{
+    $state = $GLOBALS['tmdb_scan_item'] ?? null;
+    return is_array($state) ? $state : [];
+}
+
 function tmdb_get(string $path, array $query = [], int $retries = 1): ?array
 {
     if (!tmdb_has_key() || !function_exists('curl_init')) {
@@ -35,7 +55,19 @@ function tmdb_get(string $path, array $query = [], int $retries = 1): ?array
     $url = 'https://api.themoviedb.org/3' . $path . '?' . http_build_query($query);
     $loggedQuery = $query;
     unset($loggedQuery['api_key']);
-    tmdb_verbose_log('TMDB request ' . $path . ' params=' . (string) json_encode($loggedQuery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    $params = (string) json_encode($loggedQuery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $item = tmdb_scan_item();
+    $itemN = (int) ($item['n'] ?? 0);
+    $itemFile = (string) ($item['file'] ?? '');
+    if ($itemN > 0 && function_exists('app_log')) {
+        $msg = 'TMDB item ' . $itemN . ' request: ' . $path . ' ' . $params;
+        if ($itemFile !== '') {
+            $msg .= ' file=' . $itemFile;
+        }
+        app_log('tmdb', $msg);
+    } else {
+        tmdb_verbose_log('TMDB request ' . $path . ' params=' . $params);
+    }
 
     $ch = curl_init($url);
     if ($ch === false) {
@@ -55,6 +87,22 @@ function tmdb_get(string $path, array $query = [], int $retries = 1): ?array
     curl_close($ch);
 
     $raw = $body === false ? '(empty)' : (string) $body;
+    if ($itemN > 0 && function_exists('app_log')) {
+        $hits = '';
+        if ($body !== false && $code === 200) {
+            $decoded = json_decode((string) $body, true);
+            if (is_array($decoded) && isset($decoded['results']) && is_array($decoded['results'])) {
+                $hits = ' hits=' . count($decoded['results']);
+            } elseif (is_array($decoded) && !empty($decoded['id'])) {
+                $hits = ' id=' . (int) $decoded['id'];
+            }
+        }
+        $msg = 'TMDB item ' . $itemN . ' response: HTTP ' . $code . ' ' . $path . $hits;
+        if ($itemFile !== '') {
+            $msg .= ' file=' . $itemFile;
+        }
+        app_log('tmdb', $msg);
+    }
     tmdb_verbose_log('TMDB response HTTP ' . $code . ' for ' . $path . ': ' . $raw);
 
     if ($code === 429 && $retries > 0) {
@@ -136,9 +184,9 @@ function tmdb_confident_hit(array $results, string $title, ?int $year): ?array
     return null;
 }
 
-function tmdb_map_result(array $row): ?array
+function tmdb_map_result(array $row, string $defaultMedia = 'movie'): ?array
 {
-    $media = (string) ($row['media_type'] ?? 'movie');
+    $media = (string) ($row['media_type'] ?? $defaultMedia);
     if ($media === 'person') {
         return null;
     }
@@ -149,24 +197,28 @@ function tmdb_map_result(array $row): ?array
     $release = (string) ($row['release_date'] ?? $row['first_air_date'] ?? '');
     $poster = $row['poster_path'] ?? null;
     $title = (string) ($row['title'] ?? $row['name'] ?? $row['original_title'] ?? $row['original_name'] ?? '');
+    $original = (string) ($row['original_title'] ?? $row['original_name'] ?? $title);
     return [
         'tmdb_id' => $id,
         'title' => $title,
+        'original_title' => $original,
         'year' => strlen($release) >= 4 ? (int) substr($release, 0, 4) : null,
         'overview' => trim((string) ($row['overview'] ?? '')),
         'poster_path' => is_string($poster) && $poster !== '' ? $poster : null,
         'media_type' => $media === 'tv' ? 'tv' : 'movie',
+        'popularity' => isset($row['popularity']) ? (float) $row['popularity'] : 0.0,
+        'vote_count' => (int) ($row['vote_count'] ?? 0),
     ];
 }
 
-function tmdb_map_results(array $rows): array
+function tmdb_map_results(array $rows, string $defaultMedia = 'movie'): array
 {
     $out = [];
     foreach ($rows as $row) {
         if (!is_array($row)) {
             continue;
         }
-        $mapped = tmdb_map_result($row);
+        $mapped = tmdb_map_result($row, $defaultMedia);
         if ($mapped !== null) {
             $out[] = $mapped;
         }
@@ -174,46 +226,348 @@ function tmdb_map_results(array $rows): array
     return $out;
 }
 
-function tmdb_list_payload(?array $data): array
+function tmdb_list_payload(?array $data, string $defaultMedia = 'movie'): array
 {
     $results = is_array($data['results'] ?? null) ? $data['results'] : [];
     return [
-        'results' => tmdb_map_results($results),
+        'results' => tmdb_map_results($results, $defaultMedia),
         'page' => (int) ($data['page'] ?? 1),
         'total_pages' => max(1, (int) ($data['total_pages'] ?? 1)),
     ];
 }
 
-function tmdb_search_results(string $query, ?int $year, int $page = 1): array
+function tmdb_search_results(string $query, ?int $year, int $page = 1, string $mediaType = 'movie'): array
 {
     $query = trim($query);
     if ($query === '') {
         return ['results' => [], 'page' => 1, 'total_pages' => 1];
     }
+    $isTv = $mediaType === 'tv';
+    $endpoint = $isTv ? '/search/tv' : '/search/movie';
+    $yearKey = $isTv ? 'first_air_date_year' : 'year';
     $params = [
         'query' => $query,
         'include_adult' => 'false',
         'page' => max(1, $page),
     ];
     if ($year !== null && $year >= 1870) {
-        $params['year'] = (string) $year;
+        $params[$yearKey] = (string) $year;
     }
-    $data = tmdb_get('/search/movie', $params);
-    $payload = tmdb_list_payload($data);
-    if ($payload['results'] === [] && isset($params['year'])) {
-        unset($params['year']);
-        $payload = tmdb_list_payload(tmdb_get('/search/movie', $params));
+    $data = tmdb_get($endpoint, $params);
+    $payload = tmdb_list_payload($data, $isTv ? 'tv' : 'movie');
+    if ($payload['results'] === [] && isset($params[$yearKey])) {
+        unset($params[$yearKey]);
+        $payload = tmdb_list_payload(tmdb_get($endpoint, $params), $isTv ? 'tv' : 'movie');
         $payload['relaxed_year'] = true;
     }
     return $payload;
 }
 
-function tmdb_popular_results(int $page = 1): array
+function tmdb_popular_results(int $page = 1, string $mediaType = 'movie'): array
 {
-    return tmdb_list_payload(tmdb_get('/movie/popular', ['page' => max(1, $page)]));
+    $isTv = $mediaType === 'tv';
+    $path = $isTv ? '/tv/popular' : '/movie/popular';
+    return tmdb_list_payload(tmdb_get($path, ['page' => max(1, $page)]), $isTv ? 'tv' : 'movie');
 }
 
-function tmdb_movie_search_params(string $query, ?int $year): array
+/**
+ * Path/kind/season/episode context for TV-aware query construction.
+ *
+ * @param array<string, mixed> $item
+ * @return array{kind:string,path:string,season:?int,episode:?int,episode_title:string}
+ */
+function tmdb_search_meta_from_item(array $item): array
+{
+    $path = (string) ($item['path'] ?? '');
+    $filename = (string) ($item['filename'] ?? '');
+    $season = $item['season'] ?? null;
+    $episode = $item['episode'] ?? null;
+    return [
+        'kind' => (string) ($item['kind'] ?? 'movie'),
+        'path' => $path !== '' ? $path : $filename,
+        'season' => is_numeric($season) ? (int) $season : null,
+        'episode' => is_numeric($episode) ? (int) $episode : null,
+        'episode_title' => (string) ($item['episode_title'] ?? ''),
+    ];
+}
+
+function tmdb_shortlist_limit(): int
+{
+    return 6;
+}
+
+function tmdb_rank_key(string $s): string
+{
+    if (function_exists('search_query_clean')) {
+        $s = search_query_clean($s);
+    }
+    if (function_exists('search_query_drop_article')) {
+        $s = search_query_drop_article($s);
+    }
+    return tmdb_norm($s);
+}
+
+function tmdb_rank_content_words(string $s): array
+{
+    if (function_exists('search_query_clean')) {
+        $s = search_query_clean($s);
+    }
+    $words = preg_split('/\s+/', trim($s), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $out = [];
+    foreach ($words as $w) {
+        if (function_exists('search_query_is_content_word') && !search_query_is_content_word($w)) {
+            continue;
+        }
+        $out[] = $w;
+    }
+    return $out;
+}
+
+function tmdb_rank_want_keys(string $title, string $filename, string $query): array
+{
+    $keys = [];
+    $sources = [$title, $filename, $query];
+    foreach ($sources as $src) {
+        $src = trim($src);
+        if ($src === '') {
+            continue;
+        }
+        $clean = function_exists('search_query_clean') ? search_query_clean($src) : $src;
+        $k = tmdb_rank_key($clean);
+        if ($k !== '') {
+            $keys[$k] = true;
+        }
+        if (function_exists('search_query_prefix_remainder')) {
+            foreach (search_query_prefix_remainder($clean) as $rest) {
+                $rk = tmdb_rank_key($rest);
+                if ($rk !== '') {
+                    $keys[$rk] = true;
+                }
+            }
+        }
+        $words = tmdb_rank_content_words($clean);
+        $n = count($words);
+        if ($n >= 1) {
+            $last = tmdb_norm($words[$n - 1]);
+            if ($last !== '') {
+                $keys[$last] = true;
+            }
+        }
+        if ($n >= 2) {
+            $last2 = tmdb_norm($words[$n - 2] . $words[$n - 1]);
+            if ($last2 !== '') {
+                $keys[$last2] = true;
+            }
+        }
+    }
+    return array_keys($keys);
+}
+
+function tmdb_rank_spinoff_blob(string $title, string $overview): bool
+{
+    $blob = $title . ' ' . $overview;
+    return (bool) preg_match(
+        '/\b(?:documentary|soundtrack|making\s+of|behind\s+the\s+scenes|in\s+forks|ai[\'’]?s\s+guide|concert|music\s+videos?|fan\s+film|unauthorized)\b/iu',
+        $blob
+    );
+}
+
+function tmdb_rank_file_is_feature(string $title, string $filename): bool
+{
+    $blob = $title . ' ' . $filename;
+    return !preg_match(
+        '/\b(?:documentary|soundtrack|making\s+of|concert|music\s+videos?)\b/iu',
+        $blob
+    );
+}
+
+/**
+ * Rank TMDB hits by filename/title relevance, then keep at most N.
+ * Exact/near-exact title matches are forced into the shortlist even if
+ * TMDB returned them last. Never cap by raw TMDB order.
+ *
+ * @param list<array<string, mixed>> $results
+ * @return list<array<string, mixed>>
+ */
+function tmdb_shortlist_results(array $results, string $title, string $filename, ?int $year, string $query = ''): array
+{
+    $limit = tmdb_shortlist_limit();
+    if ($results === [] || $limit < 1) {
+        return [];
+    }
+    $wantKeys = tmdb_rank_want_keys($title, $filename, $query);
+    $fileIsFeature = tmdb_rank_file_is_feature($title, $filename);
+    $coreKeys = [];
+    $cleanFile = function_exists('search_query_clean') ? search_query_clean($filename !== '' ? $filename : $title) : $title;
+    if (function_exists('search_query_prefix_remainder')) {
+        foreach (search_query_prefix_remainder($cleanFile) as $rest) {
+            $ck = tmdb_rank_key($rest);
+            if ($ck !== '') {
+                $coreKeys[$ck] = true;
+            }
+        }
+    }
+    $words = tmdb_rank_content_words($cleanFile);
+    if ($words !== []) {
+        $last = tmdb_norm($words[count($words) - 1]);
+        if ($last !== '') {
+            $coreKeys[$last] = true;
+        }
+    }
+
+    $scored = [];
+    foreach ($results as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = (int) ($row['tmdb_id'] ?? $row['id'] ?? 0);
+        if ($id < 1) {
+            continue;
+        }
+        $candTitle = (string) ($row['title'] ?? '');
+        $candOrig = (string) ($row['original_title'] ?? $candTitle);
+        $candKey = tmdb_rank_key($candTitle);
+        $origKey = tmdb_rank_key($candOrig);
+        $overview = (string) ($row['overview'] ?? '');
+        $candYear = isset($row['year']) && $row['year'] !== null && $row['year'] !== ''
+            ? (int) $row['year']
+            : null;
+        $score = 0;
+        $exact = false;
+
+        foreach ($wantKeys as $want) {
+            if ($want === '') {
+                continue;
+            }
+            if ($candKey === $want || $origKey === $want) {
+                $score += 100;
+                $exact = true;
+                break;
+            }
+        }
+        if (!$exact && ($candKey !== '' || $origKey !== '')) {
+            foreach ($coreKeys as $core => $_) {
+                if ($core !== '' && ($candKey === $core || $origKey === $core)) {
+                    $score += 80;
+                    $exact = true;
+                    break;
+                }
+            }
+        }
+        foreach ($wantKeys as $want) {
+            if ($want === '' || strlen($want) < 3) {
+                continue;
+            }
+            if ($candKey === $want || $origKey === $want) {
+                continue;
+            }
+            if (str_contains($candKey, $want) || str_contains($origKey, $want)) {
+                $score += strlen($want) >= 8 ? 25 : 15;
+                break;
+            }
+        }
+        if ($year !== null && $year >= 1870 && $candYear !== null) {
+            if ($candYear === $year) {
+                $score += 20;
+            } elseif (abs($candYear - $year) === 1) {
+                $score += 6;
+            }
+        }
+        if ($fileIsFeature && tmdb_rank_spinoff_blob($candTitle . ' ' . $candOrig, $overview)) {
+            $score -= 60;
+        }
+
+        $scored[] = [
+            'row' => $row,
+            'id' => $id,
+            'key' => $candKey,
+            'score' => $score,
+            'exact' => $exact,
+            'pop' => (float) ($row['popularity'] ?? 0),
+            'votes' => (int) ($row['vote_count'] ?? 0),
+        ];
+    }
+
+    $hasExactCore = false;
+    foreach ($scored as $item) {
+        if ($item['exact']) {
+            $hasExactCore = true;
+            break;
+        }
+    }
+    if ($hasExactCore) {
+        foreach ($scored as $i => $item) {
+            if (!$item['exact']) {
+                $scored[$i]['score'] -= 40;
+            }
+        }
+    }
+
+    usort($scored, static function (array $a, array $b): int {
+        if ($a['score'] !== $b['score']) {
+            return $b['score'] <=> $a['score'];
+        }
+        if ($a['pop'] !== $b['pop']) {
+            return $a['pop'] < $b['pop'] ? 1 : -1;
+        }
+        return $b['votes'] <=> $a['votes'];
+    });
+
+    $kept = array_slice($scored, 0, $limit);
+    $keptIds = [];
+    foreach ($kept as $item) {
+        $keptIds[$item['id']] = true;
+    }
+    foreach ($scored as $item) {
+        if (!$item['exact'] || isset($keptIds[$item['id']])) {
+            continue;
+        }
+        for ($i = count($kept) - 1; $i >= 0; $i--) {
+            if (empty($kept[$i]['exact'])) {
+                unset($keptIds[$kept[$i]['id']]);
+                array_splice($kept, $i, 1);
+                break;
+            }
+        }
+        if (count($kept) < $limit) {
+            $kept[] = $item;
+            $keptIds[$item['id']] = true;
+        }
+    }
+    $kept = array_values($kept);
+
+    $out = [];
+    $labels = [];
+    foreach ($kept as $item) {
+        $row = $item['row'];
+        $out[] = $row;
+        $lab = (string) ($row['title'] ?? '');
+        if (!empty($row['year'])) {
+            $lab .= ' (' . (int) $row['year'] . ')';
+        }
+        $labels[] = (int) $item['id'] . ' ' . $lab;
+        tmdb_verbose_log(
+            'TMDB rank "' . $lab . '" score=' . (int) $item['score']
+            . ($item['exact'] ? ' exact' : '')
+        );
+    }
+
+    $itemCtx = tmdb_scan_item();
+    $prefix = !empty($itemCtx['n'])
+        ? 'TMDB item ' . (int) $itemCtx['n'] . ' shortlist: '
+        : 'TMDB shortlist: ';
+    $fileBit = !empty($itemCtx['file']) ? ' file=' . (string) $itemCtx['file'] : '';
+    $msg = $prefix . ($labels === [] ? '(none)' : implode('; ', $labels)) . $fileBit;
+    if (!empty($itemCtx['n']) && function_exists('app_log')) {
+        app_log('tmdb', $msg);
+    } else {
+        tmdb_verbose_log($msg);
+    }
+
+    return $out;
+}
+
+function tmdb_movie_search_params(string $query, ?int $year, string $yearKey = 'primary_release_year'): array
 {
     $params = [
         'query' => $query,
@@ -221,59 +575,83 @@ function tmdb_movie_search_params(string $query, ?int $year): array
         'page' => 1,
     ];
     if ($year !== null && $year >= 1870) {
-        $params['primary_release_year'] = (string) $year;
+        $params[$yearKey] = (string) $year;
     }
     return $params;
 }
 
 /**
- * Try shared query variants against /search/movie. First non-empty result wins.
- * Year filter is used on the first attempt only. If every movie search is empty,
- * try /search/multi once with the cleanest title.
+ * Try shared query variants. TV paths prefer /search/tv (show title from
+ * grandparent/parent folders, episode name from the filename). Movies use
+ * /search/movie. Year filter is first-attempt only and is skipped for TV
+ * (episode years are not first_air_date_year). Empty movie/tv lists fall
+ * back to /search/multi with the cleanest title.
  *
  * @return array{results: list<array>, page: int, total_pages: int, query?: string, source?: string}
  */
-function tmdb_search_first_results(string $title, ?int $year, string $filename = ''): array
+function tmdb_search_first_results(string $title, ?int $year, string $filename = '', array $meta = []): array
 {
     $empty = ['results' => [], 'page' => 1, 'total_pages' => 1];
-    $queries = tmdb_search_queries($title, $filename, $year);
+    $path = (string) ($meta['path'] ?? $filename);
+    $queries = tmdb_search_queries($title, $filename, $year, $meta + ['path' => $path]);
     if ($queries === []) {
         tmdb_verbose_log('TMDB query list empty for title=' . $title);
         return $empty;
     }
     $bestClean = $queries[0];
+    $isTv = function_exists('search_query_path_is_tv') && search_query_path_is_tv($path, $meta);
+    tmdb_verbose_log(
+        'TMDB queries (' . ($isTv ? 'tv' : 'movie')
+        . ', show=' . (string) ($meta['kind'] ?? '')
+        . ' s=' . (string) ($meta['season'] ?? '')
+        . ' e=' . (string) ($meta['episode'] ?? '')
+        . '): ' . (string) json_encode($queries, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+    );
+    $endpoints = $isTv
+        ? [
+            ['path' => '/search/tv', 'yearKey' => 'first_air_date_year', 'source' => 'tv'],
+            ['path' => '/search/movie', 'yearKey' => 'primary_release_year', 'source' => 'movie'],
+        ]
+        : [
+            ['path' => '/search/movie', 'yearKey' => 'primary_release_year', 'source' => 'movie'],
+        ];
     $first = true;
     foreach ($queries as $q) {
         $attempts = [];
-        if ($first && $year !== null && $year >= 1870) {
+        // Episode air years are not first_air_date_year; skip year on TV searches.
+        if ($first && !$isTv && $year !== null && $year >= 1870) {
             $attempts[] = ['year' => $year, 'label' => 'year'];
             $attempts[] = ['year' => null, 'label' => 'no-year'];
         } else {
             $attempts[] = ['year' => null, 'label' => 'no-year'];
         }
         $first = false;
-        foreach ($attempts as $attempt) {
-            $params = tmdb_movie_search_params($q, $attempt['year']);
-            $payload = tmdb_list_payload(tmdb_get('/search/movie', $params));
-            $hits = count($payload['results']);
-            $weak = function_exists('search_query_is_weak') && search_query_is_weak($q);
-            tmdb_verbose_log('TMDB query "' . $q . '" (' . $attempt['label'] . ($weak ? ', weak' : '') . ') hits=' . $hits);
-            if ($hits > 0 && $weak) {
-                tmdb_verbose_log('TMDB weak query ignored: "' . $q . '"');
+        foreach ($endpoints as $ep) {
+            foreach ($attempts as $attempt) {
+                $params = tmdb_movie_search_params($q, $attempt['year'], $ep['yearKey']);
+                $defaultMedia = $ep['source'] === 'tv' ? 'tv' : 'movie';
+                $payload = tmdb_list_payload(tmdb_get($ep['path'], $params), $defaultMedia);
+                $hits = count($payload['results']);
+                $weak = function_exists('search_query_is_weak') && search_query_is_weak($q);
+                tmdb_verbose_log('TMDB ' . $ep['source'] . ' query "' . $q . '" (' . $attempt['label'] . ($weak ? ', weak' : '') . ') hits=' . $hits);
+                if ($hits > 0 && $weak) {
+                    tmdb_verbose_log('TMDB weak query ignored: "' . $q . '"');
+                    usleep(TMDB_REQUEST_SLEEP_US);
+                    continue;
+                }
+                if ($hits > 0) {
+                    tmdb_verbose_log('TMDB query hit: "' . $q . '" (' . $ep['source'] . ')');
+                    $payload['results'] = tmdb_shortlist_results($payload['results'], $title, $filename, $year, $q);
+                    $payload['query'] = $q;
+                    $payload['source'] = $ep['source'];
+                    return $payload;
+                }
                 usleep(TMDB_REQUEST_SLEEP_US);
-                continue;
             }
-            if ($hits > 0) {
-                tmdb_verbose_log('TMDB query hit: "' . $q . '"');
-                $payload['query'] = $q;
-                $payload['source'] = 'movie';
-                return $payload;
-            }
-            usleep(TMDB_REQUEST_SLEEP_US);
         }
     }
 
-    tmdb_verbose_log('TMDB movie queries empty; trying /search/multi "' . $bestClean . '"');
+    tmdb_verbose_log('TMDB movie/tv queries empty; trying /search/multi "' . $bestClean . '"');
     $multi = tmdb_get('/search/multi', [
         'query' => $bestClean,
         'include_adult' => 'false',
@@ -301,7 +679,7 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
     }
     tmdb_verbose_log('TMDB query hit: "' . $bestClean . '" (multi)');
     return [
-        'results' => $mapped,
+        'results' => tmdb_shortlist_results($mapped, $title, $filename, $year, $bestClean),
         'page' => 1,
         'total_pages' => 1,
         'query' => $bestClean,
@@ -309,16 +687,16 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
     ];
 }
 
-function tmdb_search_candidates(string $title, ?int $year, int $limit = 5, string $filename = ''): array
+function tmdb_search_candidates(string $title, ?int $year, int $limit = 6, string $filename = '', array $meta = []): array
 {
     $title = trim($title);
-    if ($title === '' && trim($filename) === '') {
+    if ($title === '' && trim($filename) === '' && (string) ($meta['path'] ?? '') === '') {
         return [];
     }
     if (!tmdb_has_key()) {
         return [];
     }
-    $payload = tmdb_search_first_results($title, $year, $filename);
+    $payload = tmdb_search_first_results($title, $year, $filename, $meta);
     $out = [];
     $seen = [];
     foreach ($payload['results'] as $row) {
@@ -343,12 +721,12 @@ function tmdb_search_candidates(string $title, ?int $year, int $limit = 5, strin
     return $out;
 }
 
-function tmdb_search_movie(string $title, ?int $year, string $filename = ''): ?array
+function tmdb_search_movie(string $title, ?int $year, string $filename = '', array $meta = []): ?array
 {
-    $payload = tmdb_search_first_results($title, $year, $filename);
+    $payload = tmdb_search_first_results($title, $year, $filename, $meta);
     $results = [];
     foreach ($payload['results'] as $row) {
-        if (!is_array($row) || (string) ($row['media_type'] ?? 'movie') === 'tv') {
+        if (!is_array($row)) {
             continue;
         }
         $results[] = [
@@ -356,6 +734,7 @@ function tmdb_search_movie(string $title, ?int $year, string $filename = ''): ?a
             'title' => (string) ($row['title'] ?? ''),
             'original_title' => (string) ($row['title'] ?? ''),
             'release_date' => !empty($row['year']) ? ((int) $row['year'] . '-01-01') : '',
+            'media_type' => (string) ($row['media_type'] ?? 'movie'),
         ];
     }
     $hit = tmdb_confident_hit($results, $title, $year);
@@ -365,18 +744,20 @@ function tmdb_search_movie(string $title, ?int $year, string $filename = ''): ?a
     return $hit;
 }
 
-function tmdb_fetch_details(int $tmdbId): ?array
+function tmdb_details_from_data(array $data, string $mediaType): ?array
 {
-    $data = tmdb_get('/movie/' . $tmdbId, ['append_to_response' => 'credits']);
-    if ($data === null || empty($data['id'])) {
+    if (empty($data['id'])) {
         return null;
     }
-
-    $release = (string) ($data['release_date'] ?? '');
+    $isTv = $mediaType === 'tv';
+    $release = (string) ($data[$isTv ? 'first_air_date' : 'release_date'] ?? $data['first_air_date'] ?? $data['release_date'] ?? '');
     $year = strlen($release) >= 4 ? (int) substr($release, 0, 4) : null;
     $cast = [];
     $credits = is_array($data['credits']['cast'] ?? null) ? $data['credits']['cast'] : [];
     foreach ($credits as $person) {
+        if (!is_array($person)) {
+            continue;
+        }
         $name = trim((string) ($person['name'] ?? ''));
         if ($name === '') {
             continue;
@@ -399,31 +780,52 @@ function tmdb_fetch_details(int $tmdbId): ?array
         }
     }
 
+    $title = $isTv
+        ? (string) ($data['name'] ?? $data['original_name'] ?? $data['title'] ?? '')
+        : (string) ($data['title'] ?? $data['original_title'] ?? $data['name'] ?? '');
+
     return [
         'tmdb_id' => (int) $data['id'],
-        'title' => (string) ($data['title'] ?? $data['original_title'] ?? ''),
+        'title' => $title,
         'year' => $year,
         'overview' => trim((string) ($data['overview'] ?? '')),
         'poster_path' => is_string($poster) && $poster !== '' ? $poster : null,
         'cast' => $cast,
         'genres' => $genres,
+        'media_type' => $isTv ? 'tv' : 'movie',
     ];
 }
 
-function tmdb_lookup(string $title, ?int $year, string $filename = ''): ?array
+function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
+{
+    $primary = $mediaType === 'tv' ? 'tv' : 'movie';
+    $path = $primary === 'tv' ? '/tv/' . $tmdbId : '/movie/' . $tmdbId;
+    $data = tmdb_get($path, ['append_to_response' => 'credits']);
+    $details = is_array($data) ? tmdb_details_from_data($data, $primary) : null;
+    if ($details !== null) {
+        return $details;
+    }
+    // Movie and TV ids are separate namespaces; only try the other type on a miss.
+    $other = $primary === 'tv' ? 'movie' : 'tv';
+    $otherPath = $other === 'tv' ? '/tv/' . $tmdbId : '/movie/' . $tmdbId;
+    $otherData = tmdb_get($otherPath, ['append_to_response' => 'credits']);
+    return is_array($otherData) ? tmdb_details_from_data($otherData, $other) : null;
+}
+
+function tmdb_lookup(string $title, ?int $year, string $filename = '', array $meta = []): ?array
 {
     $title = trim($title);
     if (($title === '' && trim($filename) === '') || !tmdb_has_key() || !function_exists('curl_init')) {
         return null;
     }
 
-    $hit = tmdb_search_movie($title, $year, $filename);
+    $hit = tmdb_search_movie($title, $year, $filename, $meta);
     if ($hit === null || empty($hit['id'])) {
         usleep(TMDB_REQUEST_SLEEP_US);
         return null;
     }
 
-    $details = tmdb_fetch_details((int) $hit['id']);
+    $details = tmdb_fetch_details((int) $hit['id'], (string) ($hit['media_type'] ?? 'movie'));
     usleep(TMDB_REQUEST_SLEEP_US);
     return $details;
 }

@@ -351,8 +351,85 @@
     row.remove();
   });
 
+  var configTabs = document.querySelectorAll('[data-config-tab]');
+  if (configTabs.length) {
+    function showConfigTab(id) {
+      if (id !== 'music' && id !== 'general') {
+        id = 'video';
+      }
+      configTabs.forEach(function (tab) {
+        var on = tab.getAttribute('data-config-tab') === id;
+        tab.classList.toggle('is-active', on);
+        tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('[data-config-panel]').forEach(function (panel) {
+        panel.hidden = panel.getAttribute('data-config-panel') !== id;
+      });
+      var field = document.querySelector('[data-config-tab-field]');
+      if (field) field.value = id;
+      try {
+        var url = new URL(window.location.href);
+        url.searchParams.set('tab', id);
+        history.replaceState(null, '', url.pathname + url.search + url.hash);
+      } catch (err) {}
+    }
+    configTabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        showConfigTab(tab.getAttribute('data-config-tab') || 'video');
+      });
+    });
+  }
+
   var catalog = document.querySelector('[data-catalog]');
   if (catalog) {
+    try { history.scrollRestoration = 'manual'; } catch (e) {}
+
+    var catalogScrollTimer = 0;
+    function catalogScrollKey(view) {
+      view = view || catalog.getAttribute('data-view') || '';
+      return 'media-catalog-scroll:' + location.pathname + ':' + view;
+    }
+    function catalogPersistScroll(view) {
+      try {
+        sessionStorage.setItem(catalogScrollKey(view), String(window.scrollY || window.pageYOffset || 0));
+      } catch (e) {}
+    }
+    function catalogRestoreScroll() {
+      var raw;
+      try { raw = sessionStorage.getItem(catalogScrollKey()); } catch (e) { return; }
+      if (raw == null || raw === '') return;
+      var y = parseInt(raw, 10);
+      if (!isFinite(y) || y < 1) return;
+      function apply() {
+        var max = Math.max(0, (document.documentElement.scrollHeight || 0) - window.innerHeight);
+        window.scrollTo(0, Math.min(y, max));
+      }
+      apply();
+      requestAnimationFrame(apply);
+      window.addEventListener('load', apply, { once: true });
+      var n = 0;
+      var timer = window.setInterval(function () {
+        apply();
+        n += 1;
+        if (n >= 10) window.clearInterval(timer);
+      }, 100);
+    }
+
+    window.addEventListener('scroll', function () {
+      if (catalogScrollTimer) return;
+      catalogScrollTimer = window.setTimeout(function () {
+        catalogScrollTimer = 0;
+        catalogPersistScroll();
+      }, 80);
+    }, { passive: true });
+    window.addEventListener('pagehide', function () { catalogPersistScroll(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') catalogPersistScroll();
+    });
+    document.addEventListener('click', function (event) {
+      if (event.target.closest('a[href]')) catalogPersistScroll();
+    }, true);
+
     function catalogSave() {
       var raw = JSON.stringify({
         view: catalog.getAttribute('data-view') || 'poster',
@@ -362,7 +439,10 @@
         }).filter(Boolean),
         sort: catalog.getAttribute('data-sort') || 'title',
         dir: catalog.getAttribute('data-dir') || 'asc',
-        kinds: (catalog.getAttribute('data-kinds') || 'movie show').trim().split(/\s+/),
+        kinds: (catalog.getAttribute('data-kinds') || 'movie show documentary').trim().split(/\s+/),
+        kinds_known: Array.prototype.map.call(catalog.querySelectorAll('[data-kind-filter]'), function (box) {
+          return box.getAttribute('data-kind-filter');
+        }).filter(Boolean),
         categories: (catalog.getAttribute('data-categories') || '').trim().split(/\s+/).filter(Boolean),
         categories_known: Array.prototype.map.call(catalog.querySelectorAll('[data-category-filter]'), function (box) {
           return box.getAttribute('data-category-filter');
@@ -373,6 +453,7 @@
     }
 
     function setView(view) {
+      catalogPersistScroll(catalog.getAttribute('data-view-rendered') || catalog.getAttribute('data-view'));
       catalog.setAttribute('data-view', view);
       catalogSave();
       if (view !== (catalog.getAttribute('data-view-rendered') || '')) {
@@ -438,7 +519,10 @@
     }
 
     function kindAllowed(el) {
-      return true;
+      var allowed = (catalog.getAttribute('data-kinds') || '').trim().split(/\s+/).filter(Boolean);
+      if (allowed.length === 0) return true;
+      var kind = el.getAttribute('data-kind') || 'movie';
+      return allowed.indexOf(kind) !== -1;
     }
 
     function categoryAllowed(el) {
@@ -697,7 +781,19 @@
           if (parsed.sort) catalog.setAttribute('data-sort', parsed.sort);
           if (parsed.dir) catalog.setAttribute('data-dir', parsed.dir);
           if (Array.isArray(parsed.columns)) catalog.setAttribute('data-cols', parsed.columns.join(' '));
-          catalog.setAttribute('data-kinds', 'movie show');
+          if (Array.isArray(parsed.kinds)) {
+            var allowedKinds = ['movie', 'show', 'documentary'];
+            var kinds = parsed.kinds.filter(function (id) { return allowedKinds.indexOf(id) !== -1; });
+            var knownKinds = Array.isArray(parsed.kinds_known) ? parsed.kinds_known : [];
+            allowedKinds.forEach(function (id) {
+              if (knownKinds.indexOf(id) === -1 && kinds.indexOf(id) === -1) kinds.push(id);
+            });
+            if (kinds.length === 0) kinds = allowedKinds.slice();
+            catalog.setAttribute('data-kinds', kinds.join(' '));
+            catalog.querySelectorAll('[data-kind-filter]').forEach(function (box) {
+              box.checked = kinds.indexOf(box.getAttribute('data-kind-filter')) !== -1;
+            });
+          }
           if (Array.isArray(parsed.categories)) {
             var allowedCats = Array.prototype.map.call(catalog.querySelectorAll('[data-category-filter]'), function (box) {
               return box.getAttribute('data-category-filter');
@@ -715,6 +811,7 @@
           }
           var nextView = catalog.getAttribute('data-view') || 'poster';
           if (nextView !== (catalog.getAttribute('data-view-rendered') || '')) {
+            catalogPersistScroll(catalog.getAttribute('data-view-rendered') || '');
             catalogSave();
             window.location.reload();
             return;
@@ -722,6 +819,8 @@
         }
       }
     } catch (e) {}
+    applySearch();
+    catalogRestoreScroll();
   }
 
   function overlayOpen(name) {
@@ -821,6 +920,7 @@
   var grokPanel = document.querySelector('[data-grok-panel]');
   var lastScanState = '';
   var lastScanKind = 'tmdb';
+  var lastScanPaused = false;
   var scanPumping = false;
   var grokPumping = false;
   var scanStopRequested = false;
@@ -850,6 +950,13 @@
     return lastScanState === 'running';
   }
 
+  function restartCssSpin(el) {
+    if (!el) return;
+    el.classList.remove('is-spinning');
+    void el.offsetWidth;
+    el.classList.add('is-spinning');
+  }
+
   function setLiveActive(active, message) {
     if (scanLive) {
       scanLive.hidden = !active;
@@ -858,6 +965,14 @@
     document.body.classList.toggle('scan-running', active);
     var barSpin = document.querySelector('[data-scan-bar-spin]');
     if (barSpin) barSpin.hidden = !active;
+    if (active) {
+      restartCssSpin(scanLive ? scanLive.querySelector('.scan-live-ring') : null);
+      restartCssSpin(barSpin);
+    } else {
+      var ring = scanLive ? scanLive.querySelector('.scan-live-ring') : null;
+      if (ring) ring.classList.remove('is-spinning');
+      if (barSpin) barSpin.classList.remove('is-spinning');
+    }
     var launchWrap = document.querySelector('[data-scan-launch-wrap]');
     if (launchWrap) launchWrap.hidden = active;
     var grokLaunch = document.querySelector('[data-grok-launch-wrap]');
@@ -869,11 +984,7 @@
     var grokStats = document.querySelector('[data-overlay-stats="grok"]');
     if (tmdbStats) tmdbStats.hidden = kind === 'grok';
     if (grokStats) grokStats.hidden = kind !== 'grok';
-    if (kind !== 'grok') {
-      document.querySelectorAll('[data-grok-wait-actions]').forEach(function (el) {
-        el.classList.remove('is-visible');
-      });
-    }
+    // Continue visibility is owned by paintScan / paintGrok (paused flag).
     var link = document.querySelector('[data-scan-overlay-link]');
     if (link && scanLive) {
       if (kind === 'grok') {
@@ -924,10 +1035,15 @@
       barWrap.classList.toggle('is-indeterminate', indeterminate);
       if (phase === 'walk' && total === 0) {
         pct = 0;
-      } else if (pending > 0) {
-        if (phase === 'lookup' || phase === 'stopping') {
-          var resolved = Math.min(pending, found + unmatched);
-          pct = Math.min(100, Math.round((resolved / pending) * 100));
+      } else if (phase === 'grok') {
+        var grokQueued = Number(data.grok_queued || 0);
+        var grokAttempted = Number(data.grok_attempted || 0);
+        pct = grokQueued > 0 ? Math.min(100, Math.round((grokAttempted / grokQueued) * 100)) : 0;
+      } else if (phase === 'lookup' || phase === 'stopping') {
+        if (pending > 0) {
+          pct = Math.min(99, Math.round((Math.min(pending, lookups) / pending) * 100));
+        } else if (total > 0) {
+          pct = Math.min(99, Math.round((processed / total) * 100));
         }
       } else if (total > 0) {
         pct = Math.min(100, Math.round((processed / total) * 100));
@@ -967,8 +1083,35 @@
     setText('[data-scan-overlay-elapsed]', running || state === 'done' || state === 'stopped'
       ? elapsedLabel(data.started_at)
       : '—');
+    setText('[data-scan-grok-matched]', String(data.grok_matched || 0));
+    setText('[data-scan-grok-attempted]', String(data.grok_attempted || 0));
+    setText('[data-scan-grok-left]', String(data.grok_left || 0));
+    setText('[data-scan-overlay-grok-matched]', String(data.grok_matched || 0));
+    setText('[data-scan-overlay-grok-attempted]', String(data.grok_attempted || 0));
+    setText('[data-scan-overlay-grok-left]', String(data.grok_left || 0));
+    var grokCost = data.grok_cost_label || '$0.0000';
+    setText('[data-scan-grok-cost]', grokCost);
+    setText('[data-scan-overlay-grok-cost]', grokCost);
+
+    var showWait = running && !stopping && !scanStopRequested && !!data.paused;
+    document.querySelectorAll('[data-grok-wait-actions]').forEach(function (el) {
+      el.classList.toggle('is-visible', showWait);
+      if (showWait) el.removeAttribute('hidden');
+      else el.setAttribute('hidden', 'hidden');
+    });
+
+    var grokToggle = document.querySelector('[data-grok-toggle]');
+    if (grokToggle && typeof data.grok_enabled === 'boolean' && grokToggle !== document.activeElement) {
+      grokToggle.checked = data.grok_enabled;
+    }
+    var grokPauseToggle = document.querySelector('[data-grok-pause-toggle]');
+    if (grokPauseToggle && typeof data.grok_pause === 'boolean' && grokPauseToggle !== document.activeElement) {
+      grokPauseToggle.checked = data.grok_pause;
+    }
 
     lastScanState = state;
+    lastScanKind = 'tmdb';
+    lastScanPaused = running && !!data.paused;
   }
 
   function paintGrok(data) {
@@ -1022,9 +1165,11 @@
         stopBtn.textContent = 'Stop Grok';
       }
     }
-    var showWait = running && !stopping && !grokStopRequested;
+    var showWait = running && !stopping && !grokStopRequested && !!data.paused;
     document.querySelectorAll('[data-grok-wait-actions]').forEach(function (el) {
       el.classList.toggle('is-visible', showWait);
+      if (showWait) el.removeAttribute('hidden');
+      else el.setAttribute('hidden', 'hidden');
     });
   }
 
@@ -1037,7 +1182,7 @@
     }
   }
 
-  function pumpScan(start) {
+  function pumpScan(start, resumePause) {
     var runUrl = scanRunUrl();
     if (!runUrl || scanPumping) return;
     if (start) {
@@ -1045,6 +1190,9 @@
       if (mode === '1' || mode === 'true') mode = 'retry';
       if (mode !== 'unidentified') mode = 'retry';
       runUrl += (runUrl.indexOf('?') >= 0 ? '&' : '?') + 'start=1&mode=' + encodeURIComponent(mode);
+    }
+    if (resumePause) {
+      runUrl += (runUrl.indexOf('?') >= 0 ? '&' : '?') + 'continue=1';
     }
     scanPumping = true;
     fetch(runUrl, { method: 'POST', credentials: 'same-origin', cache: 'no-store' })
@@ -1058,6 +1206,9 @@
         paintLive(data);
         var state = data && data.state;
         var kind = data && data.kind;
+        if (data && data.paused) {
+          return;
+        }
         if (kind === 'grok') {
           if (state === 'running' && !grokPumping) pumpGrok();
           return;
@@ -1068,14 +1219,14 @@
         }
         if (state === 'running' && data.busy) {
           setTimeout(function () {
-            if (lastScanState === 'running' && lastScanKind === 'tmdb') pumpScan();
+            if (lastScanState === 'running' && lastScanKind === 'tmdb' && !lastScanPaused && !scanStopRequested) pumpScan();
           }, 400);
         }
       })
       .catch(function () {
         scanPumping = false;
         setTimeout(function () {
-          if (lastScanState === 'running' && lastScanKind === 'tmdb') pumpScan();
+          if (lastScanState === 'running' && lastScanKind === 'tmdb' && !lastScanPaused && !scanStopRequested) pumpScan();
         }, 1500);
       });
   }
@@ -1104,7 +1255,7 @@
           if (state === 'running' && !scanPumping) pumpScan();
           return;
         }
-        if (grokStopRequested || (data && data.cancel_requested) || state === 'stopped') {
+        if (scanStopRequested || grokStopRequested || (data && data.cancel_requested) || state === 'stopped') {
           return;
         }
         if (data && data.paused) {
@@ -1137,8 +1288,8 @@
       .then(function (data) {
         paintLive(data);
         if (!data || data.state !== 'running') return;
-        if ((data.kind || 'tmdb') === 'grok') {
-          if (data.paused) return;
+        if (data.paused || scanStopRequested) return;
+        if ((data.kind || 'scan') === 'grok') {
           if (!grokPumping && !data.cancel_requested && !grokStopRequested) pumpGrok();
         } else if (!scanPumping) {
           pumpScan();
@@ -1201,10 +1352,44 @@
   document.querySelectorAll('[data-grok-continue]').forEach(function (grokContinue) {
     grokContinue.addEventListener('click', function (event) {
       event.preventDefault();
-      if (grokStopRequested) return;
-      pumpGrok(false);
+      if (scanStopRequested || grokStopRequested) return;
+      pumpScan(false, true);
     });
   });
+
+  var grokToggle = document.querySelector('[data-grok-toggle]');
+  var grokToggleUrl = scanPanel ? scanPanel.getAttribute('data-grok-toggle-url') : '';
+  if (grokToggle && grokToggleUrl) {
+    grokToggle.addEventListener('change', function () {
+      fetch(grokToggleUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ enabled: grokToggle.checked ? '1' : '0' })
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        if (data && typeof data.enabled === 'boolean') grokToggle.checked = data.enabled;
+      }).catch(function () {});
+    });
+  }
+
+  var grokPauseToggle = document.querySelector('[data-grok-pause-toggle]');
+  var grokPauseUrl = scanPanel ? scanPanel.getAttribute('data-grok-pause-url') : '';
+  if (grokPauseToggle && grokPauseUrl) {
+    grokPauseToggle.addEventListener('change', function () {
+      fetch(grokPauseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ enabled: grokPauseToggle.checked ? '1' : '0' })
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        if (data && typeof data.pause === 'boolean') grokPauseToggle.checked = data.pause;
+        paintLive(data);
+        if (data && data.pause === false && (data.state || lastScanState) === 'running' && !scanStopRequested) {
+          pumpScan(false);
+        }
+      }).catch(function () {});
+    });
+  }
 
   var grokStopForm = document.querySelector('[data-grok-stop]');
   if (grokStopForm) {

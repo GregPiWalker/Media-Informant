@@ -24,6 +24,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         'tmdb_api_key' => $current['tmdb_api_key'] ?? '',
         'tmdb_language' => $current['tmdb_language'] ?? TMDB_LANGUAGE,
         'xai_api_key' => $current['xai_api_key'] ?? '',
+        'show_hidden' => !empty($current['show_hidden']),
     ];
     if (!is_array($payload['video_category_ids'])) {
         $payload['video_category_ids'] = [];

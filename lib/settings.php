@@ -53,6 +53,7 @@ function settings_defaults(): array
         'tmdb_api_key' => TMDB_API_KEY,
         'tmdb_language' => TMDB_LANGUAGE,
         'xai_api_key' => XAI_API_KEY,
+        'show_hidden' => false,
     ];
 }
 
@@ -310,7 +311,25 @@ function settings_normalize(array $data): array
         'tmdb_api_key' => trim((string) ($data['tmdb_api_key'] ?? $defaults['tmdb_api_key'])),
         'tmdb_language' => $lang,
         'xai_api_key' => trim((string) ($data['xai_api_key'] ?? $defaults['xai_api_key'])),
+        'show_hidden' => settings_bool($data['show_hidden'] ?? $defaults['show_hidden']),
     ];
+}
+
+function settings_bool(mixed $value): bool
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (int) $value === 1;
+    }
+    $s = strtolower(trim((string) $value));
+    return $s === '1' || $s === 'true' || $s === 'yes' || $s === 'on';
+}
+
+function settings_show_hidden(): bool
+{
+    return settings_bool(settings_get()['show_hidden'] ?? false);
 }
 
 function settings_get(bool $reload = false): array
@@ -384,10 +403,11 @@ function settings_video_filter_categories(): array
             }
         }
     }
+    $kindCats = ['movies' => true, 'tv-shows' => true, 'documentaries' => true, 'television' => true, 'docs' => true];
     $categories = [];
     foreach (settings_video_categories() as $category) {
         $id = (string) ($category['id'] ?? '');
-        if ($id !== '' && isset($usedIds[$id])) {
+        if ($id !== '' && isset($usedIds[$id]) && !isset($kindCats[$id])) {
             $categories[] = $category;
         }
     }
@@ -438,6 +458,21 @@ function settings_category_for_root(string $root): string
                 return (string) ($source['category'] ?? '');
             }
         }
+    }
+    return '';
+}
+
+function settings_content_kind_from_category(string $categoryId): string
+{
+    $id = settings_migrate_category_id(strtolower(trim($categoryId)));
+    if ($id === 'tv-shows' || $id === 'television' || $id === 'tv' || $id === 'shows') {
+        return 'show';
+    }
+    if ($id === 'documentaries' || $id === 'documentary' || $id === 'docs') {
+        return 'documentary';
+    }
+    if ($id === 'movies' || $id === 'movie' || $id === 'films') {
+        return 'movie';
     }
     return '';
 }
@@ -565,4 +600,65 @@ function format_source_path(array $item): string
         return $rel;
     }
     return $rel === '' ? $root : $root . '/' . $rel;
+}
+
+function settings_parent_dir(string $fullPath): string
+{
+    $full = settings_normalize_path($fullPath);
+    if ($full === '' || $full === '/') {
+        return '';
+    }
+    $pos = strrpos($full, '/');
+    if ($pos === false) {
+        return '';
+    }
+    if ($pos === 0) {
+        return '/';
+    }
+    return settings_normalize_path(substr($full, 0, $pos));
+}
+
+function settings_item_parent_dir(array $item): string
+{
+    return settings_parent_dir(format_source_path($item));
+}
+
+function settings_is_source_path(string $path): bool
+{
+    $path = settings_normalize_path($path);
+    if ($path === '') {
+        return false;
+    }
+    foreach (['video_roots', 'music_roots'] as $key) {
+        foreach (settings_source_paths(settings_get()[$key] ?? []) as $root) {
+            if (settings_normalize_path((string) $root) === $path) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function settings_add_video_exclude(string $path): ?string
+{
+    $path = settings_normalize_path($path);
+    if ($path === '' || settings_path_blocked($path)) {
+        return 'That folder cannot be excluded.';
+    }
+    if (settings_is_source_path($path)) {
+        return 'The parent folder is a configured source. Only folders inside a source can be excluded.';
+    }
+    $current = settings_get();
+    $excludes = is_array($current['video_excludes'] ?? null) ? $current['video_excludes'] : [];
+    foreach ($excludes as $exclude) {
+        if (settings_normalize_path((string) $exclude) === $path) {
+            return null;
+        }
+    }
+    $excludes[] = $path;
+    $current['video_excludes'] = $excludes;
+    if (!settings_save($current)) {
+        return 'Could not save the exclusion. Check that cache/ is writable.';
+    }
+    return null;
 }

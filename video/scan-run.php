@@ -28,32 +28,24 @@ if ($lock === false) {
     exit;
 }
 if (!flock($lock, LOCK_EX | LOCK_NB)) {
-    $grok = grok_status_read();
-    if (($grok['state'] ?? '') === 'running') {
-        echo json_encode(array_merge($grok, [
-            'ok' => true,
-            'busy' => true,
-            'kind' => 'grok',
-        ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    } else {
-        echo json_encode(array_merge(scan_status_read(), [
-            'ok' => true,
-            'busy' => true,
-            'kind' => 'tmdb',
-        ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
+    echo json_encode(array_merge(scan_status_read(), [
+        'ok' => true,
+        'busy' => true,
+        'kind' => 'scan',
+    ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     fclose($lock);
     exit;
 }
 
 try {
     $allowStart = isset($_GET['start']) || isset($_POST['start']);
+    $resumePause = isset($_GET['continue']) || isset($_POST['continue']);
     $mode = (string) ($_GET['mode'] ?? $_POST['mode'] ?? 'retry');
-    $status = scan_tick($allowStart, $mode);
+    $status = scan_tick($allowStart, $mode, $resumePause);
     echo json_encode(array_merge($status, [
         'ok' => true,
         'busy' => false,
-        'kind' => 'tmdb',
+        'kind' => 'scan',
     ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $e) {
     scan_status_write([

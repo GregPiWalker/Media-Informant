@@ -81,7 +81,7 @@ final class CatalogPreferences
         public array $columns,
         public string $sort,
         public string $dir,
-        public array $kinds = ['movie', 'show'],
+        public array $kinds = ['movie', 'show', 'documentary'],
         public array $categories = [],
     ) {
     }
@@ -144,18 +144,29 @@ final class CatalogPreferences
 
         $dir = strtolower((string) ($data['dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 
-        $kinds = $data['kinds'] ?? ['movie', 'show'];
+        $allKinds = ['movie', 'show', 'documentary'];
+        $kinds = $data['kinds'] ?? $allKinds;
         if (!is_array($kinds)) {
-            $kinds = ['movie', 'show'];
+            $kinds = $allKinds;
         }
         $kindOut = [];
         foreach ($kinds as $kind) {
-            if (($kind === 'movie' || $kind === 'show') && !in_array($kind, $kindOut, true)) {
+            if (in_array($kind, $allKinds, true) && !in_array($kind, $kindOut, true)) {
                 $kindOut[] = $kind;
             }
         }
+        $knownKinds = $data['kinds_known'] ?? null;
+        if (is_array($knownKinds)) {
+            foreach ($allKinds as $kind) {
+                if (!in_array($kind, $knownKinds, true) && !in_array($kind, $kindOut, true)) {
+                    $kindOut[] = $kind;
+                }
+            }
+        } elseif (!in_array('documentary', $kindOut, true)) {
+            $kindOut[] = 'documentary';
+        }
         if ($kindOut === []) {
-            $kindOut = ['movie', 'show'];
+            $kindOut = $allKinds;
         }
 
         $allCats = $categoryIds !== [] ? $categoryIds : (function_exists('settings_category_ids') ? settings_category_ids() : []);
@@ -244,6 +255,7 @@ final class CatalogRecord
         public string $episodeGroupKey = '',
         public string $category = '',
         public string $matchSource = 'none',
+        public bool $grouped = false,
     ) {
     }
 
@@ -270,12 +282,16 @@ final class CatalogRecord
         $episode = isset($item['episode']) && $item['episode'] !== null && $item['episode'] !== ''
             ? (int) $item['episode']
             : null;
-        $kind = (string) ($item['kind'] ?? '');
-        if ($kind !== 'show' && $kind !== 'movie') {
+        $kind = function_exists('library_item_kind') ? library_item_kind($item) : (string) ($item['kind'] ?? '');
+        if ($kind !== 'show' && $kind !== 'movie' && $kind !== 'documentary') {
             $kind = ($season !== null || $episode !== null) ? 'show' : 'movie';
         }
+        $grouped = function_exists('library_item_grouped') ? library_item_grouped($item) : ($kind === 'show');
+        if ($kind === 'show') {
+            $grouped = true;
+        }
         $seriesTitle = $parsed !== '' ? $parsed : $title;
-        $groupKey = $kind === 'show' ? lower($seriesTitle) : $id;
+        $groupKey = $grouped ? ($kind . ':' . lower($seriesTitle)) : $id;
         $episodeTitle = (string) ($item['episode_title'] ?? '');
         $partLabel = (string) ($item['part'] ?? '');
         if ($partLabel === '' && $episodeTitle !== '') {
@@ -285,7 +301,7 @@ final class CatalogRecord
             }
         }
         $episodeLabel = '';
-        if ($kind === 'show') {
+        if ($grouped) {
             if ($episodeTitle !== '') {
                 $episodeLabel = ($season !== null ? sprintf('S%02d · ', $season) : '') . $episodeTitle;
             } elseif ($season !== null || $episode !== null) {
@@ -295,10 +311,10 @@ final class CatalogRecord
                 $episodeLabel = $fn !== '' ? pathinfo($fn, PATHINFO_FILENAME) : $title;
             }
         }
-        $episodeGroupKey = $kind === 'show'
+        $episodeGroupKey = $grouped
             ? sprintf('%02d|%s', $season ?? 0, lower($episodeTitle !== '' ? $episodeTitle : ($episode !== null ? (string) $episode : $id)))
             : $id;
-        $cellTitle = $kind === 'show' ? $episodeLabel : $title;
+        $cellTitle = $grouped ? $episodeLabel : $title;
         $category = (string) ($item['category'] ?? '');
         if ($category === '' && function_exists('settings_category_for_root')) {
             $category = settings_category_for_root((string) ($item['root'] ?? ''));
@@ -317,7 +333,7 @@ final class CatalogRecord
                 'genres' => $genreLabel !== '' ? $genreLabel : '—',
             ],
             [
-                'title' => $kind === 'show' ? lower($seriesTitle) : lower($title),
+                'title' => $grouped ? lower($seriesTitle) : lower($title),
                 'year' => $year ? sprintf('%04d', (int) $year) : '0000',
                 'status' => library_status_sort_key($item),
                 'genres' => lower($genreLabel),
@@ -336,6 +352,7 @@ final class CatalogRecord
             $episodeGroupKey,
             $category,
             $matchSource,
+            $grouped,
         );
     }
 
@@ -413,7 +430,7 @@ final class CatalogGroup
 
     public function isSeries(): bool
     {
-        return $this->kind === 'show';
+        return $this->head->grouped || $this->kind === 'show';
     }
 
     /** @return list<array{id: string, label: string, parts: list<CatalogRecord>}> */
@@ -477,18 +494,18 @@ function catalog_collect_groups(array $records): array
     $buckets = [];
     $groups = [];
     foreach ($records as $record) {
-        if ($record->kind === 'show' && $record->groupKey !== '') {
+        if ($record->grouped && $record->groupKey !== '') {
             $buckets[$record->groupKey][] = $record;
             continue;
         }
-        $groups[] = new CatalogGroup('movie:' . $record->id, 'movie', $record, [$record]);
+        $groups[] = new CatalogGroup('item:' . $record->id, $record->kind, $record, [$record]);
     }
     foreach ($buckets as $key => $members) {
         usort($members, static function (CatalogRecord $a, CatalogRecord $b): int {
             return [$a->season ?? -1, $a->episode ?? -1, $a->id]
                 <=> [$b->season ?? -1, $b->episode ?? -1, $b->id];
         });
-        $groups[] = new CatalogGroup('show:' . $key, 'show', $members[0], $members);
+        $groups[] = new CatalogGroup('series:' . $key, $members[0]->kind, $members[0], $members);
     }
     return $groups;
 }

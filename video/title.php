@@ -4,6 +4,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
+require dirname(__DIR__) . '/lib/folders.php';
 
 cache_init();
 
@@ -22,6 +23,103 @@ if ($item !== null && !settings_item_in_roots($item, settings_video_roots(), $li
 
 $error = '';
 $editing = isset($_GET['edit']);
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'treat_individual' || (string) ($_POST['action'] ?? '') === 'treat_series')) {
+    $grouped = (string) ($_POST['action'] ?? '') === 'treat_series';
+    $updated = cache_update_item($id, static function (array $row) use ($grouped): array {
+        return library_set_item_grouped($row, $grouped);
+    });
+    if ($updated === null) {
+        $error = 'Could not update how this file is treated. Check that cache/ is writable.';
+    } else {
+        $item = $updated;
+        if (function_exists('app_log')) {
+            app_log('title', ($grouped ? 'Treat as series: ' : 'Treat individually: ')
+                . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '.', ['id' => $id, 'grouped' => $grouped]);
+        }
+        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        exit;
+    }
+}
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'folder_as_show' || (string) ($_POST['action'] ?? '') === 'folder_as_movie')) {
+    $home = folder_home_for_file((string) ($item['path'] ?? ''));
+    $root = (string) ($item['root'] ?? '');
+    $kind = (string) ($_POST['action'] ?? '') === 'folder_as_movie' ? 'movie' : 'show';
+    if ($home === '' || $root === '') {
+        $error = 'This file is not inside a show folder.';
+    } elseif (!folder_set_user_kind($root, $home, $kind)) {
+        $error = 'Could not save the folder type. Check that cache/ is writable.';
+    } else {
+        $n = library_reclassify_folder($root, $home);
+        if (function_exists('app_log')) {
+            app_log('title', 'Set folder “' . $home . '” as ' . $kind . ' (' . $n . ' files).', [
+                'id' => $id,
+                'kind' => $kind,
+            ]);
+        }
+        header('Location: index.php', true, 303);
+        exit;
+    }
+}
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'exclude_parent') {
+    $parent = settings_item_parent_dir($item);
+    $fail = settings_add_video_exclude($parent);
+    if ($fail !== null) {
+        $error = $fail;
+    } else {
+        require_once dirname(__DIR__) . '/lib/scanner.php';
+        $dropped = cache_prune_excluded_items();
+        if (function_exists('scan_job_strip_excluded')) {
+            scan_job_strip_excluded();
+        }
+        if (function_exists('app_log')) {
+            app_log('config', 'Excluded parent folder ' . $parent . '.', [
+                'id' => $id,
+                'dropped' => $dropped,
+            ]);
+        }
+        header('Location: index.php', true, 303);
+        exit;
+    }
+}
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'hide') {
+    $updated = cache_update_item($id, static function (array $row): array {
+        return library_set_hidden($row, true);
+    });
+    if ($updated === null) {
+        $error = 'Could not hide this file. Check that cache/ is writable.';
+    } else {
+        $item = $updated;
+        if (function_exists('app_log')) {
+            app_log('title', 'Hid “' . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '”.', ['id' => $id]);
+        }
+        if (!settings_show_hidden()) {
+            header('Location: index.php', true, 303);
+            exit;
+        }
+        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        exit;
+    }
+}
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'unhide') {
+    $updated = cache_update_item($id, static function (array $row): array {
+        return library_set_hidden($row, false);
+    });
+    if ($updated === null) {
+        $error = 'Could not unhide this file. Check that cache/ is writable.';
+    } else {
+        $item = $updated;
+        if (function_exists('app_log')) {
+            app_log('title', 'Unhid “' . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '”.', ['id' => $id]);
+        }
+        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        exit;
+    }
+}
 
 if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_match') {
     $updated = cache_update_item($id, static function (array $row): array {

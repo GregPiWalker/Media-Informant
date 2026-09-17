@@ -23,11 +23,42 @@ define('XAI_API_KEY', '');
 define('XAI_API_URL', 'https://api.x.ai/v1/chat/completions');
 define('XAI_MODEL', 'grok-4-1-fast-non-reasoning');
 define('XAI_MODEL_FALLBACK', 'grok-4-1-fast');
+
+/**
+ * USD per 1M tokens for Scan cost estimates. Not an invoice.
+ * Keys are matched against XAI_MODEL / aliases after lowercasing.
+ *
+ * @return array{input: float, cached: float, output: float}
+ */
+function grok_token_rate_table(): array
+{
+    return [
+        '4.20' => ['input' => 1.25, 'cached' => 0.20, 'output' => 2.50],
+        '4.5' => ['input' => 2.00, 'cached' => 0.50, 'output' => 6.00],
+    ];
+}
+
+function grok_token_rates(string $model): array
+{
+    $m = strtolower(str_replace('_', '-', trim($model)));
+    $table = grok_token_rate_table();
+    $fallback = $table['4.20'];
+    if (preg_match('/grok-4[.-]?(5|6)(\b|-|$)/', $m)) {
+        return $table['4.5'] + ['fallback' => false];
+    }
+    if (preg_match('/grok-4[.-]?(20|3)(\b|-|$)/', $m)) {
+        return $fallback + ['fallback' => false];
+    }
+    return $fallback + ['fallback' => true];
+}
 define('GROK_BATCH_SIZE', 25);
 define('GROK_MIN_CONFIDENCE', 0.75);
 define('GROK_BATCH_SLEEP_US', 400000);
 define('GROK_BATCHES_PER_REQUEST', 3);
-/** TEMPORARY (dev): pause after each Grok API batch until Continue is pressed. Set false to restore automatic chaining. */
+/** Effective only when an xAI key is set. */
+define('GROK_RESOLVE_ENABLED', true);
+define('GROK_VERIFY_SINGLES', true);
+/** Default when cache/grok.pause is missing. The Scan page toggle overrides this live. */
 define('GROK_DEV_PAUSE_EACH_BATCH', true);
 
 require_once __DIR__ . '/view.php';
@@ -168,7 +199,7 @@ function render_start(string $title): void
 <meta name="apple-mobile-web-app-title" content="Media Informant">
 <title><?= h($title) ?></title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233584e4'/%3E%3Cpath fill='white' d='M7 6h2v3H7V6zm0 5h2v3H7v-3zm0 5h2v3H7v-3zm8-10h2v3h-2V6zm0 5h2v3h-2v-3zm0 5h2v3h-2v-3zM10 6h4v12h-4z'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=27">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=35">
 </head>
 <body>
 <?php
@@ -246,6 +277,10 @@ function render_end(): void
       <div><dt>Unidentified</dt><dd data-scan-overlay-unidentified>0</dd></div>
       <div><dt>Files</dt><dd data-scan-overlay-files>—</dd></div>
       <div><dt>Elapsed</dt><dd data-scan-overlay-elapsed>—</dd></div>
+      <div><dt>Grok matched</dt><dd data-scan-overlay-grok-matched>0</dd></div>
+      <div><dt>Grok attempted</dt><dd data-scan-overlay-grok-attempted>0</dd></div>
+      <div><dt>Grok left</dt><dd data-scan-overlay-grok-left>0</dd></div>
+      <div><dt>Est. Grok cost</dt><dd data-scan-overlay-grok-cost>$0.0000</dd></div>
     </dl>
     <dl class="overlay-stats" data-overlay-stats="grok" hidden>
       <div><dt>Matched</dt><dd data-grok-overlay-matched>0</dd></div>
@@ -256,7 +291,7 @@ function render_end(): void
       <div><dt>Errors</dt><dd data-grok-overlay-errors>0</dd></div>
       <div><dt>Elapsed</dt><dd data-grok-overlay-elapsed>—</dd></div>
     </dl>
-    <div class="grok-wait-actions" data-grok-wait-actions>
+    <div class="grok-wait-actions" data-grok-wait-actions hidden>
       <button type="button" class="btn btn-accent btn-block" data-grok-continue>Continue next batch</button>
     </div>
     <a class="btn btn-accent btn-block" data-scan-overlay-link href="<?= h($scanPage) ?>">Open scan page</a>
@@ -295,7 +330,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=30" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=40" defer></script>
 </body>
 </html>
 <?php

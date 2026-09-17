@@ -93,7 +93,7 @@ $view = $prefs->view;
     .catalog:not([data-categories~="<?= h($catId) ?>"]) [data-category="<?= h($catId) ?>"] { display: none !important; }
     <?php endforeach; ?>
   </style>
-  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="movie show" data-categories="<?= h($prefs->categoriesAttr()) ?>">
+  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>">
     <div class="catalog-toolbar">
       <p class="catalog-meta">
         <?= (int) $groupCount ?> <?= $groupCount === 1 ? 'title' : 'titles' ?>
@@ -107,6 +107,20 @@ $view = $prefs->view;
         <button type="button" class="view-switch-btn<?= $view === $id ? ' is-active' : '' ?>" data-catalog-view="<?= h($id) ?>"<?= $view === $id ? ' aria-current="true"' : '' ?>><?= h($label) ?></button>
         <?php endforeach; ?>
       </nav>
+      <div class="kind-filter" role="group" aria-label="Filter by type">
+        <label class="kind-chip">
+          <input type="checkbox" data-kind-filter="movie"<?= $prefs->showsKind('movie') ? ' checked' : '' ?>>
+          Movies
+        </label>
+        <label class="kind-chip">
+          <input type="checkbox" data-kind-filter="show"<?= $prefs->showsKind('show') ? ' checked' : '' ?>>
+          TV Shows
+        </label>
+        <label class="kind-chip">
+          <input type="checkbox" data-kind-filter="documentary"<?= $prefs->showsKind('documentary') ? ' checked' : '' ?>>
+          Documentaries
+        </label>
+      </div>
       <?php if ($categoryList !== [] || !empty($categoryHasNone)): ?>
       <div class="kind-filter" role="group" aria-label="Filter by category">
         <?php foreach ($categoryList as $category):
@@ -167,7 +181,7 @@ $view = $prefs->view;
                 $epCount = $clusters !== [] ? count($clusters) : count($group->members);
                 ?>
             <?php if ($series): ?>
-            <tr class="catalog-group" data-group="<?= h($group->id) ?>" data-kind="show" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_sort_attrs($head) ?>>
+            <tr class="catalog-group" data-group="<?= h($group->id) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_sort_attrs($head) ?>>
               <td data-col="poster"><?= catalog_thumb_button($head, 'sm', $head->seriesTitle, ((int) $epCount) . ' ' . ($epCount === 1 ? 'episode' : 'episodes')) ?></td>
               <td data-col="title">
                 <button type="button" class="expand-btn" data-expand="<?= h($group->id) ?>" aria-expanded="false">
@@ -186,7 +200,7 @@ $view = $prefs->view;
                 $multi = count($parts) > 1;
                 ?>
             <?php if ($multi): ?>
-            <tr class="catalog-episode" hidden data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($group->id) ?>" data-kind="show" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_sort_attrs($first) ?>>
+            <tr class="catalog-episode" hidden data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($group->id) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_sort_attrs($first) ?>>
               <td data-col="poster"><?= catalog_thumb_button($first, 'sm', $cluster['label'], count($parts) . ' parts') ?></td>
               <td data-col="title">
                 <button type="button" class="expand-btn" data-expand="<?= h($cluster['id']) ?>" aria-expanded="false">
@@ -202,7 +216,7 @@ $view = $prefs->view;
             <?php foreach ($parts as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : ($record->episodeLabel !== '' ? $record->episodeLabel : $record->title);
                 ?>
-            <tr class="catalog-part" hidden data-card data-parent="<?= h($cluster['id']) ?>" data-kind="show" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_sort_attrs($record) ?>>
+            <tr class="catalog-part" hidden data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_sort_attrs($record) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($record, 'sm', $partName) ?>
               </td>
@@ -215,7 +229,7 @@ $view = $prefs->view;
             </tr>
             <?php endforeach; ?>
             <?php else: ?>
-            <tr class="catalog-episode" hidden data-card data-parent="<?= h($group->id) ?>" data-kind="show" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_sort_attrs($first) ?>>
+            <tr class="catalog-episode" hidden data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_sort_attrs($first) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($first, 'sm', $cluster['label']) ?>
               </td>
@@ -229,7 +243,7 @@ $view = $prefs->view;
             <?php endif; ?>
             <?php endforeach; ?>
             <?php else: ?>
-            <tr data-card data-kind="movie" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_sort_attrs($head) ?>>
+            <tr data-card data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_sort_attrs($head) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($head, 'sm', $head->title) ?>
               </td>

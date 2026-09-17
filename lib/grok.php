@@ -10,8 +10,8 @@ declare(strict_types=1);
  * A full ~2500-file unmatched pass is ~100 API calls. At about $0.20/1M
  * input and $0.50/1M output tokens, that stay well under a few dollars.
  *
- * Grok does not replace TMDB. It only runs on unmatched items after TMDB,
- * and only from an explicit resolve action — never on page load.
+ * Grok does not replace TMDB. During Scan it runs in batches of 25 after
+ * TMDB queues that many failures (and leftover titles at the end).
  */
 
 require_once __DIR__ . '/config.php';
@@ -23,13 +23,45 @@ require_once __DIR__ . '/scanner.php';
 function grok_system_prompt(): string
 {
     return "You match video filenames to TMDB records.\n"
-        . "For each item pick one candidate id from that item’s list, or null.\n"
-        . "Never invent an id.\n"
-        . "Prefer title+year agreement when both are present.\n"
-        . "Missing year is not a reason to return null if one candidate title clearly matches the filename.\n"
-        . "Return null when candidates are unrelated (for example Wall E vs East of Wall).\n"
+        . "Never invent an id. Only use an id from that item's candidate list.\n"
+        . "mode=choose: pick the best candidate or null.\n"
+        . "mode=verify: return that single candidate id unless it is clearly a different work.\n"
+        . "Missing year or punctuation is not a reason to reject.\n"
         . "Reply with JSON only:\n"
         . '[{"path":"...","tmdb_id":123 or null,"confidence":0.0-1.0,"reason":"short"}]';
+}
+
+function grok_resolve_available(): bool
+{
+    return GROK_RESOLVE_ENABLED && grok_has_key();
+}
+
+function grok_enabled_path(): string
+{
+    return CACHE_DIR . '/grok.enabled';
+}
+
+function grok_live_enabled(): bool
+{
+    if (!grok_resolve_available()) {
+        return false;
+    }
+    $path = grok_enabled_path();
+    clearstatcache(true, $path);
+    if (!is_file($path)) {
+        return true;
+    }
+    $raw = trim((string) @file_get_contents($path));
+    return $raw === '1';
+}
+
+function grok_live_enabled_write(bool $on): void
+{
+    if (function_exists('cache_init')) {
+        cache_init();
+    }
+    @file_put_contents(grok_enabled_path(), $on ? "1\n" : "0\n", LOCK_EX);
+    clearstatcache(true, grok_enabled_path());
 }
 
 function grok_api_key(): string
@@ -51,9 +83,29 @@ function grok_batch_size(): int
     return min(50, $n);
 }
 
+function grok_pause_path(): string
+{
+    return CACHE_DIR . '/grok.pause';
+}
+
 function grok_dev_pause_each_batch(): bool
 {
-    return defined('GROK_DEV_PAUSE_EACH_BATCH') && GROK_DEV_PAUSE_EACH_BATCH;
+    $path = grok_pause_path();
+    clearstatcache(true, $path);
+    if (!is_file($path)) {
+        return defined('GROK_DEV_PAUSE_EACH_BATCH') && GROK_DEV_PAUSE_EACH_BATCH;
+    }
+    $raw = trim((string) @file_get_contents($path));
+    return $raw === '1';
+}
+
+function grok_pause_each_batch_write(bool $on): void
+{
+    if (function_exists('cache_init')) {
+        cache_init();
+    }
+    @file_put_contents(grok_pause_path(), $on ? "1\n" : "0\n", LOCK_EX);
+    clearstatcache(true, grok_pause_path());
 }
 
 function grok_min_confidence(): float
@@ -139,9 +191,11 @@ function grok_status_read(): array
     } else {
         $data = array_merge(grok_status_defaults(), $data);
     }
-    if (grok_dev_pause_each_batch()
-        && ($data['state'] ?? '') === 'running'
-        && empty($data['cancel_requested'])) {
+    $pause = grok_dev_pause_each_batch();
+    $data['grok_pause'] = $pause;
+    if (!$pause || !empty($data['cancel_requested'])) {
+        $data['paused'] = false;
+    } elseif (($data['state'] ?? '') === 'running') {
         $data['paused'] = true;
     }
     return $data;
@@ -328,7 +382,7 @@ function grok_compact_candidates(array $candidates): array
             'year' => is_numeric($year) ? (int) $year : null,
             'media_type' => (string) ($row['media_type'] ?? 'movie'),
         ];
-        if (count($out) >= 5) {
+        if (count($out) >= (function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6)) {
             break;
         }
     }
@@ -355,8 +409,8 @@ function grok_ensure_candidates(array &$item): array
     $year = isset($item['year']) && $item['year'] !== null && $item['year'] !== ''
         ? (int) $item['year']
         : null;
-    $filename = (string) ($item['filename'] ?? $item['path'] ?? '');
-    $found = tmdb_search_candidates($title, $year, 5, $filename);
+    $filename = (string) ($item['filename'] ?? '');
+    $found = tmdb_search_candidates($title, $year, function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6, $filename, tmdb_search_meta_from_item($item));
     $item['tmdb_candidates'] = $found;
     return $found;
 }
@@ -371,11 +425,19 @@ function grok_file_payload(array $item): array
             : null,
         'candidates' => grok_compact_candidates($item['tmdb_candidates'] ?? []),
     ];
+    $kind = (string) ($item['kind'] ?? '');
+    if ($kind !== '') {
+        $payload['kind'] = $kind;
+    }
     if (isset($item['season']) && $item['season'] !== null && $item['season'] !== '') {
         $payload['season'] = (int) $item['season'];
     }
     if (isset($item['episode']) && $item['episode'] !== null && $item['episode'] !== '') {
         $payload['episode'] = (int) $item['episode'];
+    }
+    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+    if ($episodeTitle !== '') {
+        $payload['episode_title'] = $episodeTitle;
     }
     return $payload;
 }
@@ -424,11 +486,75 @@ function grok_verbose_log(string $message): void
     app_log('grok', $message, [], 'debug');
 }
 
+function grok_parse_usage($decoded): array
+{
+    $empty = [
+        'prompt' => 0,
+        'completion' => 0,
+        'cached' => 0,
+        'total' => 0,
+        'absent' => true,
+    ];
+    if (!is_array($decoded) || !isset($decoded['usage']) || !is_array($decoded['usage'])) {
+        return $empty;
+    }
+    $u = $decoded['usage'];
+    $prompt = (int) ($u['prompt_tokens'] ?? $u['input_tokens'] ?? 0);
+    $completion = (int) ($u['completion_tokens'] ?? $u['output_tokens'] ?? 0);
+    $cached = 0;
+    $details = $u['prompt_tokens_details'] ?? $u['input_tokens_details'] ?? null;
+    if (is_array($details)) {
+        $cached = (int) ($details['cached_tokens'] ?? $details['cache_read_input_tokens'] ?? 0);
+    }
+    if ($cached < 1) {
+        $cached = (int) ($u['cached_tokens'] ?? $u['cache_read_input_tokens'] ?? 0);
+    }
+    $total = (int) ($u['total_tokens'] ?? ($prompt + $completion));
+    if ($prompt < 1 && $completion < 1 && $total < 1) {
+        return $empty;
+    }
+    if ($cached > $prompt && $prompt > 0) {
+        $cached = $prompt;
+    }
+    return [
+        'prompt' => $prompt,
+        'completion' => $completion,
+        'cached' => max(0, $cached),
+        'total' => $total,
+        'absent' => false,
+    ];
+}
+
+function grok_estimate_cost(array $usage, string $model): array
+{
+    $rates = grok_token_rates($model);
+    $prompt = (int) ($usage['prompt'] ?? 0);
+    $completion = (int) ($usage['completion'] ?? 0);
+    $cached = (int) ($usage['cached'] ?? 0);
+    if (!empty($usage['absent'])) {
+        return ['usd' => 0.0, 'fallback' => !empty($rates['fallback']), 'rates' => $rates];
+    }
+    $uncached = max(0, $prompt - $cached);
+    $usd = ($uncached * (float) $rates['input']
+        + $cached * (float) $rates['cached']
+        + $completion * (float) $rates['output']) / 1000000.0;
+    return ['usd' => $usd, 'fallback' => !empty($rates['fallback']), 'rates' => $rates];
+}
+
+function grok_format_usd(float $usd): string
+{
+    if ($usd <= 0) {
+        return '$0.0000';
+    }
+    $places = $usd < 0.0001 ? 6 : 4;
+    return '$' . number_format($usd, $places, '.', '');
+}
+
 function grok_chat(array $messages, string $model): array
 {
     $key = grok_api_key();
     if ($key === '' || !function_exists('curl_init')) {
-        return ['ok' => false, 'status' => 0, 'content' => '', 'error' => 'Grok is not configured.'];
+        return ['ok' => false, 'status' => 0, 'content' => '', 'error' => 'Grok is not configured.', 'usage' => grok_parse_usage(null)];
     }
     grok_verbose_log('Grok model ' . $model . ' system: ' . (string) ($messages[0]['content'] ?? ''));
     grok_verbose_log('Grok prompt: ' . (string) ($messages[1]['content'] ?? ''));
@@ -465,24 +591,25 @@ function grok_chat(array $messages, string $model): array
     curl_close($ch);
 
     if ($raw === false) {
-        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub($curlErr !== '' ? $curlErr : 'HTTP request failed.')];
+        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub($curlErr !== '' ? $curlErr : 'HTTP request failed.'), 'usage' => grok_parse_usage(null)];
     }
 
     $decoded = json_decode((string) $raw, true);
     $content = '';
+    $usage = grok_parse_usage(is_array($decoded) ? $decoded : null);
     if (is_array($decoded)) {
-        $content = (string) ($decoded['choices'][0]['message']['content'] ?? '');
+        $content = (string) ($decoded['choices'][0]['message']['content'] ?? $decoded['output_text'] ?? '');
         $apiErr = $decoded['error']['message'] ?? $decoded['error'] ?? null;
         if ($status !== 200) {
             $msg = is_string($apiErr) ? $apiErr : ('HTTP ' . $status);
-            return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub($msg), 'model' => $model];
+            return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub($msg), 'model' => $model, 'usage' => $usage];
         }
     } elseif ($status !== 200) {
-        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub('HTTP ' . $status), 'model' => $model];
+        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_scrub('HTTP ' . $status), 'model' => $model, 'usage' => $usage];
     }
 
     grok_verbose_log('Grok response (HTTP ' . $status . '): ' . ($content !== '' ? $content : '(empty)'));
-    return ['ok' => true, 'status' => $status, 'content' => $content, 'error' => '', 'model' => $model];
+    return ['ok' => true, 'status' => $status, 'content' => $content, 'error' => '', 'model' => $model, 'usage' => $usage];
 }
 
 function grok_chat_with_fallback(array $messages): array
@@ -526,7 +653,17 @@ function grok_apply_choice(array $item, int $tmdbId): array
 {
     $meta = cache_read_title($tmdbId);
     if ($meta === null) {
-        $meta = tmdb_fetch_details($tmdbId);
+        $mediaType = (string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie';
+        foreach (grok_compact_candidates($item['tmdb_candidates'] ?? []) as $cand) {
+            if ((int) ($cand['id'] ?? 0) === $tmdbId) {
+                $hint = (string) ($cand['media_type'] ?? '');
+                if ($hint === 'tv' || $hint === 'movie') {
+                    $mediaType = $hint;
+                }
+                break;
+            }
+        }
+        $meta = tmdb_fetch_details($tmdbId, $mediaType);
         if ($meta !== null) {
             cache_write_title($tmdbId, $meta);
         }
@@ -833,4 +970,178 @@ function grok_tick(bool $allowStart = false): array
         return grok_status_read();
     }
     return grok_job_begin();
+}
+
+/**
+ * One Grok batch for the unified scan job. Mutates $job in place.
+ */
+function grok_accrue_scan_usage(array &$job, array $chat): void
+{
+    $model = (string) ($chat['model'] ?? (defined('XAI_MODEL') ? XAI_MODEL : ''));
+    $usage = is_array($chat['usage'] ?? null) ? $chat['usage'] : grok_parse_usage(null);
+    if (!empty($usage['absent']) && function_exists('app_log')) {
+        app_log('grok', 'usage=absent');
+    }
+    $est = grok_estimate_cost($usage, $model);
+    if (!empty($est['fallback']) && empty($job['grok_rate_fallback_logged']) && function_exists('app_log')) {
+        $job['grok_rate_fallback_logged'] = 1;
+        app_log('grok', 'Grok cost rates: unknown model, using 4.20 fallback.');
+    }
+    $batchUsd = (float) ($est['usd'] ?? 0);
+    $prompt = (int) ($usage['prompt'] ?? 0);
+    $completion = (int) ($usage['completion'] ?? 0);
+    $cached = (int) ($usage['cached'] ?? 0);
+    $job['grok_batches'] = (int) ($job['grok_batches'] ?? 0) + 1;
+    $job['grok_prompt_tokens'] = (int) ($job['grok_prompt_tokens'] ?? 0) + $prompt;
+    $job['grok_completion_tokens'] = (int) ($job['grok_completion_tokens'] ?? 0) + $completion;
+    $job['grok_cached_tokens'] = (int) ($job['grok_cached_tokens'] ?? 0) + $cached;
+    $job['grok_cost_usd'] = (float) ($job['grok_cost_usd'] ?? 0) + $batchUsd;
+
+    $queue = is_array($job['grok_queue'] ?? null) ? $job['grok_queue'] : [];
+    $batchSize = grok_batch_size();
+    $totalEst = $batchSize > 0 ? (int) ceil(count($queue) / $batchSize) : (int) ($job['grok_batches'] ?? 1);
+    if ($totalEst < (int) $job['grok_batches']) {
+        $totalEst = (int) $job['grok_batches'];
+    }
+    $totalLabel = $totalEst > 0 ? (string) $totalEst : '…';
+    if (function_exists('app_log')) {
+        app_log('grok', 'Grok batch ' . (int) $job['grok_batches'] . '/' . $totalLabel
+            . ' prompt=' . $prompt
+            . ' completion=' . $completion
+            . ' cached=' . $cached
+            . ' batch=' . grok_format_usd($batchUsd)
+            . ' scan_est=' . grok_format_usd((float) $job['grok_cost_usd']));
+    }
+}
+
+function grok_run_scan_batch(array &$job): void
+{
+    $queue = is_array($job['grok_queue'] ?? null) ? $job['grok_queue'] : [];
+    $gIndex = (int) ($job['grok_index'] ?? 0);
+    $batchSize = grok_batch_size();
+    $minConf = grok_min_confidence();
+    $slice = array_slice($queue, $gIndex, $batchSize);
+    if ($slice === []) {
+        return;
+    }
+
+    $byId = [];
+    foreach ($job['items'] as $i => $item) {
+        if (is_array($item) && isset($item['id'])) {
+            $byId[(string) $item['id']] = $i;
+        }
+    }
+
+    $payload = [];
+    $batchMeta = [];
+    foreach ($slice as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = (string) ($row['id'] ?? '');
+        $mode = ((string) ($row['mode'] ?? 'choose')) === 'verify' ? 'verify' : 'choose';
+        if ($id === '' || !isset($byId[$id])) {
+            $job['grok_skipped'] = (int) ($job['grok_skipped'] ?? 0) + 1;
+            continue;
+        }
+        $pos = $byId[$id];
+        $item = $job['items'][$pos];
+        if (!empty($item['grok_verified'])) {
+            continue;
+        }
+        $cands = grok_ensure_candidates($item);
+        $job['items'][$pos] = $item;
+        if ($cands === []) {
+            $job['grok_skipped'] = (int) ($job['grok_skipped'] ?? 0) + 1;
+            continue;
+        }
+        $entry = grok_file_payload($item);
+        $entry['mode'] = $mode;
+        $payload[] = $entry;
+        $batchMeta[] = ['pos' => $pos, 'mode' => $mode, 'ids' => grok_candidate_ids($cands), 'path' => $entry['path']];
+        $job['grok_attempted'] = (int) ($job['grok_attempted'] ?? 0) + 1;
+    }
+
+    $job['grok_index'] = $gIndex + count($slice);
+
+    if ($payload === []) {
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok batch skipped: no files with TMDB candidates.');
+        }
+        return;
+    }
+
+    $messages = [
+        ['role' => 'system', 'content' => grok_system_prompt()],
+        ['role' => 'user', 'content' => (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+    ];
+    $chat = grok_chat_with_fallback($messages);
+    if (!$chat['ok']) {
+        $job['grok_errors'] = (int) ($job['grok_errors'] ?? 0) + 1;
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok request failed: ' . grok_scrub((string) ($chat['error'] ?? 'error')), [
+                'http_status' => $chat['status'] ?? null,
+            ], 'error');
+        }
+        return;
+    }
+    grok_accrue_scan_usage($job, $chat);
+
+    $decoded = grok_extract_json((string) ($chat['content'] ?? ''));
+    $byPath = [];
+    if (is_array($decoded)) {
+        foreach ($decoded as $row) {
+            if (is_array($row) && ($row['path'] ?? '') !== '') {
+                $byPath[(string) $row['path']] = $row;
+            }
+        }
+    }
+
+    foreach ($batchMeta as $meta) {
+        $pos = $meta['pos'];
+        $item = $job['items'][$pos];
+        $path = $meta['path'];
+        $mode = $meta['mode'];
+        $allowed = $meta['ids'];
+        $row = $byPath[$path] ?? null;
+        $rawId = is_array($row) ? ($row['tmdb_id'] ?? null) : null;
+        $tmdbId = $rawId === null || $rawId === '' || $rawId === false ? null : (int) $rawId;
+        $confidence = is_array($row) ? (float) ($row['confidence'] ?? 0) : 0.0;
+        $reason = is_array($row) ? trim((string) ($row['reason'] ?? '')) : '';
+
+        if ($tmdbId !== null && $tmdbId > 0 && !isset($allowed[$tmdbId])) {
+            grok_log_line($path, null, $confidence, 'invented id rejected');
+            $job['grok_invalid'] = (int) ($job['grok_invalid'] ?? 0) + 1;
+            continue;
+        }
+
+        if ($mode === 'verify') {
+            if ($tmdbId === null || $tmdbId < 1) {
+                $job['items'][$pos] = library_clear_match($item);
+                $job['items'][$pos]['status'] = 'unmatched';
+                $job['items'][$pos]['grok_verified'] = 1;
+                $job['grok_cleared'] = (int) ($job['grok_cleared'] ?? 0) + 1;
+                grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'verify rejected');
+                continue;
+            }
+            $job['items'][$pos]['grok_verified'] = 1;
+            $job['grok_verified'] = (int) ($job['grok_verified'] ?? 0) + 1;
+            grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'verify kept');
+            continue;
+        }
+
+        if ($tmdbId === null || $tmdbId < 1 || $confidence < $minConf) {
+            grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'choose skipped');
+            continue;
+        }
+        try {
+            $job['items'][$pos] = grok_apply_choice($item, $tmdbId);
+            $job['items'][$pos]['grok_verified'] = 1;
+            $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+            grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'choose matched');
+        } catch (Throwable $e) {
+            $job['grok_errors'] = (int) ($job['grok_errors'] ?? 0) + 1;
+            grok_log_line($path, $tmdbId, $confidence, grok_scrub($e->getMessage()));
+        }
+    }
 }

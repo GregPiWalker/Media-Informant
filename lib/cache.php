@@ -34,6 +34,9 @@ function cache_write_atomic(string $path, array $data, bool $pretty = false): bo
     }
 
     $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+    if (defined('JSON_INVALID_UTF8_SUBSTITUTE')) {
+        $flags |= JSON_INVALID_UTF8_SUBSTITUTE;
+    }
     if ($pretty) {
         $flags |= JSON_PRETTY_PRINT;
     }
@@ -106,6 +109,86 @@ function cache_write_title(int $tmdbId, array $title): bool
     return cache_write_atomic(cache_title_path($tmdbId), $title);
 }
 
+function cache_delete_title(int $tmdbId): void
+{
+    if ($tmdbId < 1) {
+        return;
+    }
+    $path = cache_title_path($tmdbId);
+    clearstatcache(true, $path);
+    if (is_file($path)) {
+        @unlink($path);
+    }
+}
+
+/**
+ * Remove cached TMDB title JSON that no remaining library item uses.
+ *
+ * @param list<array<string, mixed>> $items
+ */
+function cache_prune_excluded_items(?array $excludes = null): int
+{
+    $excludes ??= function_exists('settings_video_excludes') ? settings_video_excludes() : [];
+    $library = cache_read_library();
+    $items = is_array($library['items'] ?? null) ? $library['items'] : [];
+    $kept = [];
+    $dropped = 0;
+    foreach ($items as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        if (function_exists('settings_item_excluded') && settings_item_excluded($item, $excludes, $library)) {
+            $dropped++;
+            continue;
+        }
+        $kept[] = $item;
+    }
+    if ($dropped < 1) {
+        return 0;
+    }
+    $library['items'] = $kept;
+    cache_write_library($library);
+    cache_prune_orphan_titles($kept);
+    return $dropped;
+}
+
+function cache_prune_orphan_titles(array $items): int
+{
+    $used = [];
+    foreach ($items as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $id = (int) ($item['tmdb_id'] ?? 0);
+        if ($id > 0) {
+            $used[$id] = true;
+        }
+    }
+    $dir = CACHE_DIR . '/titles';
+    if (!is_dir($dir)) {
+        return 0;
+    }
+    $removed = 0;
+    $names = @scandir($dir);
+    if (!is_array($names)) {
+        return 0;
+    }
+    foreach ($names as $name) {
+        if (!preg_match('/^(\d+)\.json$/', $name, $m)) {
+            continue;
+        }
+        $id = (int) $m[1];
+        if ($id < 1 || isset($used[$id])) {
+            continue;
+        }
+        $path = $dir . '/' . $name;
+        if (@unlink($path)) {
+            $removed++;
+        }
+    }
+    return $removed;
+}
+
 function cache_find_item(array $library, string $id): ?array
 {
     foreach ($library['items'] as $item) {
@@ -128,6 +211,165 @@ function library_item_status(array $item): string
         return $status;
     }
     return 'unidentified';
+}
+
+function library_item_hidden(array $item): bool
+{
+    $value = $item['hidden'] ?? false;
+    if (is_bool($value)) {
+        return $value;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (int) $value === 1;
+    }
+    $s = strtolower(trim((string) $value));
+    return $s === '1' || $s === 'true' || $s === 'yes' || $s === 'on';
+}
+
+function library_set_hidden(array $item, bool $hidden): array
+{
+    if ($hidden) {
+        $item['hidden'] = true;
+    } else {
+        unset($item['hidden']);
+    }
+    return $item;
+}
+
+function library_flag_bool(mixed $value): bool
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (int) $value === 1;
+    }
+    $s = strtolower(trim((string) $value));
+    return $s === '1' || $s === 'true' || $s === 'yes' || $s === 'on';
+}
+
+function library_item_kind(array $item): string
+{
+    $kind = (string) ($item['kind'] ?? '');
+    if ($kind === 'show' || $kind === 'movie' || $kind === 'documentary') {
+        return $kind;
+    }
+    if (($item['season'] ?? null) !== null && $item['season'] !== '') {
+        return 'show';
+    }
+    if (($item['episode'] ?? null) !== null && $item['episode'] !== '') {
+        return 'show';
+    }
+    return 'movie';
+}
+
+function library_has_user_kind(array $item): bool
+{
+    return ($item['kind_source'] ?? '') === 'user';
+}
+
+function library_has_user_grouped(array $item): bool
+{
+    return ($item['grouped_source'] ?? '') === 'user';
+}
+
+function library_item_grouped(array $item): bool
+{
+    if (library_item_kind($item) === 'show') {
+        return true;
+    }
+    if (array_key_exists('grouped', $item)) {
+        return library_flag_bool($item['grouped']);
+    }
+    return false;
+}
+
+function library_kind_from_genres(array $genres, string $current): string
+{
+    if ($current === 'show') {
+        return 'show';
+    }
+    foreach ($genres as $genre) {
+        if (strcasecmp(trim((string) $genre), 'Documentary') === 0) {
+            return 'documentary';
+        }
+    }
+    return $current === 'documentary' ? 'documentary' : ($current === 'movie' ? 'movie' : $current);
+}
+
+function library_set_item_kind(array $item, string $kind): array
+{
+    if ($kind !== 'show' && $kind !== 'documentary') {
+        $kind = 'movie';
+    }
+    $item['kind'] = $kind;
+    $item['kind_source'] = 'user';
+    if ($kind === 'show') {
+        $item['grouped'] = true;
+    }
+    return $item;
+}
+
+function library_set_item_grouped(array $item, bool $grouped): array
+{
+    if (library_item_kind($item) === 'show') {
+        $item['grouped'] = true;
+        $item['grouped_source'] = 'user';
+        return $item;
+    }
+    $item['grouped'] = $grouped;
+    $item['grouped_source'] = 'user';
+    $root = (string) ($item['root'] ?? '');
+    $path = (string) ($item['path'] ?? '');
+    if (!$grouped) {
+        $label = trim((string) ($item['episode_title'] ?? ''));
+        if ($label === '') {
+            $fn = (string) ($item['filename'] ?? '');
+            $label = $fn !== '' ? pathinfo($fn, PATHINFO_FILENAME) : '';
+        }
+        if ($label === '') {
+            $label = (string) ($item['display_title'] ?? $item['title'] ?? 'Untitled');
+        }
+        $item['title'] = $label;
+        if (!library_has_custom_title($item)) {
+            $item = library_set_auto_title($item, $label);
+        }
+        return $item;
+    }
+
+    $series = '';
+    if ($root !== '' && $path !== '' && function_exists('folder_home_for_file')) {
+        $home = folder_home_for_file($path);
+        if ($home !== '') {
+            $series = function_exists('parse_name') ? (string) (parse_name(basename($home))['title'] ?? '') : '';
+            if ($series === '') {
+                $series = basename($home);
+            }
+        }
+    }
+    if ($series === '') {
+        $series = (string) ($item['title'] ?? $item['display_title'] ?? 'Untitled');
+    }
+    $item['title'] = $series;
+    if (function_exists('scan_parse_path') && $root !== '' && $path !== '') {
+        $parsed = scan_parse_path($root, $path);
+        if (($item['season'] ?? null) === null || $item['season'] === '') {
+            $item['season'] = $parsed['season'] ?? 1;
+        }
+        if (($item['episode'] ?? null) === null || $item['episode'] === '') {
+            $item['episode'] = $parsed['episode'] ?? null;
+        }
+        if (trim((string) ($item['episode_title'] ?? '')) === '' && !empty($parsed['episode_title'])) {
+            $item['episode_title'] = (string) $parsed['episode_title'];
+        }
+    }
+    if (($item['season'] ?? null) === null || $item['season'] === '') {
+        $item['season'] = 1;
+    }
+    if (!library_has_custom_title($item)) {
+        $item = library_set_auto_title($item, $series);
+    }
+    return $item;
 }
 
 function library_status_label(string $status): string
@@ -265,6 +507,12 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
         $item['year'] = (int) $meta['year'];
     }
     $item['genres'] = cache_string_list($meta['genres'] ?? []);
+    if (!library_has_user_kind($item)) {
+        $item['kind'] = library_kind_from_genres($item['genres'], library_item_kind($item));
+    }
+    if (library_item_kind($item) === 'show') {
+        $item['grouped'] = true;
+    }
     return $item;
 }
 

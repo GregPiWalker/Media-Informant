@@ -74,7 +74,7 @@ if ($mode === 'popular') {
   <form class="match-search" method="get" action="<?= h(app_href('video/match.php')) ?>">
     <input type="hidden" name="id" value="<?= h($id) ?>">
     <label class="visually-hidden" for="match-q">Search TMDB</label>
-    <input id="match-q" type="search" name="q" class="folder-input" value="<?= h($q) ?>" placeholder="Search movie titles" enterkeyhint="search" spellcheck="false" autocapitalize="off">
+    <input id="match-q" type="search" name="q" class="folder-input" value="<?= h($q) ?>" placeholder="<?= (string) ($item['kind'] ?? '') === 'show' ? 'Search TV titles' : 'Search movie titles' ?>" enterkeyhint="search" spellcheck="false" autocapitalize="off">
     <label class="visually-hidden" for="match-year">Year</label>
     <input id="match-year" type="number" name="year" class="folder-input match-year" value="<?= h($yearRaw) ?>" placeholder="Year" inputmode="numeric" min="1870" max="2100">
     <button type="submit" class="btn btn-accent">Search</button>
@@ -110,6 +110,7 @@ if ($mode === 'popular') {
       <form method="post" action="<?= h(app_href('video/match.php?id=' . rawurlencode($id))) ?>">
         <input type="hidden" name="id" value="<?= h($id) ?>">
         <input type="hidden" name="tmdb_id" value="<?= (int) $tid ?>">
+        <input type="hidden" name="media_type" value="<?= h((string) ($row['media_type'] ?? (((string) ($item['kind'] ?? '') === 'show') ? 'tv' : 'movie'))) ?>">
         <button type="submit" name="action" value="choose" class="match-choice<?= $isCurrent ? ' is-current' : '' ?>">
           <span class="match-choice-poster" aria-hidden="true">
             <?php if ($poster): ?>

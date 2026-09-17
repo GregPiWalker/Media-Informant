@@ -68,6 +68,7 @@ final class ParseContext
     public array $afterSeason = [];
     public ?PathSegment $seasonFolder = null;
     public array $fileTokens;
+    public string $folderKind = '';
 
     public static function fromPath(string $relativePath, string $domain = 'video'): self
     {
@@ -120,11 +121,11 @@ final class ParseContext
             return;
         }
         $top = $this->facets[0];
-        if ($top->role !== 'movie' && $top->role !== 'show' && $top->role !== 'music') {
+        if ($top->role !== 'movie' && $top->role !== 'show' && $top->role !== 'documentary' && $top->role !== 'music') {
             $top->role = 'format';
         }
         for ($i = 1, $n = count($this->facets); $i < $n; $i++) {
-            if ($this->facets[$i]->role === 'movie' || $this->facets[$i]->role === 'show' || $this->facets[$i]->role === 'music') {
+            if ($this->facets[$i]->role === 'movie' || $this->facets[$i]->role === 'show' || $this->facets[$i]->role === 'documentary' || $this->facets[$i]->role === 'music') {
                 continue;
             }
             $this->facets[$i]->role = 'genre';
@@ -140,7 +141,7 @@ final class ParseContext
             return null;
         }
         $top = $this->facets[0];
-        if ($top->role === 'movie' || $top->role === 'show' || $top->role === 'music' || $top->role === 'format') {
+        if ($top->role === 'movie' || $top->role === 'show' || $top->role === 'documentary' || $top->role === 'music' || $top->role === 'format') {
             return $top->role;
         }
         return null;
@@ -256,7 +257,7 @@ final class SeasonFolderStrategy implements MediaParseStrategy
 {
     public function matches(ParseContext $ctx): bool
     {
-        return $ctx->seasonFolder !== null && $ctx->showFolder() !== null;
+        return $ctx->folderKind !== 'movie' && $ctx->seasonFolder !== null && $ctx->showFolder() !== null;
     }
 
     public function parse(ParseContext $ctx): ?ParseResult
@@ -269,6 +270,9 @@ final class FacetShowStrategy implements MediaParseStrategy
 {
     public function matches(ParseContext $ctx): bool
     {
+        if ($ctx->folderKind === 'movie') {
+            return false;
+        }
         $role = $ctx->formatRole();
         return $ctx->nearestTitleFolder() !== null && ($role === 'show' || $role === 'format');
     }
@@ -283,6 +287,9 @@ final class FileEpisodeStrategy implements MediaParseStrategy
 {
     public function matches(ParseContext $ctx): bool
     {
+        if ($ctx->folderKind === 'movie') {
+            return false;
+        }
         $file = $ctx->fileTokens;
         return $file['season'] !== null || $file['episode'] !== null;
     }
@@ -312,12 +319,62 @@ final class FileEpisodeStrategy implements MediaParseStrategy
     }
 }
 
+function parse_leading_episode(string $name): ?array
+{
+    $clean = str_replace(['.', '_', '-'], ' ', $name);
+    $clean = preg_replace('/\s+/', ' ', $clean) ?? $clean;
+    $clean = trim($clean);
+    if ($clean === '') {
+        return null;
+    }
+    if (!preg_match('/^(\d{1,3})(?:\s+|[.\)\]]+)?(.*)$/', $clean, $m)) {
+        return null;
+    }
+    $n = (int) $m[1];
+    if ($n < 1 || $n > 200) {
+        return null;
+    }
+    $rest = trim((string) ($m[2] ?? ''), " \t.)]");
+    return ['episode' => $n, 'title' => $rest];
+}
+
+final class FolderKindShowStrategy implements MediaParseStrategy
+{
+    public function matches(ParseContext $ctx): bool
+    {
+        return $ctx->folderKind === 'show' && $ctx->showFolder() !== null;
+    }
+
+    public function parse(ParseContext $ctx): ?ParseResult
+    {
+        $result = parse_show_result($ctx);
+        if ($result === null) {
+            return null;
+        }
+        if ($result->episode === null) {
+            $hint = parse_leading_episode(strip_extension($ctx->filename));
+            if ($hint !== null) {
+                $result->episode = $hint['episode'];
+                $rest = $hint['title'];
+                if ($rest !== '' && $result->episodeTitle === '' && lower($rest) !== lower($result->title)) {
+                    $stripped = trim((string) preg_replace('/^' . preg_quote($result->title, '/') . '\s*/iu', '', $rest));
+                    $result->episodeTitle = $stripped !== '' ? $stripped : $rest;
+                }
+            }
+        }
+        if ($result->season === null) {
+            $result->season = 1;
+        }
+        return $result;
+    }
+}
+
 final class FacetMovieStrategy implements MediaParseStrategy
 {
     public function matches(ParseContext $ctx): bool
     {
         $role = $ctx->formatRole();
-        if ($role === 'movie') {
+        if ($role === 'movie' || $role === 'documentary') {
             return true;
         }
         return $role === 'format' && $ctx->nearestTitleFolder() === null;
@@ -332,12 +389,13 @@ final class FacetMovieStrategy implements MediaParseStrategy
         if ($title === '') {
             return null;
         }
+        $kind = $ctx->formatRole() === 'documentary' ? 'documentary' : 'movie';
         return new ParseResult(
             $title,
             $folderTokens['year'] ?? $file['year'],
             null,
             null,
-            'movie',
+            $kind,
             $ctx->facetMap(),
             '',
         );
@@ -371,12 +429,13 @@ final class MovieFolderStrategy implements MediaParseStrategy
         if ($title === '') {
             return null;
         }
+        $kind = $ctx->formatRole() === 'documentary' ? 'documentary' : 'movie';
         return new ParseResult(
             $title,
             $tokens['year'] ?? $file['year'],
             null,
             null,
-            'movie',
+            $kind,
             $ctx->facetMap(),
             '',
         );
@@ -456,6 +515,8 @@ final class FilenameFallbackStrategy implements MediaParseStrategy
         $kind = 'movie';
         if ($ctx->formatRole() === 'show' || $file['season'] !== null || $file['episode'] !== null) {
             $kind = 'show';
+        } elseif ($ctx->formatRole() === 'documentary') {
+            $kind = 'documentary';
         } elseif ($ctx->formatRole() === 'music' || $ctx->domain === 'music') {
             $kind = 'track';
         }
@@ -482,6 +543,7 @@ function &parse_strategy_registry(): array
                 new SeasonFolderStrategy(),
                 new FacetShowStrategy(),
                 new FileEpisodeStrategy(),
+                new FolderKindShowStrategy(),
                 new FacetMovieStrategy(),
                 new MovieFolderStrategy(),
                 new StandaloneFileStrategy(),
@@ -514,9 +576,10 @@ function parse_register_strategy(string $domain, MediaParseStrategy $strategy, b
     }
 }
 
-function parse_media(string $relativePath, string $domain = 'video'): array
+function parse_media(string $relativePath, string $domain = 'video', string $folderKind = ''): array
 {
     $ctx = ParseContext::fromPath($relativePath, $domain);
+    $ctx->folderKind = $folderKind === 'show' || $folderKind === 'movie' ? $folderKind : '';
     $registry = parse_strategy_registry();
     $strategies = $registry[$domain] ?? $registry['video'];
     foreach ($strategies as $strategy) {
@@ -560,9 +623,9 @@ function parse_facet_role(string $collapsed): string
         'movie' => 'movie',
         'films' => 'movie',
         'film' => 'movie',
-        'documentaries' => 'movie',
-        'documentary' => 'movie',
-        'docs' => 'movie',
+        'documentaries' => 'documentary',
+        'documentary' => 'documentary',
+        'docs' => 'documentary',
         'television' => 'show',
         'tv' => 'show',
         'tvshows' => 'show',
