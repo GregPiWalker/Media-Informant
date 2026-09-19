@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/catalog_store.php';
+require_once __DIR__ . '/sources.php';
 
 function cache_init(): void
 {

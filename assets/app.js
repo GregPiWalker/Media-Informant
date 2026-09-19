@@ -1481,6 +1481,12 @@
       overlayClose(dismiss.closest('[data-overlay]'));
       return;
     }
+    var about = event.target.closest('[data-about-open]');
+    if (about) {
+      event.preventDefault();
+      overlayOpen('about');
+      return;
+    }
     var live = event.target.closest('[data-scan-live]');
     if (live) {
       event.preventDefault();

@@ -142,7 +142,7 @@ function folder_detect_kind(array $filenames): string
     return '';
 }
 
-function folder_learn_from_files(array $files): void
+function folder_learn_from_files(array $files, array $walkedRoots = []): void
 {
     $byHome = [];
     foreach ($files as $file) {
@@ -202,8 +202,18 @@ function folder_learn_from_files(array $files): void
             'updated_at' => time(),
         ];
     }
+    $walkedSet = [];
+    foreach ($walkedRoots as $root) {
+        $walkedSet[function_exists('settings_normalize_path') ? settings_normalize_path((string) $root) : (string) $root] = true;
+    }
     foreach ($all['folders'] as $id => $row) {
         if (!is_array($row) || ($row['kind_source'] ?? '') === 'user') {
+            continue;
+        }
+        $rowRoot = function_exists('settings_normalize_path')
+            ? settings_normalize_path((string) ($row['root'] ?? ''))
+            : (string) ($row['root'] ?? '');
+        if ($walkedSet !== [] && $rowRoot !== '' && !isset($walkedSet[$rowRoot])) {
             continue;
         }
         $key = (string) ($row['root'] ?? '') . "\n" . (string) ($row['path'] ?? '');

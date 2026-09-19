@@ -256,6 +256,7 @@ final class CatalogRecord
         public string $category = '',
         public string $matchSource = 'none',
         public bool $grouped = false,
+        public bool $sourceAbsent = false,
     ) {
     }
 
@@ -353,6 +354,7 @@ final class CatalogRecord
             $category,
             $matchSource,
             $grouped,
+            function_exists('source_is_absent_for_item') && source_is_absent_for_item($item),
         );
     }
 

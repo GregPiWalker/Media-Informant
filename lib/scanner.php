@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/settings.php';
 require_once __DIR__ . '/parser.php';
 require_once __DIR__ . '/folders.php';
+require_once __DIR__ . '/sources.php';
 
 final class SkipJunkFilter extends RecursiveFilterIterator
 {
@@ -751,17 +752,25 @@ function scan_job_begin(string $mode = 'retry'): array
     ]);
 
     $files = [];
-    $unreadable = [];
+    $absentRoots = [];
     $walkedRoots = [];
+    if (function_exists('source_presence_refresh')) {
+        source_presence_refresh('video', $roots);
+    }
     foreach ($roots as $root) {
         if (scan_cancelled()) {
             break;
         }
-        if (!is_dir($root) || !is_readable($root)) {
-            $unreadable[] = $root;
+        $norm = settings_normalize_path($root);
+        $present = function_exists('source_is_present') ? source_is_present($root) : (is_dir($root) && is_readable($root));
+        if (!$present) {
+            $absentRoots[] = $norm;
+            if (function_exists('app_log')) {
+                app_log('scan', 'Skipping absent source: ' . $norm);
+            }
             continue;
         }
-        $walkedRoots[] = settings_normalize_path($root);
+        $walkedRoots[] = $norm;
         $base = count($files);
         $batch = scan_files($root, null, static function (int $n) use ($base, $started): void {
             $count = $base + $n;
@@ -802,11 +811,22 @@ function scan_job_begin(string $mode = 'retry'): array
         return scan_status_read();
     }
 
-    if ($files === [] && $unreadable !== []) {
-        throw new RuntimeException('Cannot read any video folder (' . implode(', ', $unreadable) . '). Check the paths in Config and that the http user has read access.');
+    if ($walkedRoots === [] && $absentRoots !== []) {
+        $msg = 'All video sources are absent. Catalog unchanged.';
+        scan_status_write([
+            'state' => 'done',
+            'phase' => 'done',
+            'cancel_requested' => false,
+            'started_at' => $started,
+            'message' => $msg,
+        ]);
+        if (function_exists('app_log')) {
+            app_log('scan', $msg, ['absent' => $absentRoots]);
+        }
+        return scan_status_read();
     }
 
-    folder_learn_from_files($files);
+    folder_learn_from_files($files, $walkedRoots);
 
     $old = cache_read_library();
     [$oldByPath] = scan_index_library($old);

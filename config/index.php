@@ -50,6 +50,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     } elseif (!settings_save($payload)) {
         $error = 'Could not write settings.json. Check cache/ permissions.';
     } else {
+        if (function_exists('catalog_store_drop_root')) {
+            $oldVideo = settings_source_paths(is_array($current['video_roots'] ?? null) ? $current['video_roots'] : []);
+            $oldMusic = settings_source_paths(is_array($current['music_roots'] ?? null) ? $current['music_roots'] : []);
+            $newVideo = settings_video_roots();
+            $newMusic = settings_music_roots();
+            $newVideoSet = array_fill_keys($newVideo, true);
+            $newMusicSet = array_fill_keys($newMusic, true);
+            foreach ($oldVideo as $root) {
+                if ($root !== '' && !isset($newVideoSet[$root])) {
+                    catalog_store_drop_root('video', $root);
+                }
+            }
+            foreach ($oldMusic as $root) {
+                if ($root !== '' && !isset($newMusicSet[$root])) {
+                    catalog_store_drop_root('music', $root);
+                }
+            }
+        }
         if (function_exists('app_log')) {
             app_log('config', 'Settings saved.', [
                 'video_roots' => is_array($payload['video_roots']) ? count($payload['video_roots']) : 0,
@@ -66,6 +84,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 }
 
 $settings = settings_get(true);
+if (function_exists('source_presence_refresh')) {
+    source_presence_refresh('video', settings_source_paths(is_array($settings['video_roots'] ?? null) ? $settings['video_roots'] : []));
+    source_presence_refresh('music', settings_source_paths(is_array($settings['music_roots'] ?? null) ? $settings['music_roots'] : []));
+}
 $videoCategories = $settings['video_categories'] ?? settings_default_categories();
 $musicCategories = $settings['music_categories'] ?? [];
 $videoSources = $settings['video_roots'];

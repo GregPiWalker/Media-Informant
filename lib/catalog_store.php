@@ -516,6 +516,31 @@ function catalog_store_update_one(string $catalog, array $item): bool
     }
 }
 
+function catalog_store_drop_root(string $catalog, string $root): int
+{
+    $pdo = db_open($catalog);
+    if ($pdo === null) {
+        return 0;
+    }
+    $root = function_exists('settings_normalize_path') ? settings_normalize_path($root) : $root;
+    if ($root === '') {
+        return 0;
+    }
+    try {
+        $stmt = $pdo->prepare('DELETE FROM files WHERE path = ? OR path LIKE ?');
+        $stmt->execute([$root . "\n", $root . "\n%"]);
+        $n = $stmt->rowCount();
+        $pdo->exec('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM files WHERE item_id IS NOT NULL)
+            AND (parent_id IS NULL OR parent_id NOT IN (SELECT id FROM items))');
+        $pdo->exec('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM files WHERE item_id IS NOT NULL)
+            AND id NOT IN (SELECT parent_id FROM items WHERE parent_id IS NOT NULL)');
+        return $n;
+    } catch (Throwable $e) {
+        db_last_error('Could not drop source records: ' . $e->getMessage());
+        return 0;
+    }
+}
+
 function catalog_store_record_scan(string $catalog, array $job, bool $cancelled): void
 {
     $pdo = db_open($catalog);

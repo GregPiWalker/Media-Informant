@@ -86,15 +86,29 @@ function db_migrate(PDO $pdo, string $catalog): void
     if ($current < 1) {
         $pdo->exec(db_schema_sql());
         db_seed_catalog($pdo, $catalog);
-        if ($current === 0) {
-            $has = $pdo->query('SELECT COUNT(*) FROM schema_version')->fetchColumn();
-            if ((int) $has < 1) {
-                $pdo->exec('INSERT INTO schema_version (version) VALUES (1)');
-            } else {
-                $pdo->exec('UPDATE schema_version SET version = 1');
-            }
-        }
+        db_set_schema_version($pdo, 1);
+        $current = 1;
     }
+    if ($current < 2) {
+        $pdo->exec('CREATE TABLE IF NOT EXISTS sources (
+            path TEXT PRIMARY KEY,
+            presence TEXT NOT NULL DEFAULT \'absent\',
+            last_checked INTEGER,
+            last_present_at INTEGER,
+            last_absent_at INTEGER
+        )');
+        db_set_schema_version($pdo, 2);
+    }
+}
+
+function db_set_schema_version(PDO $pdo, int $version): void
+{
+    $has = $pdo->query('SELECT COUNT(*) FROM schema_version')->fetchColumn();
+    if ((int) $has < 1) {
+        $pdo->prepare('INSERT INTO schema_version (version) VALUES (?)')->execute([$version]);
+        return;
+    }
+    $pdo->prepare('UPDATE schema_version SET version = ?')->execute([$version]);
 }
 
 function db_seed_catalog(PDO $pdo, string $catalog): void

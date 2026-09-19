@@ -58,19 +58,19 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <div id="config-panel-video" class="config-panel" data-config-panel="video" role="tabpanel" aria-labelledby="config-tab-video"<?= $configTab === 'video' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Video folders</h2>
-      <p class="hint">Absolute paths to video shares, one per row. Pick the category that applies to everything in that folder. Capitalization must match the NAS exactly.</p>
+      <p class="hint">Absolute paths to video shares, one per row. Removable drives can be Absent until they are plugged in again; titles already in the catalog stay until you remove the source.</p>
       <div class="folder-list" data-folder-list="video">
         <?php foreach ($videoSources as $source):
             $root = (string) ($source['path'] ?? '');
-            $status = $root !== '' ? settings_path_status($root) : '';
+            $presence = $root !== '' ? (function_exists('source_presence_live') ? source_presence_live($root) : settings_path_status($root)) : '';
             ?>
         <div class="folder-row" data-folder-row>
           <div class="folder-fields">
             <label class="visually-hidden">Video folder</label>
             <input type="text" name="video_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/video" spellcheck="false" autocapitalize="off">
             <?php config_category_select('video_root_categories[]', (string) ($source['category'] ?? ''), $videoCategories, 'video'); ?>
-            <?php if ($status !== ''): ?>
-            <p class="folder-status<?= $status === 'ok' ? '' : ' is-warn' ?>"><?= h(settings_path_status_label($status)) ?></p>
+            <?php if ($presence !== ''): ?>
+            <p class="folder-status<?= $presence === 'present' || $presence === 'ok' ? '' : ' is-absent' ?>"><?= h(function_exists('source_presence_label') ? source_presence_label($presence) : settings_path_status_label($presence)) ?></p>
             <?php endif; ?>
           </div>
           <button type="button" class="btn btn-ghost" data-remove-folder aria-label="Remove video folder">Remove</button>
@@ -112,19 +112,19 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <div id="config-panel-music" class="config-panel" data-config-panel="music" role="tabpanel" aria-labelledby="config-tab-music"<?= $configTab === 'music' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Music folders</h2>
-      <p class="hint">Absolute paths to music shares. Category options come from the Music list on the Categories page.</p>
+      <p class="hint">Absolute paths to music shares. Removable drives can be Absent until they are plugged in again; catalog entries stay until you remove the source.</p>
       <div class="folder-list" data-folder-list="music">
         <?php foreach ($musicSources as $source):
             $root = (string) ($source['path'] ?? '');
-            $status = $root !== '' ? settings_path_status($root) : '';
+            $presence = $root !== '' ? (function_exists('source_presence_live') ? source_presence_live($root) : settings_path_status($root)) : '';
             ?>
         <div class="folder-row" data-folder-row>
           <div class="folder-fields">
             <label class="visually-hidden">Music folder</label>
             <input type="text" name="music_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/music" spellcheck="false" autocapitalize="off">
             <?php config_category_select('music_root_categories[]', (string) ($source['category'] ?? ''), $musicCategories, 'music'); ?>
-            <?php if ($status !== ''): ?>
-            <p class="folder-status<?= $status === 'ok' ? '' : ' is-warn' ?>"><?= h(settings_path_status_label($status)) ?></p>
+            <?php if ($presence !== ''): ?>
+            <p class="folder-status<?= $presence === 'present' || $presence === 'ok' ? '' : ' is-absent' ?>"><?= h(function_exists('source_presence_label') ? source_presence_label($presence) : settings_path_status_label($presence)) ?></p>
             <?php endif; ?>
           </div>
           <button type="button" class="btn btn-ghost" data-remove-folder aria-label="Remove music folder">Remove</button>

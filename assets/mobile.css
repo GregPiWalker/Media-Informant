@@ -10,6 +10,8 @@ html[data-theme="light"] {
   --accent-fg: #ffffff;
   --accent: #0461be;
   --error: #e62d42;
+  --absent: #9a4f1c;
+  --absent-bg: rgb(154 79 28 / 10%);
   --shadow: 0 1px 2px rgb(0 0 6 / 6%), 0 8px 20px rgb(0 0 6 / 6%);
   color-scheme: light;
 }
@@ -26,6 +28,8 @@ html[data-theme="dark"] {
   --accent-fg: #ffffff;
   --accent: #81d0ff;
   --error: #ff888c;
+  --absent: #c9895a;
+  --absent-bg: rgb(201 137 90 / 12%);
   --shadow: none;
   color-scheme: dark;
 }
@@ -102,44 +106,65 @@ h1, h2, p {
 }
 
 .brand {
-  color: var(--window-fg);
-  font-size: 1.28rem;
-  font-weight: 750;
-  letter-spacing: -0.04em;
-  line-height: 1.1;
-  padding: 0.35rem 0;
   min-height: 44px;
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.45rem;
   white-space: nowrap;
   overflow: hidden;
 }
 
 .brand-text {
+  color: var(--window-fg);
+  font-size: 1.28rem;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+  min-height: 44px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .brand-mark {
-  width: 1.9rem;
-  height: 1.9rem;
-  flex-shrink: 0;
-  border-radius: 8px;
-  background: var(--accent-bg);
+  appearance: none;
   position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
-.brand-mark::after {
-  content: '';
+.brand-logo {
   position: absolute;
-  inset: 0.32rem;
-  background: var(--accent-fg);
-  -webkit-mask: center / contain no-repeat;
-  mask: center / contain no-repeat;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='5' width='18' height='14' rx='2' fill='black'/%3E%3Crect x='7' y='5' width='2' height='14' fill='white'/%3E%3Crect x='15' y='5' width='2' height='14' fill='white'/%3E%3Cpath d='M10.5 9.2 15 12l-4.5 2.8z' fill='white'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3' y='5' width='18' height='14' rx='2' fill='black'/%3E%3Crect x='7' y='5' width='2' height='14' fill='white'/%3E%3Crect x='15' y='5' width='2' height='14' fill='white'/%3E%3Cpath d='M10.5 9.2 15 12l-4.5 2.8z' fill='white'/%3E%3C/svg%3E");
+  left: 50%;
+  top: 50%;
+  width: 2.6rem;
+  height: 2rem;
+  max-width: none;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
+}
+
+.brand-logo-dark {
+  display: none;
+}
+
+html[data-theme="dark"] .brand-logo-light {
+  display: none;
+}
+
+html[data-theme="dark"] .brand-logo-dark {
+  display: block;
 }
 
 .header-actions {
@@ -266,6 +291,8 @@ h1, h2, p {
 .branch-tab:focus-visible,
 .match-choice:focus-visible,
 .overlay-close:focus-visible,
+.brand-mark:focus-visible,
+.brand-text:focus-visible,
 .poster-expand:focus-visible,
 .page-menu-item:focus-visible {
   outline: 2px solid var(--accent);
@@ -1483,6 +1510,34 @@ select.folder-input {
   color: var(--error);
 }
 
+.folder-status.is-absent {
+  color: var(--absent);
+}
+
+.absent-banner {
+  margin: 0.85rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 9px;
+  background: var(--absent-bg);
+  color: var(--absent);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.detail-page.is-source-absent .file-path.is-absent,
+.file-path.is-absent {
+  color: var(--absent);
+}
+
+.catalog [data-source-absent] {
+  color: var(--absent);
+}
+
+.catalog [data-source-absent] .card-title,
+.catalog [data-source-absent] .catalog-row-title {
+  color: var(--absent);
+}
+
 .field {
   display: block;
   margin-top: 0.75rem;
@@ -1987,6 +2042,48 @@ html[data-theme="dark"] .overlay-backdrop {
   font-size: 1.05rem;
   font-weight: 750;
   letter-spacing: -0.03em;
+}
+
+.overlay-pane-about {
+  width: min(24rem, calc(100vw - 2.4rem));
+  max-height: min(90dvh, 44rem);
+  overflow: auto;
+  padding: 1.2rem 1.15rem 1.35rem;
+  text-align: center;
+}
+
+.about-logo {
+  display: grid;
+  place-items: center;
+  width: min(100%, 16rem);
+  margin: 0 auto 0.85rem;
+}
+
+.about-logo img {
+  width: 100%;
+  height: auto;
+  max-height: min(32dvh, 16rem);
+  object-fit: contain;
+}
+
+.overlay-pane-about h2 {
+  font-size: 1.35rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.overlay-pane-about p {
+  margin-top: 0.55rem;
+  line-height: 1.45;
+}
+
+.about-lead {
+  font-weight: 600;
+}
+
+.about-credit {
+  color: var(--dim-fg);
+  font-size: 0.88rem;
 }
 
 .overlay-pane-poster {

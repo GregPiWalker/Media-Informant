@@ -207,8 +207,10 @@ function render_start(string $title): void
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Media Informant">
 <title><?= h($title) ?></title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233584e4'/%3E%3Cpath fill='white' d='M7 6h2v3H7V6zm0 5h2v3H7v-3zm0 5h2v3H7v-3zm8-10h2v3h-2V6zm0 5h2v3h-2v-3zm0 5h2v3h-2v-3zM10 6h4v12h-4z'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=36">
+<link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
+<link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=39">
 </head>
 <body>
 <?php
@@ -219,14 +221,18 @@ function render_header(array $opts = []): void
     $showSearch = !empty($opts['search']);
     $showBranches = array_key_exists('branches', $opts) ? !empty($opts['branches']) : true;
     $section = (string) ($opts['section'] ?? 'home');
-    $pref = theme_pref();
+    $logoLightSm = app_href('images/' . rawurlencode('informant logo - light theme_160.png'));
+    $logoDarkSm = app_href('images/' . rawurlencode('informant logo - dark theme_160.png'));
     ?>
 <header class="site-header">
   <div class="header-row">
-    <a class="brand" href="<?= h(app_href('index.php')) ?>">
-      <span class="brand-mark" aria-hidden="true"></span>
-      <span class="brand-text">Media Informant</span>
-    </a>
+    <div class="brand">
+      <button type="button" class="brand-mark" data-about-open aria-label="About Media Informant" aria-haspopup="dialog" aria-controls="about-overlay">
+        <img class="brand-logo brand-logo-light" src="<?= h($logoLightSm) ?>" width="160" height="123" alt="">
+        <img class="brand-logo brand-logo-dark" src="<?= h($logoDarkSm) ?>" width="160" height="123" alt="">
+      </button>
+      <a class="brand-text" href="<?= h(app_href('index.php')) ?>">Media Informant</a>
+    </div>
     <div class="header-actions">
       <button type="button" class="btn btn-icon scan-live-btn" data-scan-live hidden data-scan-status-url="<?= h(app_href('video/scan-status.php')) ?>" data-scan-run-url="<?= h(app_href('video/scan-run.php')) ?>" data-scan-page-url="<?= h(app_href('video/scan.php')) ?>" data-grok-run-url="<?= h(app_href('video/resolve-run.php')) ?>" data-grok-page-url="<?= h(app_href('video/resolve.php')) ?>" aria-label="Scan in progress" aria-haspopup="dialog" aria-controls="scan-overlay">
         <span class="scan-live-ring" aria-hidden="true"></span>
@@ -306,6 +312,22 @@ function render_end(): void
     <a class="btn btn-accent btn-block" data-scan-overlay-link href="<?= h($scanPage) ?>">Open scan page</a>
   </div>
 </div>
+<div class="overlay" data-overlay="about" id="about-overlay" hidden>
+  <div class="overlay-backdrop" data-overlay-dismiss></div>
+  <button type="button" class="overlay-close" data-overlay-dismiss aria-label="Close">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="overlay-pane overlay-pane-about" role="dialog" aria-modal="true" aria-labelledby="about-overlay-title">
+    <div class="about-logo">
+      <img class="brand-logo-light" src="<?= h(app_href('images/' . rawurlencode('informant logo - light theme.png'))) ?>" width="1408" height="1084" alt="" loading="lazy">
+      <img class="brand-logo-dark" src="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme.png'))) ?>" width="1408" height="1084" alt="" loading="lazy">
+    </div>
+    <h2 id="about-overlay-title">Media Informant</h2>
+    <p class="about-lead">A quiet catalog for the movies, shows, and music on this NAS.</p>
+    <p>Browse posters and details without waiting on a folder scan. When files change, Scan matches titles, fetches artwork, and keeps the catalog ready.</p>
+    <p class="about-credit">Movie and TV details come from TMDB. Optional Grok help can identify titles TMDB couldn’t. Built for Synology Web Station.</p>
+  </div>
+</div>
 <div class="overlay" data-overlay="poster" id="poster-overlay" hidden>
   <div class="overlay-backdrop" data-overlay-dismiss></div>
   <button type="button" class="overlay-close" data-overlay-dismiss aria-label="Close">
@@ -339,7 +361,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=41" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=42" defer></script>
 </body>
 </html>
 <?php

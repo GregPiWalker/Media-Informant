@@ -18,6 +18,7 @@ $matchSource = 'none';
 $poster = null;
 $manual = false;
 $itemId = '';
+$sourceAbsent = false;
 $editing = !empty($editing);
 $error = (string) ($error ?? '');
 
@@ -32,6 +33,7 @@ if ($found) {
     $matchSource = library_match_source($item);
     $manual = $matchSource === 'manual';
     $itemId = (string) ($item['id'] ?? '');
+    $sourceAbsent = function_exists('source_is_absent_for_item') && source_is_absent_for_item($item);
     $poster = poster_url(isset($item['poster_path']) && is_string($item['poster_path']) ? $item['poster_path'] : null);
     if (array_key_exists('genres', $item) && is_array($item['genres'])) {
         $genres = cache_string_list($item['genres']);
@@ -69,7 +71,7 @@ $pageTitle = $found ? $display . ' · Media Informant' : 'Not found · Media Inf
 render_start($pageTitle);
 render_header(['section' => 'video']);
 ?>
-<main class="page detail-page">
+<main class="page detail-page<?= $sourceAbsent ? ' is-source-absent' : '' ?>">
   <div class="detail-toolbar">
     <a class="back" href="<?= h(app_href('video/index.php')) ?>">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -270,7 +272,10 @@ render_header(['section' => 'video']);
     </section>
     <?php endif; ?>
 
-    <p class="file-path"><?= h($path) ?></p>
+    <?php if ($sourceAbsent): ?>
+    <p class="absent-banner">Source folder is absent. This title stays in the catalog until the drive is mounted again, or you remove the source in Config.</p>
+    <?php endif; ?>
+    <p class="file-path<?= $sourceAbsent ? ' is-absent' : '' ?>"><?= h($path) ?></p>
   </article>
   <?php endif; ?>
 </main>
