@@ -514,8 +514,52 @@
       var grid = catalog.querySelector('[data-poster-grid]');
       if (grid) {
         var cards = Array.prototype.slice.call(grid.querySelectorAll('[data-card]'));
-        cards.sort(bySort).forEach(function (card) { grid.appendChild(card); });
+        cards.sort(bySort);
+        rebuildPosterBuckets(grid, cards);
       }
+    }
+
+    function posterBucketLabel(card, col) {
+      return (card.getAttribute('data-bucket-' + col) || '').trim() || '—';
+    }
+
+    function rebuildPosterBuckets(grid, cards) {
+      if (!grid) return;
+      grid.querySelectorAll('[data-poster-bucket]').forEach(function (el) {
+        el.remove();
+      });
+      var col = catalog.getAttribute('data-sort') || 'title';
+      var last = null;
+      cards.forEach(function (card) {
+        grid.appendChild(card);
+        var label = posterBucketLabel(card, col);
+        if (label !== last) {
+          var head = document.createElement('h2');
+          head.className = 'poster-bucket';
+          head.setAttribute('data-poster-bucket', '');
+          head.textContent = label;
+          grid.insertBefore(head, card);
+          last = label;
+        }
+      });
+      syncPosterBuckets();
+    }
+
+    function syncPosterBuckets() {
+      var grid = catalog.querySelector('[data-poster-grid]');
+      if (!grid) return;
+      var heading = null;
+      var any = false;
+      Array.prototype.forEach.call(grid.children, function (el) {
+        if (el.hasAttribute('data-poster-bucket')) {
+          if (heading) heading.hidden = !any;
+          heading = el;
+          any = false;
+          return;
+        }
+        if (el.hasAttribute('data-card') && !el.hidden) any = true;
+      });
+      if (heading) heading.hidden = !any;
     }
 
     function kindAllowed(el) {
@@ -536,47 +580,75 @@
       return kindAllowed(el) && categoryAllowed(el);
     }
 
+    function catalogWhere(attr, value) {
+      var nodes = catalog.querySelectorAll('[' + attr + ']');
+      var matches = [];
+      for (var i = 0; i < nodes.length; i += 1) {
+        if (nodes[i].getAttribute(attr) === value) matches.push(nodes[i]);
+      }
+      return matches;
+    }
+
+    function searchQuery() {
+      var input = document.querySelector('[data-search-input]');
+      return isDesktopShell()
+        ? (input ? input.value.trim().toLowerCase() : '')
+        : searchCommitted;
+    }
+
+    function searchHit(el, query) {
+      return !query || (el.getAttribute('data-search') || '').toLowerCase().indexOf(query) !== -1;
+    }
+
+    function groupIsOpen(head) {
+      var btn = head.querySelector('[data-expand]');
+      return !!(btn && btn.getAttribute('aria-expanded') === 'true');
+    }
+
     function setExpanded(id, open) {
-      var btn = catalog.querySelector('[data-expand="' + id + '"]');
+      var btn = catalogWhere('data-expand', id)[0];
       if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-      catalog.querySelectorAll('[data-parent="' + String(id).replace(/"/g, '\\"') + '"]').forEach(function (row) {
+      var query = searchQuery();
+      catalogWhere('data-parent', id).forEach(function (row) {
         if (!open) {
           row.hidden = true;
           var nested = row.getAttribute('data-group');
           if (nested) setExpanded(nested, false);
           return;
         }
-        row.hidden = !rowAllowed(row);
+        row.hidden = !(searchHit(row, query) && rowAllowed(row));
       });
     }
 
     var searchCommitted = '';
 
     function applySearch() {
-      var input = document.querySelector('[data-search-input]');
-      var query = isDesktopShell()
-        ? (input ? input.value.trim().toLowerCase() : '')
-        : searchCommitted;
+      var query = searchQuery();
       var visible = 0;
       var view = catalog.getAttribute('data-view') || 'poster';
 
       catalog.querySelectorAll('[data-group]').forEach(function (head) {
         var id = head.getAttribute('data-group');
-        var kids = catalog.querySelectorAll('[data-parent="' + id + '"]');
-        var headHit = !query || (head.getAttribute('data-search') || '').toLowerCase().indexOf(query) !== -1;
+        if (!id) return;
+        var kids = catalogWhere('data-parent', id);
+        var headHit = searchHit(head, query);
         var kidHit = false;
         kids.forEach(function (kid) {
-          var hit = !query || (kid.getAttribute('data-search') || '').toLowerCase().indexOf(query) !== -1;
-          if (hit) kidHit = true;
-          kid.hidden = !(hit && rowAllowed(kid));
+          if (searchHit(kid, query)) kidHit = true;
         });
         var show = rowAllowed(head) && (headHit || kidHit);
-        head.hidden = !show;
-        if (show && query && kidHit) setExpanded(id, true);
-        else if (show && !query) {
-          var open = (head.querySelector('[data-expand]') || {}).getAttribute &&
-            (head.querySelector('[data-expand]').getAttribute('aria-expanded') === 'true');
-          setExpanded(id, !!open);
+        var nested = head.hasAttribute('data-parent');
+        if (!nested) {
+          head.hidden = !show;
+        } else if (!show) {
+          head.hidden = true;
+        }
+        if (!show) {
+          setExpanded(id, false);
+        } else if (query && kidHit) {
+          setExpanded(id, true);
+        } else {
+          setExpanded(id, groupIsOpen(head));
         }
       });
 
@@ -604,6 +676,7 @@
         });
         rail.hidden = !any;
       });
+      syncPosterBuckets();
       var empty = document.querySelector('[data-search-empty]');
       if (empty) empty.hidden = !((query || (catalog.getAttribute('data-kinds') || '') === '') && visible === 0);
     }
@@ -613,6 +686,15 @@
         setView(btn.getAttribute('data-catalog-view') || 'poster');
       });
     });
+
+    function syncSortOptions() {
+      var col = catalog.getAttribute('data-sort') || 'title';
+      catalog.querySelectorAll('[data-sort-panel] [data-sort]').forEach(function (btn) {
+        var on = btn.getAttribute('data-sort') === col;
+        btn.classList.toggle('is-active', on);
+        btn.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+    }
 
     catalog.querySelectorAll('[data-sort]').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -624,6 +706,7 @@
         else dir = 'asc';
         catalog.setAttribute('data-sort', col);
         catalog.setAttribute('data-dir', dir);
+        syncSortOptions();
         applySort();
         catalogSave();
       });
@@ -649,6 +732,49 @@
       var y = Math.min(Math.max(pad, clientY), window.innerHeight - h - pad);
       colPanel.style.left = x + 'px';
       colPanel.style.top = y + 'px';
+    }
+
+    var sortPanel = catalog.querySelector('[data-sort-panel]');
+    var sortOpen = catalog.querySelector('[data-sort-open]');
+
+    function closeSortPanel() {
+      if (!sortPanel || sortPanel.hidden) return;
+      sortPanel.hidden = true;
+      if (sortOpen) sortOpen.setAttribute('aria-expanded', 'false');
+    }
+
+    function openSortPanel(anchor) {
+      if (!sortPanel) return;
+      sortPanel.hidden = false;
+      if (sortOpen) sortOpen.setAttribute('aria-expanded', 'true');
+      var pad = 8;
+      var w = sortPanel.offsetWidth;
+      var h = sortPanel.offsetHeight;
+      var x = pad;
+      var y = pad;
+      if (anchor && anchor.getBoundingClientRect) {
+        var rect = anchor.getBoundingClientRect();
+        x = rect.left;
+        y = rect.bottom + 6;
+      }
+      x = Math.min(Math.max(pad, x), window.innerWidth - w - pad);
+      y = Math.min(Math.max(pad, y), window.innerHeight - h - pad);
+      sortPanel.style.left = x + 'px';
+      sortPanel.style.top = y + 'px';
+    }
+
+    if (sortOpen && sortPanel) {
+      sortOpen.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (sortPanel.hidden) openSortPanel(sortOpen);
+        else closeSortPanel();
+      });
+      document.addEventListener('click', function (event) {
+        if (sortPanel.hidden) return;
+        if (sortPanel.contains(event.target) || sortOpen.contains(event.target)) return;
+        closeSortPanel();
+      });
     }
 
     if (colPanel && listHead) {
@@ -885,6 +1011,25 @@
     return !!(data.cancel_requested) || data.phase === 'stopping';
   }
 
+  function pageScanCatalog() {
+    return (scanPanel && scanPanel.getAttribute('data-scan-catalog')) || 'video';
+  }
+
+  function statusScanCatalog(data) {
+    if (data && data.state === 'running') {
+      return data.catalog === 'music' ? 'music' : 'video';
+    }
+    return pageScanCatalog();
+  }
+
+  function catalogTitle(cat) {
+    return cat === 'music' ? 'Music' : 'Video';
+  }
+
+  function catalogNoun(cat) {
+    return cat === 'music' ? 'music' : 'video';
+  }
+
   function scanStateLabel(state, data) {
     if (scanIsStopping(data) && state === 'running') return 'Stopping';
     if (state === 'running') return 'In progress';
@@ -895,12 +1040,14 @@
   }
 
   function scanTitleLabel(state, data) {
-    if (scanIsStopping(data) && state === 'running') return 'Stopping';
-    if (state === 'running') return 'Scanning';
-    if (state === 'done') return 'Scan finished';
-    if (state === 'stopped') return 'Scan stopped';
-    if (state === 'error') return 'Scan failed';
-    return 'Video scan';
+    var name = catalogTitle(statusScanCatalog(data));
+    var noun = catalogNoun(statusScanCatalog(data));
+    if (scanIsStopping(data) && state === 'running') return 'Stopping ' + noun + ' scan';
+    if (state === 'running') return 'Scanning ' + noun;
+    if (state === 'done') return name + ' scan finished';
+    if (state === 'stopped') return name + ' scan stopped';
+    if (state === 'error') return name + ' scan failed';
+    return name + ' scan';
   }
 
   function elapsedLabel(startedAt) {
@@ -979,7 +1126,7 @@
     if (grokLaunch) grokLaunch.hidden = active;
   }
 
-  function setOverlayKind(kind) {
+  function setOverlayKind(kind, data) {
     var tmdbStats = document.querySelector('[data-overlay-stats="tmdb"]');
     var grokStats = document.querySelector('[data-overlay-stats="grok"]');
     if (tmdbStats) tmdbStats.hidden = kind === 'grok';
@@ -989,10 +1136,16 @@
     if (link && scanLive) {
       if (kind === 'grok') {
         link.href = scanLive.getAttribute('data-grok-page-url') || link.href;
-        link.textContent = 'Open Grok page';
+        link.textContent = 'Open video scan page';
       } else {
-        link.href = scanLive.getAttribute('data-scan-page-url') || link.href;
-        link.textContent = 'Open scan page';
+        var cat = statusScanCatalog(data || {});
+        if (cat === 'music') {
+          link.href = scanLive.getAttribute('data-music-scan-page-url') || scanLive.getAttribute('data-scan-page-url') || link.href;
+          link.textContent = 'Open music scan page';
+        } else {
+          link.href = scanLive.getAttribute('data-scan-page-url') || link.href;
+          link.textContent = 'Open video scan page';
+        }
       }
     }
   }
@@ -1035,13 +1188,25 @@
     var total = Number(data.total || 0);
     var message = data.message || '';
     var phase = data.phase || '';
+    var titleState = state;
+    var titleData = data;
+    if (!running && scanPanel) {
+      var pageCat = pageScanCatalog();
+      var statusCat = data.catalog === 'music' ? 'music' : 'video';
+      if (statusCat !== pageCat) {
+        message = scanPanel.getAttribute('data-scan-idle') || message;
+        titleState = 'idle';
+        titleData = { state: 'idle', catalog: pageCat };
+      }
+    }
 
     lastScanKind = 'tmdb';
-    setLiveActive(active, message || (stopping ? 'Stopping scan' : 'Scan in progress'));
-    setOverlayKind('tmdb');
+    var noun = catalogNoun(statusScanCatalog(titleData));
+    setLiveActive(active, message || (stopping ? ('Stopping ' + noun + ' scan') : (catalogTitle(statusScanCatalog(data)) + ' scan in progress')));
+    setOverlayKind('tmdb', data);
 
-    setText('[data-scan-kicker]', scanStateLabel(state, data));
-    setText('[data-scan-title]', scanTitleLabel(state, data));
+    setText('[data-scan-kicker]', scanStateLabel(titleState, titleData));
+    setText('[data-scan-title]', scanTitleLabel(titleState, titleData));
     setText('[data-scan-message]', message);
     setText('[data-scan-found]', String(found));
     setText('[data-scan-pending]', String(pending));
@@ -1081,7 +1246,7 @@
       if (!running) {
         stopBtn.hidden = true;
         stopBtn.disabled = false;
-        stopBtn.textContent = 'Stop scan';
+        stopBtn.textContent = 'Stop ' + catalogNoun(statusScanCatalog(data)) + ' scan';
         scanStopRequested = false;
       } else if (stopping || scanStopRequested) {
         stopBtn.hidden = false;
@@ -1090,13 +1255,13 @@
       } else {
         stopBtn.hidden = false;
         stopBtn.disabled = false;
-        stopBtn.textContent = 'Stop scan';
+        stopBtn.textContent = 'Stop ' + catalogNoun(statusScanCatalog(data)) + ' scan';
       }
     }
 
     setText('[data-scan-overlay-kicker]', scanStateLabel(state, data));
-    setText('[data-scan-overlay-title]', stopping ? 'Stopping scan' : (running ? 'Scan in progress' : scanTitleLabel(state, data)));
-    setText('[data-scan-overlay-message]', message || (running ? 'Working…' : 'No scan is running.'));
+    setText('[data-scan-overlay-title]', stopping ? ('Stopping ' + noun + ' scan') : (running ? (catalogTitle(statusScanCatalog(data)) + ' scan in progress') : scanTitleLabel(state, data)));
+    setText('[data-scan-overlay-message]', message || (running ? 'Working…' : ('No ' + noun + ' scan is running.')));
     setText('[data-scan-overlay-found]', String(found));
     setText('[data-scan-overlay-pending]', String(pending));
     setText('[data-scan-overlay-lookups]', String(lookups));
@@ -1149,7 +1314,7 @@
     lastScanKind = 'grok';
     lastScanState = state;
     setLiveActive(running, message || (stopping ? 'Stopping Grok' : 'Grok resolve in progress'));
-    setOverlayKind('grok');
+    setOverlayKind('grok', data);
 
     setText('[data-grok-kicker]', stopping ? 'Stopping' : (state === 'running' ? 'In progress' : (state === 'done' ? 'Done' : (state === 'stopped' ? 'Stopped' : (state === 'error' ? 'Failed' : 'Ready')))));
     setText('[data-grok-title]', stopping ? 'Stopping' : (running ? 'Resolving unmatched' : (state === 'done' ? 'Grok finished' : (state === 'stopped' ? 'Grok stopped' : (state === 'error' ? 'Grok failed' : 'Resolve unmatched (Grok)')))));
@@ -1211,6 +1376,7 @@
   function pumpScan(start, resumePause) {
     var runUrl = scanRunUrl();
     if (!runUrl || scanPumping) return;
+    if (start && scanPanel && scanPanel.getAttribute('data-scan-enabled') === '0') return;
     if (start) {
       var mode = typeof start === 'string' ? start : ((scanPanel && scanPanel.getAttribute('data-scan-start')) || 'retry');
       if (mode === '1' || mode === 'true') mode = 'retry';
@@ -1226,6 +1392,11 @@
       .then(function (data) {
         scanPumping = false;
         if (data && data.blocked) {
+          paintLive(data);
+          return;
+        }
+        if (data && data.unsupported) {
+          lastScanState = data.state || 'idle';
           paintLive(data);
           return;
         }
@@ -1340,6 +1511,8 @@
     btn.addEventListener('click', function (event) {
       if (!window.fetch) return;
       event.preventDefault();
+      if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
+      if (scanPanel && scanPanel.getAttribute('data-scan-enabled') === '0') return;
       if (activityBusy() && lastScanKind === 'grok') {
         overlayOpen('scan');
         return;
@@ -1348,7 +1521,7 @@
       if (scanPanel) scanPanel.setAttribute('data-scan-start', mode);
       lastScanKind = 'tmdb';
       lastScanState = 'running';
-      setLiveActive(true, 'Starting TMDB scan…');
+      setLiveActive(true, 'Starting ' + catalogNoun(pageScanCatalog()) + ' scan…');
       pumpScan(mode);
     });
   });
@@ -1426,6 +1599,33 @@
     });
   }
 
+  var scanOptionsUrl = scanPanel ? scanPanel.getAttribute('data-scan-options-url') : '';
+  if (scanOptionsUrl) {
+    document.querySelectorAll('[data-scan-option]').forEach(function (box) {
+      box.addEventListener('change', function () {
+        var payload = {};
+        document.querySelectorAll('[data-scan-option]').forEach(function (item) {
+          var key = item.getAttribute('data-scan-option');
+          if (key) payload[key] = item.checked ? 1 : 0;
+        });
+        fetch(scanOptionsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify(payload)
+        }).then(function (r) { return r.json(); }).then(function (data) {
+          if (!data || !data.lookup_targets) return;
+          document.querySelectorAll('[data-scan-option]').forEach(function (item) {
+            var key = item.getAttribute('data-scan-option');
+            if (key && typeof data.lookup_targets[key] === 'boolean') {
+              item.checked = data.lookup_targets[key];
+            }
+          });
+        }).catch(function () {});
+      });
+    });
+  }
+
   var grokStopForm = document.querySelector('[data-grok-stop]');
   if (grokStopForm) {
     grokStopForm.addEventListener('submit', function (event) {
@@ -1460,9 +1660,10 @@
         stopBtn.disabled = true;
         stopBtn.textContent = 'Stopping…';
       }
+      var noun = catalogNoun(pageScanCatalog());
       setText('[data-scan-kicker]', 'Stopping');
-      setText('[data-scan-title]', 'Stopping');
-      setText('[data-scan-message]', 'Stop requested. Finishing the current step…');
+      setText('[data-scan-title]', 'Stopping ' + noun + ' scan');
+      setText('[data-scan-message]', 'Stop requested. Finishing the current ' + noun + ' step…');
       fetch(stopForm.action, { method: 'POST', headers: { 'X-Requested-With': 'fetch' }, credentials: 'same-origin' })
         .then(function (r) { return r.json(); })
         .then(function (data) {
@@ -1647,5 +1848,397 @@
         setLogOpen(!logOpen());
       });
     });
+  }
+
+  var toolsPage = document.querySelector('[data-tools-page]');
+  if (toolsPage) {
+    var toolsTree = toolsPage.querySelector('[data-tools-tree]');
+    var toolsSource = toolsPage.querySelector('[data-tools-source]');
+    var toolsStatus = toolsPage.querySelector('[data-tools-status]');
+    var toolsMenu = document.querySelector('[data-tools-menu]');
+    var browseUrl = toolsPage.getAttribute('data-tools-browse-url') || '';
+    var renameUrl = toolsPage.getAttribute('data-tools-rename-url') || '';
+    var menuTarget = null;
+    var menuTimer = 0;
+    var menuFromPress = false;
+
+    function toolsJoin(parent, name) {
+      return parent ? parent + '/' + name : name;
+    }
+
+    function toolsSetStatus(text) {
+      if (toolsStatus) toolsStatus.textContent = text || '';
+    }
+
+    function toolsCloseMenu() {
+      if (!toolsMenu || toolsMenu.hidden) return;
+      toolsMenu.hidden = true;
+    }
+
+    function toolsOpenMenu(x, y, folder) {
+      if (!toolsMenu) return;
+      menuTarget = folder;
+      toolsMenu.hidden = false;
+      var pad = 8;
+      var w = toolsMenu.offsetWidth;
+      var h = toolsMenu.offsetHeight;
+      var left = Math.min(Math.max(pad, x), window.innerWidth - w - pad);
+      var top = Math.min(Math.max(pad, y), window.innerHeight - h - pad);
+      toolsMenu.style.left = left + 'px';
+      toolsMenu.style.top = top + 'px';
+    }
+
+    function toolsFolderIcon() {
+      return '<svg class="tools-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3.5 7.5h6l1.5 2H20.5v9.5H3.5z"/><path fill="none" stroke="currentColor" stroke-width="1.8" d="M3.5 9.5V6.8h5.2l1.2 1.7"/></svg>';
+    }
+
+    function toolsFileIcon() {
+      return '<svg class="tools-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M7 3.5h7l5 5V20.5H7z"/><path fill="none" stroke="currentColor" stroke-width="1.8" d="M14 3.5V9h5.5"/></svg>';
+    }
+
+    function toolsRenderList(ul, dir, data) {
+      ul.innerHTML = '';
+      (data.folders || []).forEach(function (folder) {
+        var rel = toolsJoin(dir, folder.name);
+        var li = document.createElement('li');
+        li.setAttribute('data-tools-folder', rel);
+        li.setAttribute('data-tools-name', folder.name);
+        var row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'tools-row is-folder';
+        row.setAttribute('data-tools-expand', '');
+        row.setAttribute('aria-expanded', 'false');
+        row.innerHTML = '<span class="expand-caret" aria-hidden="true"></span>' + toolsFolderIcon()
+          + '<span class="tools-name"></span>';
+        row.querySelector('.tools-name').textContent = folder.name;
+        var kids = document.createElement('ul');
+        kids.hidden = true;
+        li.appendChild(row);
+        li.appendChild(kids);
+        ul.appendChild(li);
+      });
+      (data.files || []).forEach(function (file) {
+        var li = document.createElement('li');
+        var row = document.createElement('div');
+        row.className = 'tools-row is-file';
+        row.innerHTML = '<span class="tools-caret-spacer" aria-hidden="true"></span>' + toolsFileIcon()
+          + '<span class="tools-name"></span>';
+        row.querySelector('.tools-name').textContent = file.name;
+        li.appendChild(row);
+        ul.appendChild(li);
+      });
+      if (!data.folders.length && !data.files.length) {
+        var empty = document.createElement('li');
+        empty.className = 'tools-row is-file';
+        empty.textContent = 'Empty folder';
+        ul.appendChild(empty);
+      }
+    }
+
+    function toolsLoad(dir, ul, done) {
+      if (!browseUrl || !toolsSource) return;
+      var src = toolsSource.value;
+      var url = browseUrl + (browseUrl.indexOf('?') === -1 ? '?' : '&')
+        + 'src=' + encodeURIComponent(src) + '&dir=' + encodeURIComponent(dir || '');
+      fetch(url, { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data || !data.ok) {
+            toolsSetStatus((data && data.error) || 'Could not read that folder.');
+            if (done) done(null);
+            return;
+          }
+          toolsRenderList(ul, dir || '', data);
+          if (ul) {
+            ul.dataset.loaded = '1';
+            ul.dataset.extensions = JSON.stringify(data.extensions || []);
+            ul.dataset.files = JSON.stringify((data.files || []).map(function (f) { return f.name; }));
+          }
+          if (done) done(data);
+        })
+        .catch(function () {
+          toolsSetStatus('Could not read that folder.');
+          if (done) done(null);
+        });
+    }
+
+    function toolsKids(li) {
+      if (!li) return null;
+      for (var i = 0; i < li.children.length; i++) {
+        if (li.children[i].tagName === 'UL') return li.children[i];
+      }
+      return null;
+    }
+
+    function toolsLoadRoot() {
+      if (!toolsTree || !toolsSource || !toolsSource.value) {
+        if (toolsTree) toolsTree.innerHTML = '';
+        return;
+      }
+      if (toolsSource.selectedOptions[0] && toolsSource.selectedOptions[0].disabled) {
+        toolsTree.innerHTML = '';
+        return;
+      }
+      toolsTree.innerHTML = '';
+      var li = document.createElement('li');
+      li.setAttribute('data-tools-folder', '');
+      li.setAttribute('data-tools-name', toolsSource.options[toolsSource.selectedIndex].text);
+      var row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'tools-row is-folder';
+      row.setAttribute('data-tools-expand', '');
+      row.setAttribute('aria-expanded', 'true');
+      row.innerHTML = '<span class="expand-caret" aria-hidden="true"></span>' + toolsFolderIcon()
+        + '<span class="tools-name"></span>';
+      row.querySelector('.tools-name').textContent = toolsSource.options[toolsSource.selectedIndex].text;
+      var kids = document.createElement('ul');
+      li.appendChild(row);
+      li.appendChild(kids);
+      toolsTree.appendChild(li);
+      toolsLoad('', kids, function (data) {
+        if (data) toolsSetStatus('Open a folder, then right-click it for Rename Group.');
+      });
+    }
+
+    if (toolsSource) {
+      toolsSource.addEventListener('change', function () {
+        toolsCloseMenu();
+        toolsLoadRoot();
+      });
+      toolsLoadRoot();
+    }
+
+    if (toolsTree) {
+      toolsTree.addEventListener('click', function (event) {
+        var exp = event.target.closest('[data-tools-expand]');
+        if (!exp || menuFromPress) {
+          menuFromPress = false;
+          return;
+        }
+        var li = exp.closest('[data-tools-folder]');
+        if (!li) return;
+        var kids = toolsKids(li);
+        if (!kids) return;
+        var open = exp.getAttribute('aria-expanded') === 'true';
+        if (open) {
+          exp.setAttribute('aria-expanded', 'false');
+          kids.hidden = true;
+          return;
+        }
+        exp.setAttribute('aria-expanded', 'true');
+        kids.hidden = false;
+        if (kids.dataset.loaded !== '1') {
+          toolsLoad(li.getAttribute('data-tools-folder') || '', kids);
+        }
+      });
+
+      function folderFromEvent(event) {
+        var row = event.target.closest('.tools-row.is-folder');
+        if (!row) return null;
+        return row.closest('[data-tools-folder]');
+      }
+
+      toolsTree.addEventListener('contextmenu', function (event) {
+        var folder = folderFromEvent(event);
+        if (!folder) return;
+        event.preventDefault();
+        toolsOpenMenu(event.clientX, event.clientY, folder);
+      });
+      toolsTree.addEventListener('touchstart', function (event) {
+        var folder = folderFromEvent(event);
+        if (!folder || !event.touches || !event.touches[0]) return;
+        var touch = event.touches[0];
+        menuFromPress = false;
+        menuTimer = window.setTimeout(function () {
+          menuFromPress = true;
+          toolsOpenMenu(touch.clientX, touch.clientY, folder);
+        }, 520);
+      }, { passive: true });
+      toolsTree.addEventListener('touchend', function (event) {
+        window.clearTimeout(menuTimer);
+        if (menuFromPress) event.preventDefault();
+      });
+      toolsTree.addEventListener('touchmove', function () {
+        window.clearTimeout(menuTimer);
+      }, { passive: true });
+      toolsTree.addEventListener('touchcancel', function () {
+        window.clearTimeout(menuTimer);
+      });
+    }
+
+    document.addEventListener('click', function (event) {
+      if (!toolsMenu || toolsMenu.hidden) return;
+      if (toolsMenu.contains(event.target)) return;
+      toolsCloseMenu();
+    });
+
+    function toolsSuggestFind(names) {
+      if (!names || !names.length) return '';
+      var prefix = String(names[0] || '');
+      for (var i = 1; i < names.length; i++) {
+        var s = String(names[i] || '');
+        var n = Math.min(prefix.length, s.length);
+        var j = 0;
+        while (j < n && prefix.charAt(j) === s.charAt(j)) j += 1;
+        prefix = prefix.slice(0, j);
+        if (!prefix) return '';
+      }
+      return prefix;
+    }
+
+    function toolsApplyFindSuggest(findEl, names) {
+      if (!findEl) return;
+      var suggest = toolsSuggestFind(names);
+      findEl.setAttribute('data-rename-suggest', suggest);
+      findEl.placeholder = suggest || 'Text shared by the filenames';
+      findEl.value = suggest;
+    }
+
+    function toolsFillExts(exts) {
+      var wrap = document.querySelector('[data-rename-exts]');
+      if (!wrap) return;
+      wrap.innerHTML = '';
+      if (!exts || !exts.length) {
+        wrap.innerHTML = '<p class="hint">No files with extensions in this folder.</p>';
+        return;
+      }
+      exts.forEach(function (ext) {
+        var safe = String(ext).replace(/[^a-z0-9]+/gi, '');
+        if (!safe) return;
+        var label = document.createElement('label');
+        label.className = 'grok-toggle';
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = true;
+        box.setAttribute('data-rename-ext', safe);
+        var span = document.createElement('span');
+        span.textContent = '.' + safe;
+        label.appendChild(box);
+        label.appendChild(span);
+        wrap.appendChild(label);
+      });
+    }
+
+    var renameBtn = document.querySelector('[data-tools-rename]');
+    if (renameBtn) {
+      renameBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        toolsCloseMenu();
+        if (!menuTarget) return;
+        var dir = menuTarget.getAttribute('data-tools-folder') || '';
+        var name = menuTarget.getAttribute('data-tools-name') || dir || 'this folder';
+        var kids = toolsKids(menuTarget);
+        var exts = [];
+        try {
+          exts = JSON.parse((kids && kids.dataset.extensions) || '[]');
+        } catch (e) {}
+        var folderHint = document.querySelector('[data-rename-folder]');
+        if (folderHint) folderHint.textContent = name;
+        var find = document.querySelector('[data-rename-find]');
+        var replace = document.querySelector('[data-rename-replace]');
+        if (replace) replace.value = '';
+        var err = document.querySelector('[data-rename-error]');
+        var ok = document.querySelector('[data-rename-ok]');
+        var log = document.querySelector('[data-rename-log]');
+        if (err) { err.hidden = true; err.textContent = ''; }
+        if (ok) { ok.hidden = true; ok.textContent = ''; }
+        if (log) { log.hidden = true; log.innerHTML = ''; }
+        var fill = function (list, files) {
+          toolsFillExts(list || []);
+          var names = [];
+          if (files && files.length) {
+            names = files.map(function (f) { return typeof f === 'string' ? f : f.name; });
+          } else if (kids) {
+            try { names = JSON.parse(kids.dataset.files || '[]'); } catch (e) {}
+          }
+          toolsApplyFindSuggest(find, names);
+          overlayOpen('rename-group');
+          if (find) find.focus();
+        };
+        if (kids && kids.dataset.loaded === '1') {
+          fill(exts);
+          return;
+        }
+        toolsLoad(dir, kids, function (data) {
+          if (kids) {
+            kids.hidden = false;
+            var exp = menuTarget.querySelector('[data-tools-expand]');
+            if (exp) exp.setAttribute('aria-expanded', 'true');
+          }
+          fill(data ? data.extensions : [], data ? data.files : []);
+        });
+      });
+    }
+
+    var renameRun = document.querySelector('[data-rename-run]');
+    if (renameRun) {
+      renameRun.addEventListener('click', function () {
+        if (!renameUrl || !toolsSource || !menuTarget) return;
+        var findEl = document.querySelector('[data-rename-find]');
+        var replaceEl = document.querySelector('[data-rename-replace]');
+        var err = document.querySelector('[data-rename-error]');
+        var ok = document.querySelector('[data-rename-ok]');
+        var log = document.querySelector('[data-rename-log]');
+        var find = findEl ? findEl.value : '';
+        if (!find && findEl) {
+          find = (findEl.getAttribute('data-rename-suggest') || findEl.placeholder || '').trim();
+        }
+        if (!find || find === 'Text shared by the filenames') {
+          if (err) { err.hidden = false; err.textContent = 'Enter the text to find in filenames.'; }
+          return;
+        }
+        var exts = [];
+        document.querySelectorAll('[data-rename-ext]').forEach(function (box) {
+          if (box.checked) exts.push(box.getAttribute('data-rename-ext'));
+        });
+        if (!exts.length) {
+          if (err) { err.hidden = false; err.textContent = 'Choose at least one file type.'; }
+          return;
+        }
+        renameRun.disabled = true;
+        fetch(renameUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            src: toolsSource.value,
+            dir: menuTarget.getAttribute('data-tools-folder') || '',
+            find: find,
+            replace: replaceEl ? replaceEl.value : '',
+            extensions: exts
+          })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+          renameRun.disabled = false;
+          if (!data || !data.ok) {
+            if (err) { err.hidden = false; err.textContent = (data && data.error) || 'Rename failed.'; }
+            if (ok) ok.hidden = true;
+            return;
+          }
+          if (err) { err.hidden = true; err.textContent = ''; }
+          if (ok) {
+            ok.hidden = false;
+            ok.textContent = 'Renamed ' + (data.renamed || 0)
+              + (data.catalog ? ', catalog updated ' + data.catalog : '')
+              + (data.skipped ? ', skipped ' + data.skipped : '')
+              + (data.errors ? ', errors ' + data.errors : '') + '.';
+          }
+          if (log) {
+            log.innerHTML = '';
+            (data.changes || []).forEach(function (row) {
+              var li = document.createElement('li');
+              if (!row.ok) li.className = 'is-error';
+              li.textContent = row.from + ' → ' + row.to + (row.ok ? '' : ' (' + (row.error || 'failed') + ')');
+              log.appendChild(li);
+            });
+            log.hidden = !(data.changes && data.changes.length);
+          }
+          var kids = toolsKids(menuTarget);
+          if (kids) toolsLoad(menuTarget.getAttribute('data-tools-folder') || '', kids);
+        }).catch(function () {
+          renameRun.disabled = false;
+          if (err) { err.hidden = false; err.textContent = 'Rename failed.'; }
+        });
+      });
+    }
   }
 })();

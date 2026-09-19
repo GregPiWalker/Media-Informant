@@ -494,7 +494,115 @@ function catalog_store_find(string $catalog, string $id): ?array
     return catalog_hydrate_file($row, $candStmt);
 }
 
+function catalog_store_rename_file(string $catalog, string $root, string $oldRel, string $newRel): bool
+{
+    $pdo = db_open($catalog);
+    if ($pdo === null) {
+        return false;
+    }
+    $root = function_exists('settings_normalize_path') ? settings_normalize_path($root) : $root;
+    $oldRel = str_replace('\\', '/', ltrim($oldRel, '/'));
+    $newRel = str_replace('\\', '/', ltrim($newRel, '/'));
+    if ($root === '' || $oldRel === '' || $newRel === '' || $oldRel === $newRel) {
+        return false;
+    }
+    $oldKey = $root . "\n" . $oldRel;
+    $newKey = $root . "\n" . $newRel;
+    $oldHash = function_exists('cache_item_id') ? cache_item_id($oldRel, $root) : '';
+    $newId = function_exists('cache_item_id') ? cache_item_id($newRel, $root) : '';
+    $newFilename = basename($newRel);
+    $now = time();
+    $mtime = null;
+    $fullNew = $root . '/' . $newRel;
+    if (is_file($fullNew)) {
+        $mtime = (int) filemtime($fullNew);
+    }
+
+    try {
+        $pdo->beginTransaction();
+        $find = $pdo->prepare('SELECT id, path, item_id FROM files WHERE path = ? OR id = ?');
+        $find->execute([$oldKey, $oldHash !== '' ? $oldHash : $oldKey]);
+        $file = $find->fetch();
+        if (!is_array($file)) {
+            $pdo->rollBack();
+            return false;
+        }
+        $fileId = (string) $file['id'];
+        $itemId = (string) ($file['item_id'] ?? $fileId);
+        if ($itemId === '') {
+            $itemId = $fileId;
+        }
+        if ($newId === '') {
+            $newId = $fileId;
+        }
+
+        if ($newId !== $fileId) {
+            $pdo->prepare('DELETE FROM files WHERE (id = ? OR path = ?) AND id != ?')->execute([$newId, $newKey, $fileId]);
+            $pdo->prepare('DELETE FROM items WHERE id = ? AND id NOT IN (SELECT item_id FROM files WHERE item_id IS NOT NULL)')->execute([$newId]);
+        }
+
+        $extras = [];
+        $exStmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ?');
+        $exStmt->execute([$itemId]);
+        $exRow = $exStmt->fetch();
+        if (is_array($exRow)) {
+            $extras = catalog_json_decode($exRow['extras_json'] ?? null);
+        }
+        $extras['root'] = $root;
+        $extras['path'] = $newRel;
+        $extras['filename'] = $newFilename;
+        $extrasJson = catalog_json_encode($extras);
+
+        if ($newId === $fileId) {
+            $sql = 'UPDATE files SET path = ?';
+            $args = [$newKey];
+            if ($mtime !== null) {
+                $sql .= ', mtime = ?';
+                $args[] = $mtime;
+            }
+            $sql .= ' WHERE id = ?';
+            $args[] = $fileId;
+            $pdo->prepare($sql)->execute($args);
+            $pdo->prepare('UPDATE items SET extras_json = ?, updated_at = ? WHERE id = ?')->execute([$extrasJson, $now, $itemId]);
+            $pdo->commit();
+            return true;
+        }
+
+        $copiedItem = $pdo->prepare('INSERT INTO items (id, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, extras_json, created_at, updated_at)
+            SELECT ?, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, ?, created_at, ?
+            FROM items WHERE id = ?');
+        $copiedItem->execute([$newId, $extrasJson, $now, $itemId]);
+        $leafItem = $copiedItem->rowCount() > 0 ? $newId : ($itemId !== '' ? $itemId : $newId);
+
+        $fileCopy = 'INSERT INTO files (id, path, item_id, parsed_title, parsed_year, size, mtime, state, match_source, grok_verified, confidence, kind)
+            SELECT ?, ?, ?, parsed_title, parsed_year, size, ' . ($mtime !== null ? '?' : 'mtime') . ', state, match_source, grok_verified, confidence, kind
+            FROM files WHERE id = ?';
+        $fileArgs = [$newId, $newKey, $leafItem];
+        if ($mtime !== null) {
+            $fileArgs[] = $mtime;
+        }
+        $fileArgs[] = $fileId;
+        $pdo->prepare($fileCopy)->execute($fileArgs);
+
+        $pdo->prepare('UPDATE file_candidates SET file_id = ? WHERE file_id = ?')->execute([$newId, $fileId]);
+        $pdo->prepare('DELETE FROM files WHERE id = ?')->execute([$fileId]);
+        if ($itemId === $fileId) {
+            $pdo->prepare('UPDATE items SET parent_id = ? WHERE parent_id = ?')->execute([$newId, $fileId]);
+            $pdo->prepare('DELETE FROM items WHERE id = ?')->execute([$fileId]);
+        }
+        $pdo->commit();
+        return true;
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        db_last_error('Could not update catalog path: ' . $e->getMessage());
+        return false;
+    }
+}
+
 function catalog_store_update_one(string $catalog, array $item): bool
+
 {
     $pdo = db_open($catalog);
     if ($pdo === null) {

@@ -145,10 +145,10 @@ function scan_request_cancel(): void
         scan_status_write([
             'cancel_requested' => true,
             'phase' => 'stopping',
-            'message' => 'Stop requested. Finishing the current step…',
+            'message' => 'Stop requested. Finishing the current ' . scan_catalog_label((string) ($status['catalog'] ?? 'video')) . ' step…',
         ]);
         if (function_exists('app_log')) {
-            app_log('scan', 'Stop requested for the TMDB scan.', [], 'warn');
+            app_log('scan', 'Stop requested for the ' . scan_catalog_title((string) ($status['catalog'] ?? 'video')) . ' scan.', [], 'warn');
         }
     }
 }
@@ -439,7 +439,176 @@ function scan_status_defaults(): array
         'grok_enabled' => false,
         'grok_pause' => true,
         'kind' => 'scan',
+        'catalog' => 'video',
+        'lookup_targets' => scan_options_defaults(),
     ];
+}
+
+function scan_catalog_normalize(string $catalog): string
+{
+    return $catalog === 'music' ? 'music' : 'video';
+}
+
+function scan_catalog_label(string $catalog): string
+{
+    return scan_catalog_normalize($catalog) === 'music' ? 'music' : 'video';
+}
+
+function scan_catalog_title(string $catalog): string
+{
+    return scan_catalog_normalize($catalog) === 'music' ? 'Music' : 'Video';
+}
+
+function scan_job_catalog(array $job): string
+{
+    return scan_catalog_normalize((string) ($job['catalog'] ?? 'video'));
+}
+
+function scan_lock_path(): string
+{
+    return CACHE_DIR . '/scan.lock';
+}
+
+/** @return resource|false */
+function scan_lock_open()
+{
+    return @fopen(scan_lock_path(), 'c');
+}
+
+/** @param resource|false $lock */
+function scan_lock_try($lock): bool
+{
+    return is_resource($lock) && flock($lock, LOCK_EX | LOCK_NB);
+}
+
+/** @param resource|false $lock */
+function scan_lock_release($lock): void
+{
+    if (!is_resource($lock)) {
+        return;
+    }
+    flock($lock, LOCK_UN);
+    fclose($lock);
+}
+
+function scan_busy_status(): array
+{
+    $scan = scan_status_read();
+    if (($scan['state'] ?? '') === 'running') {
+        return array_merge($scan, [
+            'ok' => true,
+            'busy' => true,
+            'kind' => 'scan',
+        ]);
+    }
+    if (function_exists('grok_status_read')) {
+        $grok = grok_status_read();
+        if (($grok['state'] ?? '') === 'running') {
+            return array_merge($grok, [
+                'ok' => true,
+                'busy' => true,
+                'kind' => 'grok',
+            ]);
+        }
+    }
+    return array_merge($scan, [
+        'ok' => true,
+        'busy' => true,
+        'kind' => 'scan',
+    ]);
+}
+
+function scan_options_defaults(): array
+{
+    return [
+        'unidentified' => true,
+        'unmatched' => true,
+        'matched_grok' => false,
+        'matched_direct' => false,
+    ];
+}
+
+function scan_options_path(string $catalog = 'video'): string
+{
+    return CACHE_DIR . '/scan-options-' . scan_catalog_normalize($catalog) . '.json';
+}
+
+function scan_option_bool(mixed $value): bool
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+    if (is_int($value) || is_float($value)) {
+        return (int) $value === 1;
+    }
+    $s = strtolower(trim((string) $value));
+    return $s === '1' || $s === 'true' || $s === 'yes' || $s === 'on';
+}
+
+function scan_options_read(string $catalog = 'video'): array
+{
+    $defaults = scan_options_defaults();
+    $data = function_exists('cache_read_json') ? cache_read_json(scan_options_path($catalog)) : null;
+    if (!is_array($data)) {
+        return $defaults;
+    }
+    foreach ($defaults as $key => $fallback) {
+        if (array_key_exists($key, $data)) {
+            $defaults[$key] = scan_option_bool($data[$key]);
+        }
+    }
+    return $defaults;
+}
+
+function scan_options_write(string $catalog, array $options): array
+{
+    $next = scan_options_write_normalize($options);
+    if (function_exists('cache_write_atomic')) {
+        cache_write_atomic(scan_options_path($catalog), $next);
+    }
+    return $next;
+}
+
+function scan_options_summary(array $targets): string
+{
+    $labels = [
+        'unidentified' => 'unidentified',
+        'unmatched' => 'unmatched',
+        'matched_grok' => 'matched (Grok)',
+        'matched_direct' => 'matched (Direct)',
+    ];
+    $on = [];
+    foreach ($labels as $key => $label) {
+        if (!empty($targets[$key])) {
+            $on[] = $label;
+        }
+    }
+    return $on === [] ? 'no file states' : implode(', ', $on);
+}
+
+function scan_lookup_targets_from(array $job): array
+{
+    $targets = $job['lookup_targets'] ?? null;
+    if (is_array($targets)) {
+        return scan_options_write_normalize($targets);
+    }
+    $mode = scan_normalize_mode((string) ($job['mode'] ?? 'retry'));
+    $defaults = scan_options_defaults();
+    if ($mode === 'unidentified') {
+        $defaults['unmatched'] = false;
+    }
+    return $defaults;
+}
+
+function scan_options_write_normalize(array $options): array
+{
+    $next = scan_options_defaults();
+    foreach ($next as $key => $_) {
+        if (array_key_exists($key, $options)) {
+            $next[$key] = scan_option_bool($options[$key]);
+        }
+    }
+    return $next;
 }
 
 function scan_grok_cost_fields(array $job): array
@@ -478,6 +647,8 @@ function scan_status_read(): array
         }
     }
     $data['kind'] = 'scan';
+    $data['catalog'] = scan_catalog_normalize((string) ($data['catalog'] ?? 'video'));
+    $data['lookup_targets'] = scan_lookup_targets_from(['lookup_targets' => $data['lookup_targets'] ?? null, 'mode' => $data['mode'] ?? 'retry']);
     return $data;
 }
 
@@ -486,28 +657,32 @@ function scan_normalize_mode(string $mode): string
     return $mode === 'unidentified' ? 'unidentified' : 'retry';
 }
 
-function scan_file_needs_lookup(?array $prev, bool $unchanged, string $mode): bool
+function scan_file_needs_lookup(?array $prev, bool $unchanged, array $targets): bool
 {
     if ($prev === null) {
-        return true;
+        return !empty($targets['unidentified']);
     }
     if (library_is_manual($prev)) {
         return false;
     }
     $status = library_item_status($prev);
-    if ($status === 'matched' && !empty($prev['tmdb_id'])) {
-        if ($unchanged) {
-            return false;
-        }
-        return $mode !== 'unidentified';
-    }
     if ($status === 'unidentified') {
-        return true;
+        return !empty($targets['unidentified']);
     }
     if ($status === 'unmatched') {
-        return $mode !== 'unidentified';
+        return !empty($targets['unmatched']);
     }
-    return true;
+    if ($status === 'matched') {
+        $source = library_match_source($prev);
+        if ($source === 'grok') {
+            return !empty($targets['matched_grok']);
+        }
+        if ($source === 'direct') {
+            return !empty($targets['matched_direct']);
+        }
+        return false;
+    }
+    return !empty($targets['unidentified']);
 }
 
 function scan_tally_status(array &$job, string $status): void
@@ -521,13 +696,13 @@ function scan_tally_status(array &$job, string $status): void
     }
 }
 
-function scan_lookup_message(int $found, int $pending, string $mode = 'retry'): string
+function scan_lookup_message(int $found, int $pending, string $catalog = 'video'): string
 {
+    $noun = scan_catalog_label($catalog);
     if ($pending <= 0) {
-        return 'Refreshing catalog…';
+        return 'Refreshing ' . $noun . ' catalog…';
     }
-    $kind = $mode === 'unidentified' ? 'unidentified' : 'unresolved';
-    return 'Performing TMDB look-ups: found ' . $found . ' of ' . $pending . ' ' . $kind . ' titles.';
+    return 'Looking up ' . $noun . ' titles on TMDB: found ' . $found . ' of ' . $pending . '.';
 }
 
 function scan_status_write(array $patch): void
@@ -665,14 +840,16 @@ function scan_job_publish(array $job, array $extra = []): void
     $grokLeft = max(0, count($grokQueue) - $grokIndex);
     $pauseEach = function_exists('grok_dev_pause_each_batch') && grok_dev_pause_each_batch();
     $paused = !empty($job['wait_continue']) && !$stopping && $pauseEach;
+    $catalog = scan_job_catalog($job);
+    $noun = scan_catalog_label($catalog);
     $message = (string) ($job['message'] ?? '');
     if ($message === '') {
         if ($stopping) {
-            $message = 'Stop requested. Saving progress…';
+            $message = 'Stop requested. Saving ' . $noun . ' catalog…';
         } elseif ($phase === 'walk') {
-            $message = 'Walking video folders…';
+            $message = 'Walking ' . $noun . ' folders…';
         } else {
-            $message = scan_lookup_message($found, $pending, (string) ($job['mode'] ?? 'retry'));
+            $message = scan_lookup_message($found, $pending, $catalog);
         }
     }
     scan_status_write(array_merge([
@@ -689,6 +866,8 @@ function scan_job_publish(array $job, array $extra = []): void
         'unmatched' => (int) ($job['unmatched'] ?? 0),
         'unidentified' => (int) ($job['unidentified'] ?? 0),
         'mode' => scan_normalize_mode((string) ($job['mode'] ?? 'retry')),
+        'catalog' => $catalog,
+        'lookup_targets' => scan_lookup_targets_from($job),
         'message' => $message,
         'paused' => $paused,
         'kind' => 'scan',
@@ -703,14 +882,21 @@ function scan_job_publish(array $job, array $extra = []): void
     ], scan_grok_cost_fields($job), $extra));
 }
 
-function scan_job_begin(string $mode = 'retry'): array
+function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): array
 {
     cache_init();
     if (!cache_writable()) {
         throw new RuntimeException('cache/ is not writable. Grant the http user write access.');
     }
 
+    $catalog = scan_catalog_normalize($catalog);
+    if ($catalog === 'music') {
+        throw new RuntimeException('Music scanning is not available yet.');
+    }
     $mode = scan_normalize_mode($mode);
+    $targets = scan_options_read($catalog);
+    $title = scan_catalog_title($catalog);
+    $noun = scan_catalog_label($catalog);
     scan_clear_cancel();
     $roots = settings_video_roots();
     if ($roots === []) {
@@ -719,7 +905,11 @@ function scan_job_begin(string $mode = 'retry'): array
 
     $started = time();
     if (function_exists('app_log')) {
-        app_log('scan', 'TMDB scan started (' . ($mode === 'unidentified' ? 'unidentified only' : 'unmatched and unidentified') . ').', ['mode' => $mode]);
+        app_log('scan', $title . ' scan started (' . scan_options_summary($targets) . ').', [
+            'mode' => $mode,
+            'catalog' => $catalog,
+            'lookup_targets' => $targets,
+        ]);
     }
     scan_status_write([
         'state' => 'running',
@@ -735,6 +925,8 @@ function scan_job_begin(string $mode = 'retry'): array
         'unmatched' => 0,
         'unidentified' => 0,
         'mode' => $mode,
+        'catalog' => $catalog,
+        'lookup_targets' => $targets,
         'paused' => false,
         'grok_queued' => 0,
         'grok_attempted' => 0,
@@ -748,7 +940,7 @@ function scan_job_begin(string $mode = 'retry'): array
         'grok_cached_tokens' => 0,
         'grok_cost_usd' => 0.0,
         'grok_cost_label' => '$0.0000',
-        'message' => 'Walking video folders…',
+        'message' => 'Walking ' . $noun . ' folders…',
     ]);
 
     $files = [];
@@ -772,14 +964,16 @@ function scan_job_begin(string $mode = 'retry'): array
         }
         $walkedRoots[] = $norm;
         $base = count($files);
-        $batch = scan_files($root, null, static function (int $n) use ($base, $started): void {
+        $batch = scan_files($root, null, static function (int $n) use ($base, $started, $noun, $catalog, $targets): void {
             $count = $base + $n;
             scan_status_write([
                 'state' => 'running',
                 'phase' => 'walk',
                 'started_at' => $started,
                 'processed' => $count,
-                'message' => 'Walking video folders… ' . $count . ' files found.',
+                'catalog' => $catalog,
+                'lookup_targets' => $targets,
+                'message' => 'Walking ' . $noun . ' folders… ' . $count . ' files found.',
             ]);
         });
         foreach ($batch as $file) {
@@ -791,7 +985,9 @@ function scan_job_begin(string $mode = 'retry'): array
             'phase' => 'walk',
             'started_at' => $started,
             'processed' => $walked,
-            'message' => 'Walking video folders… ' . $walked . ' files found.',
+            'catalog' => $catalog,
+            'lookup_targets' => $targets,
+            'message' => 'Walking ' . $noun . ' folders… ' . $walked . ' files found.',
         ]);
     }
 
@@ -803,21 +999,25 @@ function scan_job_begin(string $mode = 'retry'): array
             'phase' => 'walk',
             'cancel_requested' => false,
             'started_at' => $started,
-            'message' => 'Scan stopped during the folder walk. The catalog was left as it was.',
+            'catalog' => $catalog,
+            'lookup_targets' => $targets,
+            'message' => $title . ' scan stopped during the folder walk. The catalog was left as it was.',
         ]);
         if (function_exists('app_log')) {
-            app_log('scan', 'Scan stopped during the folder walk.', ['files' => count($files)], 'warn');
+            app_log('scan', $title . ' scan stopped during the folder walk.', ['files' => count($files)], 'warn');
         }
         return scan_status_read();
     }
 
     if ($walkedRoots === [] && $absentRoots !== []) {
-        $msg = 'All video sources are absent. Catalog unchanged.';
+        $msg = 'All ' . $noun . ' sources are absent. Catalog unchanged.';
         scan_status_write([
             'state' => 'done',
             'phase' => 'done',
             'cancel_requested' => false,
             'started_at' => $started,
+            'catalog' => $catalog,
+            'lookup_targets' => $targets,
             'message' => $msg,
         ]);
         if (function_exists('app_log')) {
@@ -837,7 +1037,7 @@ function scan_job_begin(string $mode = 'retry'): array
         $unchanged = $prev
             && (int) ($prev['mtime'] ?? 0) === $file['mtime']
             && (int) ($prev['size'] ?? 0) === $file['size'];
-        if (scan_file_needs_lookup($prev, $unchanged, $mode)) {
+        if (scan_file_needs_lookup($prev, $unchanged, $targets)) {
             $pending++;
         }
     }
@@ -846,6 +1046,8 @@ function scan_job_begin(string $mode = 'retry'): array
         'state' => 'running',
         'phase' => 'lookup',
         'mode' => $mode,
+        'catalog' => $catalog,
+        'lookup_targets' => $targets,
         'started_at' => $started,
         'roots' => $roots,
         'walked_roots' => $walkedRoots,
@@ -871,7 +1073,7 @@ function scan_job_begin(string $mode = 'retry'): array
         'grok_cost_usd' => 0.0,
         'tmdb_item' => 0,
         'wait_continue' => false,
-        'message' => scan_lookup_message(0, $pending, $mode),
+        'message' => scan_lookup_message(0, $pending, $catalog),
     ];
     scan_job_write($job);
     scan_job_publish($job);
@@ -890,11 +1092,12 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
     $path = (string) ($file['path'] ?? '');
     $root = (string) ($file['root'] ?? '');
     $mode = scan_normalize_mode((string) ($job['mode'] ?? 'retry'));
+    $targets = scan_lookup_targets_from($job);
     $prev = $oldByPath[$root . "\n" . $path] ?? $oldByPath[$path] ?? null;
     $unchanged = $prev
         && (int) ($prev['mtime'] ?? 0) === (int) ($file['mtime'] ?? 0)
         && (int) ($prev['size'] ?? 0) === (int) ($file['size'] ?? 0);
-    $needsLookup = scan_file_needs_lookup($prev, $unchanged, $mode);
+    $needsLookup = scan_file_needs_lookup($prev, $unchanged, $targets);
 
     if ($prev && (!$needsLookup || $skipLookup)) {
         $kept = library_carry_file($prev, $file);
@@ -1006,7 +1209,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         }
     }
 
-    if ($skipLookup || !tmdb_has_key() || !function_exists('curl_init')) {
+    if ($skipLookup || !$needsLookup || !tmdb_has_key() || !function_exists('curl_init')) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         scan_tally_status($job, 'unidentified');
@@ -1189,7 +1392,9 @@ function scan_job_finalize(array $job, bool $cancelled): array
         'grok_cleared' => (int) ($job['grok_cleared'] ?? 0),
         'grok_queued' => is_array($job['grok_queue'] ?? null) ? count($job['grok_queue']) : 0,
         'grok_left' => 0,
-        'message' => ($cancelled ? 'Scan stopped. ' : 'Scan finished. ')
+        'catalog' => scan_job_catalog($job),
+        'lookup_targets' => scan_lookup_targets_from($job),
+        'message' => ($cancelled ? scan_catalog_title(scan_job_catalog($job)) . ' scan stopped. ' : scan_catalog_title(scan_job_catalog($job)) . ' scan finished. ')
             . 'TMDB found ' . $found . '. Grok matched ' . (int) ($job['grok_matched'] ?? 0)
             . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.',
     ], scan_grok_cost_fields($job)));
@@ -1207,7 +1412,7 @@ function scan_job_finalize(array $job, bool $cancelled): array
             . ' est=' . $label);
     }
     if (function_exists('app_log')) {
-        app_log('scan', ($cancelled ? 'Scan stopped. ' : 'Scan finished. ')
+        app_log('scan', ($cancelled ? scan_catalog_title(scan_job_catalog($job)) . ' scan stopped. ' : scan_catalog_title(scan_job_catalog($job)) . ' scan finished. ')
             . 'Found ' . $found . ' of ' . $pending . ', lookups ' . (int) ($job['lookups'] ?? 0) . '.', [
             'found' => $found,
             'pending' => $pending,
@@ -1228,7 +1433,7 @@ function scan_job_continue(bool $resumePause = false): array
     if (scan_cancelled()) {
         $job['cancel'] = true;
         $job['phase'] = 'stopping';
-        $job['message'] = 'Stop requested. Saving progress…';
+        $job['message'] = 'Stop requested. Saving ' . scan_catalog_label(scan_job_catalog($job)) . ' catalog…';
         scan_job_publish($job);
         scan_job_write_library($job);
         return scan_job_finalize($job, true);
@@ -1246,7 +1451,7 @@ function scan_job_continue(bool $resumePause = false): array
         }
         $job['wait_continue'] = false;
         $job['phase'] = 'lookup';
-        $job['message'] = 'Continuing scan…';
+        $job['message'] = 'Continuing ' . scan_catalog_label(scan_job_catalog($job)) . ' scan…';
         scan_job_write($job);
     }
 
@@ -1310,7 +1515,7 @@ function scan_job_continue(bool $resumePause = false): array
             $lookupsThisTick++;
             $draining = false;
             $waiting = scan_grok_pending($job);
-            $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], (string) ($job['mode'] ?? 'retry'));
+            $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], scan_job_catalog($job));
             if ($waiting > 0) {
                 $job['message'] .= ' Grok queue ' . $waiting . '/' . scan_grok_batch_size() . '.';
             }
@@ -1320,7 +1525,7 @@ function scan_job_continue(bool $resumePause = false): array
                 return scan_job_run_grok_batch($job, $index >= $total);
             }
         } elseif ($draining && $progress === 1) {
-            $job['message'] = 'Updating catalog… ' . $index . ' / ' . $total . ' files.';
+            $job['message'] = 'Updating ' . scan_catalog_label(scan_job_catalog($job)) . ' catalog… ' . $index . ' / ' . $total . ' files.';
             scan_job_publish($job);
         }
     }
@@ -1334,10 +1539,10 @@ function scan_job_continue(bool $resumePause = false): array
     }
 
     if ($draining) {
-        $job['message'] = 'Updating catalog… ' . $index . ' / ' . $total . ' files.';
+        $job['message'] = 'Updating ' . scan_catalog_label(scan_job_catalog($job)) . ' catalog… ' . $index . ' / ' . $total . ' files.';
     } else {
         $waiting = scan_grok_pending($job);
-        $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], (string) ($job['mode'] ?? 'retry'));
+        $job['message'] = scan_lookup_message((int) $job['found'], (int) $job['pending'], scan_job_catalog($job));
         if ($waiting > 0) {
             $job['message'] .= ' Grok queue ' . $waiting . '/' . scan_grok_batch_size() . '.';
         }
@@ -1421,7 +1626,7 @@ function scan_job_run_grok_batch(array $job, bool $filesDone): array
     }
 
     $job['wait_continue'] = false;
-    $job['message'] = 'Grok batch done. Continuing TMDB…';
+    $job['message'] = 'Grok batch done. Continuing ' . scan_catalog_label(scan_job_catalog($job)) . ' TMDB…';
     scan_job_write($job);
     scan_job_publish($job, ['paused' => false]);
     $status = scan_status_read();
@@ -1444,10 +1649,11 @@ function scan_grok_is_running(): bool
     return (grok_status_read()['state'] ?? '') === 'running';
 }
 
-function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false): array
+function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false, string $catalog = 'video'): array
 {
     cache_init();
     $mode = scan_normalize_mode($mode);
+    $catalog = scan_catalog_normalize($catalog);
     $job = scan_job_read();
     if (($job['state'] ?? '') === 'running') {
         return scan_job_continue($resumePause);
@@ -1455,16 +1661,17 @@ function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resum
     if (!$allowStart) {
         $status = scan_status_read();
         if (($status['state'] ?? '') === 'running') {
+            $title = scan_catalog_title((string) ($status['catalog'] ?? 'video'));
             scan_status_write([
                 'state' => 'error',
                 'cancel_requested' => false,
-                'message' => 'Scan interrupted. Start again from Config.',
+                'message' => $title . ' scan interrupted. Start again from the scan page.',
             ]);
             return scan_status_read();
         }
         return $status;
     }
-    return scan_job_begin($mode);
+    return scan_job_begin($mode, $catalog);
 }
 
 function scan_build_library(?callable $progress = null): array

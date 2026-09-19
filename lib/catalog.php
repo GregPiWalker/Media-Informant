@@ -337,7 +337,7 @@ final class CatalogRecord
                 'title' => $grouped ? lower($seriesTitle) : lower($title),
                 'year' => $year ? sprintf('%04d', (int) $year) : '0000',
                 'status' => library_status_sort_key($item),
-                'genres' => lower($genreLabel),
+                'genres' => lower(catalog_first_genre_name($genres)),
                 'episode' => sprintf('%02d%03d', $season ?? 0, $episode ?? 0),
             ],
             $genres,
@@ -388,12 +388,101 @@ final class CatalogRecord
                 'artist' => lower($artist),
                 'album' => lower($album),
                 'year' => $year ? sprintf('%04d', (int) $year) : '0000',
-                'genres' => lower($genreLabel),
+                'genres' => lower(catalog_first_genre_name($genres)),
             ],
             $genres,
             (string) ($item['status'] ?? 'unmatched'),
         );
     }
+}
+
+/** @param list<string> $genres */
+function catalog_first_genre_name(array $genres): string
+{
+    foreach ($genres as $genre) {
+        $genre = trim((string) $genre);
+        if ($genre !== '') {
+            return $genre;
+        }
+    }
+    return '';
+}
+
+function catalog_title_bucket(string $sortTitle): string
+{
+    $s = trim($sortTitle);
+    if ($s === '') {
+        return '#';
+    }
+    if (function_exists('mb_strlen') && function_exists('mb_substr') && function_exists('mb_strtoupper')) {
+        $len = mb_strlen($s, 'UTF-8');
+        for ($i = 0; $i < $len; $i++) {
+            $ch = mb_substr($s, $i, 1, 'UTF-8');
+            if (preg_match('/^\p{L}$/u', $ch)) {
+                return mb_strtoupper($ch, 'UTF-8');
+            }
+            if (preg_match('/^\p{N}$/u', $ch)) {
+                return $ch;
+            }
+        }
+        return '#';
+    }
+    $len = strlen($s);
+    for ($i = 0; $i < $len; $i++) {
+        $ch = $s[$i];
+        if (ctype_alpha($ch)) {
+            return strtoupper($ch);
+        }
+        if (ctype_digit($ch)) {
+            return $ch;
+        }
+    }
+    return '#';
+}
+
+function catalog_poster_bucket(CatalogGroup $group, string $sort): string
+{
+    $head = $group->head;
+    if ($sort === 'year') {
+        $year = (string) ($head->sortKeys['year'] ?? '');
+        if ($year === '' || $year === '0000') {
+            return 'Unknown';
+        }
+        return $year;
+    }
+    if ($sort === 'status') {
+        $status = trim((string) ($head->cells['status'] ?? ''));
+        return ($status !== '' && $status !== '—') ? $status : 'Unidentified';
+    }
+    if ($sort === 'genres') {
+        $genre = catalog_first_genre_name($head->genres);
+        return $genre !== '' ? $genre : 'Uncategorized';
+    }
+    $title = (string) ($head->sortKeys['title'] ?? '');
+    if ($title === '') {
+        $title = $group->isSeries() ? $head->seriesTitle : $head->title;
+    }
+    return catalog_title_bucket($title);
+}
+
+/** @return array<string, string> */
+function catalog_poster_buckets(CatalogGroup $group): array
+{
+    return [
+        'title' => catalog_poster_bucket($group, 'title'),
+        'year' => catalog_poster_bucket($group, 'year'),
+        'status' => catalog_poster_bucket($group, 'status'),
+        'genres' => catalog_poster_bucket($group, 'genres'),
+    ];
+}
+
+function catalog_poster_bucket_attrs(CatalogGroup $group): string
+{
+    $out = '';
+    foreach (catalog_poster_buckets($group) as $key => $label) {
+        $out .= ' data-bucket-' . $key . '="' . h($label) . '"';
+    }
+    return $out;
 }
 
 function catalog_video_schema(): CatalogSchema
@@ -476,6 +565,9 @@ final class CatalogGroup
     /** @return list<string> */
     public function genres(): array
     {
+        if ($this->isSeries() && $this->head->genres !== []) {
+            return $this->head->genres;
+        }
         $seen = [];
         $out = [];
         foreach ($this->members as $member) {

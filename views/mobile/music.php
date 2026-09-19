@@ -14,5 +14,6 @@ declare(strict_types=1);
     <h1>Music</h1>
     <p>This catalog will scan the music folders from Config, read artist and album from folders and tags, and show cover art so you can browse tracks on the NAS. Nothing is scanned or cached here yet. You can already set those folders in Config.</p>
     <a class="btn btn-accent" href="<?= h(app_href('config/index.php')) ?>">Open Config</a>
+    <a class="btn btn-ghost" href="<?= h(app_href('music/scan.php')) ?>">Open music scan page</a>
   </section>
 </main>

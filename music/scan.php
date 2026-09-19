@@ -10,26 +10,19 @@ require dirname(__DIR__) . '/lib/grok.php';
 cache_init();
 header('Cache-Control: no-store');
 
-$catalog = 'video';
+$catalog = 'music';
 $status = scan_status_read();
 $running = ($status['state'] ?? '') === 'running';
 $stopping = $running && (!empty($status['cancel_requested']) || ($status['phase'] ?? '') === 'stopping');
-$runMode = (string) ($_GET['run'] ?? '');
-if ($runMode === '1' || $runMode === 'unidentified' || $runMode === 'retry') {
-    $runMode = 'retry';
-} else {
-    $runMode = '';
-}
-$grokAvailable = grok_resolve_available();
-$grokOn = grok_live_enabled();
-$showGrokUi = $grokAvailable && $grokOn;
-$scanEnabled = true;
+$runMode = '';
+$grokAvailable = false;
+$grokOn = false;
+$showGrokUi = false;
+$scanEnabled = false;
 $scanOptions = scan_options_read($catalog);
-$idleCopy = $showGrokUi
-    ? 'One video scan: TMDB lookups queue Grok work. Every 25 queued titles, Grok runs a batch. Continue after each Grok batch.'
-    : 'Video scan uses TMDB only. Unmatched titles stay unmatched unless you turn Grok on.';
+$idleCopy = 'Music scanning is not available yet. You can set music folders in Config and review options here. A video scan and a music scan cannot run at the same time.';
 
-render_start('Video scan · Media Informant');
+render_start('Music scan · Media Informant');
 render_header(['section' => 'config', 'branches' => true]);
 require app_view('scan');
 render_end();

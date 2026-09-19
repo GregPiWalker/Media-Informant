@@ -105,7 +105,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <section class="form-section">
       <h2>Video library</h2>
       <p class="hint">Walk the video folders above and look up titles on TMDB, then Grok if enabled. Save folder changes first.</p>
-      <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Open scan page</a>
+      <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Open video scan page</a>
     </section>
     </div>
 
@@ -154,6 +154,12 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <?php endforeach; ?>
       </div>
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="music-exclude">Add excluded path</button>
+    </section>
+
+    <section class="form-section">
+      <h2>Music library</h2>
+      <p class="hint">Music scanning is not available yet. You can open the page to review options. A music scan cannot run at the same time as a video scan.</p>
+      <a class="btn btn-accent btn-block" href="<?= h(app_href('music/scan.php')) ?>">Open music scan page</a>
     </section>
     </div>
 

@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-// Music feature stub. Future: music/scan.php, album/track detail, lib parser + cache under cache/music/.
+// Music catalog stub. Scan page exists at music/scan.php; Start stays disabled until Music is built out.
 
 require dirname(__DIR__) . '/lib/config.php';
 

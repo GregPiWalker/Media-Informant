@@ -13,9 +13,8 @@ cache_init();
 set_time_limit(60);
 grok_request_cancel();
 
-$lockPath = CACHE_DIR . '/scan.lock';
-$lock = @fopen($lockPath, 'c');
-if ($lock !== false && flock($lock, LOCK_EX | LOCK_NB)) {
+$lock = scan_lock_open();
+if (scan_lock_try($lock)) {
     $job = grok_job_read();
     if (($job['state'] ?? '') === 'running') {
         grok_job_halt($job);
@@ -32,7 +31,8 @@ if ($lock !== false && flock($lock, LOCK_EX | LOCK_NB)) {
             ]);
         }
     }
-    flock($lock, LOCK_UN);
+    scan_lock_release($lock);
+} elseif (is_resource($lock)) {
     fclose($lock);
 }
 

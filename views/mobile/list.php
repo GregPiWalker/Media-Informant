@@ -129,6 +129,9 @@ $view = $prefs->view;
           <input type="checkbox" data-kind-filter="documentary"<?= $prefs->showsKind('documentary') ? ' checked' : '' ?>>
           Documentaries
         </label>
+        <?php if ($view === 'poster'): ?>
+        <button type="button" class="kind-chip catalog-sort-btn" data-sort-open aria-haspopup="true" aria-controls="sort-panel" aria-expanded="false">Sort</button>
+        <?php endif; ?>
       </div>
       <?php if ($categoryList !== [] || !empty($categoryHasNone)): ?>
       <div class="kind-filter" role="group" aria-label="Filter by category">
@@ -149,6 +152,16 @@ $view = $prefs->view;
           Uncategorized
         </label>
         <?php endif; ?>
+      </div>
+      <?php endif; ?>
+      <?php if ($view === 'poster'): ?>
+      <div class="col-panel" id="sort-panel" data-sort-panel hidden role="menu" aria-label="Sort posters">
+        <?php foreach (['title' => 'Title', 'year' => 'Year', 'status' => 'Status', 'genres' => 'Genres'] as $sortId => $sortLabel): ?>
+        <button type="button" class="col-option sort-option<?= $prefs->sort === $sortId ? ' is-active' : '' ?>" data-sort="<?= h($sortId) ?>" role="menuitemradio" aria-checked="<?= $prefs->sort === $sortId ? 'true' : 'false' ?>">
+          <?= h($sortLabel) ?>
+          <span class="sort-ind" data-sort-ind="<?= h($sortId) ?>"></span>
+        </button>
+        <?php endforeach; ?>
       </div>
       <?php endif; ?>
     </div>
@@ -274,11 +287,18 @@ $view = $prefs->view;
     <?php if ($view === 'poster'): ?>
     <section class="catalog-layout" data-layout="poster">
       <div class="poster-grid" data-poster-grid>
-        <?php foreach ($groups as $group):
+        <?php
+        $posterBucket = '';
+        foreach ($groups as $group):
             $head = $group->head;
             $title = $group->isSeries() ? $head->seriesTitle : $head->title;
-            ?>
-        <a class="card" href="<?= h($head->href) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?><?= $group->isSeries() ? ' data-open-list="' . h($group->id) . '"' : '' ?>>
+            $bucket = catalog_poster_bucket($group, $prefs->sort);
+            if ($bucket !== $posterBucket):
+                $posterBucket = $bucket;
+                ?>
+        <h2 class="poster-bucket" data-poster-bucket><?= h($bucket) ?></h2>
+            <?php endif; ?>
+        <a class="card" href="<?= h($head->href) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?><?= $group->isSeries() ? ' data-open-list="' . h($group->id) . '"' : '' ?>>
           <div class="poster">
             <?php if ($head->poster): ?>
             <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">

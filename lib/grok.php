@@ -288,7 +288,7 @@ function grok_cancelled(): bool
 
 function grok_work_lock_held(): bool
 {
-    $path = CACHE_DIR . '/scan.lock';
+    $path = function_exists('scan_lock_path') ? scan_lock_path() : (CACHE_DIR . '/scan.lock');
     $lock = @fopen($path, 'c');
     if ($lock === false) {
         return false;

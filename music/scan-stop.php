@@ -5,7 +5,6 @@ require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/parser.php';
-require dirname(__DIR__) . '/lib/tmdb.php';
 require dirname(__DIR__) . '/lib/scanner.php';
 
 cache_init();
@@ -40,15 +39,15 @@ if ($ajax) {
     exit;
 }
 
-render_start('Stopping video scan · Media Informant');
-render_header(['section' => 'video', 'branches' => true]);
+render_start('Stopping music scan · Media Informant');
+render_header(['section' => 'music', 'branches' => true]);
 ?>
 <main class="page scan-page">
   <section class="panel">
     <p class="scan-kicker">Stopping</p>
-    <h1>Video scan stop requested</h1>
-    <p>The video scan will halt as soon as it finishes the title it is on. Lookups already done stay in the catalog. New files not looked up yet are listed from their names.</p>
-    <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Back to video scan</a>
+    <h1>Music scan stop requested</h1>
+    <p>If a scan is running, it will halt as soon as it finishes the current step. Music scanning is not available yet.</p>
+    <a class="btn btn-accent btn-block" href="<?= h(app_href('music/scan.php')) ?>">Back to music scan</a>
   </section>
 </main>
 <?php

@@ -20,28 +20,14 @@ if (function_exists('session_write_close')) {
     session_write_close();
 }
 
-$lockPath = CACHE_DIR . '/scan.lock';
-$lock = @fopen($lockPath, 'c');
+$lock = scan_lock_open();
 if ($lock === false) {
     http_response_code(500);
     echo json_encode(['ok' => false, 'error' => 'cache']);
     exit;
 }
-if (!flock($lock, LOCK_EX | LOCK_NB)) {
-    $scan = scan_status_read();
-    if (($scan['state'] ?? '') === 'running') {
-        echo json_encode(array_merge($scan, [
-            'ok' => true,
-            'busy' => true,
-            'kind' => 'tmdb',
-        ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    } else {
-        echo json_encode(array_merge(grok_status_read(), [
-            'ok' => true,
-            'busy' => true,
-            'kind' => 'grok',
-        ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
+if (!scan_lock_try($lock)) {
+    echo json_encode(scan_busy_status(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     fclose($lock);
     exit;
 }
@@ -68,5 +54,4 @@ try {
     ]);
 }
 
-flock($lock, LOCK_UN);
-fclose($lock);
+scan_lock_release($lock);

@@ -20,19 +20,14 @@ if (function_exists('session_write_close')) {
     session_write_close();
 }
 
-$lockPath = CACHE_DIR . '/scan.lock';
-$lock = @fopen($lockPath, 'c');
+$lock = scan_lock_open();
 if ($lock === false) {
     http_response_code(500);
     echo json_encode(['ok' => false, 'error' => 'cache']);
     exit;
 }
-if (!flock($lock, LOCK_EX | LOCK_NB)) {
-    echo json_encode(array_merge(scan_status_read(), [
-        'ok' => true,
-        'busy' => true,
-        'kind' => 'scan',
-    ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+if (!scan_lock_try($lock)) {
+    echo json_encode(scan_busy_status(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     fclose($lock);
     exit;
 }
@@ -41,21 +36,22 @@ try {
     $allowStart = isset($_GET['start']) || isset($_POST['start']);
     $resumePause = isset($_GET['continue']) || isset($_POST['continue']);
     $mode = (string) ($_GET['mode'] ?? $_POST['mode'] ?? 'retry');
-    $status = scan_tick($allowStart, $mode, $resumePause);
+    $status = scan_tick($allowStart, $mode, $resumePause, 'video');
     echo json_encode(array_merge($status, [
         'ok' => true,
         'busy' => false,
         'kind' => 'scan',
+        'catalog' => 'video',
     ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $e) {
     scan_status_write([
         'state' => 'error',
         'cancel_requested' => false,
+        'catalog' => 'video',
         'message' => $e->getMessage(),
     ]);
     http_response_code(500);
     echo json_encode(['ok' => false, 'state' => 'error', 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
 }
 
-flock($lock, LOCK_UN);
-fclose($lock);
+scan_lock_release($lock);

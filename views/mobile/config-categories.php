@@ -10,7 +10,7 @@ render_start('Categories · Media Informant');
 render_header(['section' => 'config', 'branches' => true]);
 ?>
 <main class="page config-page">
-  <a class="back" href="<?= h(app_href('config/index.php')) ?>">
+  <a class="back" href="<?= h(app_href('config/index.php?tab=general')) ?>">
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Config
   </a>
