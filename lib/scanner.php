@@ -205,7 +205,7 @@ function scan_job_catalog_items(array $job): array
             $walked[$root] = true;
         }
     }
-    if ($walked === []) {
+    if ($walked === [] && empty($job['lookup_only'])) {
         foreach ($files as $file) {
             if (!is_array($file)) {
                 continue;
@@ -373,6 +373,186 @@ function library_touch(array $item, array $file): array
     $item['size'] = (int) $file['size'];
     $item['category'] = settings_category_for_root($item['root']);
     return $item;
+}
+
+function scan_file_from_item(array $item): array
+{
+    return [
+        'root' => (string) ($item['root'] ?? ''),
+        'path' => (string) ($item['path'] ?? ''),
+        'filename' => (string) ($item['filename'] ?? basename((string) ($item['path'] ?? ''))),
+        'mtime' => (int) ($item['mtime'] ?? 0),
+        'size' => (int) ($item['size'] ?? 0),
+    ];
+}
+
+function scan_discovered_item(array $file, ?array $prev): array
+{
+    if ($prev !== null) {
+        return library_carry_file($prev, $file);
+    }
+    $root = (string) ($file['root'] ?? '');
+    $path = (string) ($file['path'] ?? '');
+    $category = settings_category_for_root($root);
+    $parsed = scan_parse_path($root, $path, $category);
+    $title = $parsed['title'] !== '' ? $parsed['title'] : strip_extension((string) ($file['filename'] ?? ''));
+    $year = $parsed['year'];
+    return [
+        'id' => cache_item_id($path, $root),
+        'root' => $root,
+        'path' => $path,
+        'filename' => $file['filename'] ?? '',
+        'mtime' => (int) ($file['mtime'] ?? 0),
+        'size' => (int) ($file['size'] ?? 0),
+        'title' => $title,
+        'year' => $year,
+        'season' => $parsed['season'],
+        'episode' => $parsed['episode'],
+        'kind' => (string) ($parsed['kind'] ?? 'movie'),
+        'grouped' => library_item_kind(['kind' => (string) ($parsed['kind'] ?? 'movie')]) === 'show' || !empty($parsed['grouped']),
+        'episode_title' => (string) ($parsed['episode_title'] ?? ''),
+        'part' => (string) ($parsed['part'] ?? ''),
+        'category' => $category,
+        'tmdb_id' => null,
+        'status' => 'unidentified',
+        'poster_path' => null,
+        'display_title' => $title,
+        'match_source' => 'none',
+        'genres' => [],
+    ];
+}
+
+/**
+ * Walk present roots and merge files into the catalog with no TMDB/Grok lookups.
+ *
+ * @param list<string> $roots
+ * @return array{ok: bool, added: int, kept: int, dropped: int, files: int, roots: list<string>, error?: string}
+ */
+function catalog_discover_roots(array $roots, string $catalog = 'video'): array
+{
+    unset($catalog);
+    $stats = [
+        'ok' => true,
+        'added' => 0,
+        'kept' => 0,
+        'dropped' => 0,
+        'files' => 0,
+        'roots' => [],
+    ];
+    $walk = [];
+    foreach ($roots as $root) {
+        $root = settings_normalize_path((string) $root);
+        if ($root === '' || !is_dir($root) || !is_readable($root)) {
+            continue;
+        }
+        if (function_exists('source_is_present') && !source_is_present($root)) {
+            continue;
+        }
+        $walk[] = $root;
+    }
+    $walk = array_values(array_unique($walk));
+    if ($walk === []) {
+        return $stats;
+    }
+
+    $old = cache_read_library();
+    $oldItems = is_array($old['items'] ?? null) ? $old['items'] : [];
+    [$oldByPath] = scan_index_library($old);
+    $absSeen = [];
+    foreach ($oldItems as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $abs = function_exists('format_source_path') ? format_source_path($item) : '';
+        $abs = settings_normalize_path($abs);
+        if ($abs !== '') {
+            $absSeen[$abs] = $item;
+        }
+    }
+
+    $foundFiles = [];
+    $foundItems = [];
+    $foundKeys = [];
+    foreach ($walk as $root) {
+        $batch = scan_files($root);
+        $stats['files'] += count($batch);
+        foreach ($batch as $file) {
+            if (!is_array($file)) {
+                continue;
+            }
+            $foundFiles[] = $file;
+            $key = scan_item_key($file);
+            $foundKeys[$key] = true;
+            $abs = settings_normalize_path(
+                rtrim((string) ($file['root'] ?? ''), '/') . '/' . ltrim((string) ($file['path'] ?? ''), '/')
+            );
+            $prev = $oldByPath[(string) ($file['root'] ?? '') . "\n" . (string) ($file['path'] ?? '')]
+                ?? $oldByPath[(string) ($file['path'] ?? '')]
+                ?? null;
+            if ($prev === null && $abs !== '' && isset($absSeen[$abs])) {
+                $other = $absSeen[$abs];
+                $otherRoot = settings_normalize_path((string) ($other['root'] ?? ''));
+                if ($otherRoot !== $root) {
+                    continue;
+                }
+                $prev = $other;
+            }
+            $item = scan_discovered_item($file, $prev);
+            $foundItems[] = $item;
+            if ($prev) {
+                $stats['kept']++;
+            } else {
+                $stats['added']++;
+            }
+        }
+    }
+
+    $walkedSet = array_fill_keys($walk, true);
+    $out = [];
+    $seen = [];
+    foreach ($foundItems as $item) {
+        $key = scan_item_key($item);
+        $out[] = $item;
+        $seen[$key] = true;
+    }
+    foreach ($oldItems as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
+        }
+        $key = scan_item_key($item);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $itemRoot = settings_normalize_path((string) ($item['root'] ?? ''));
+        if (isset($walkedSet[$itemRoot])) {
+            $stats['dropped']++;
+            continue;
+        }
+        $out[] = $item;
+        $seen[$key] = true;
+    }
+
+    if (function_exists('folder_learn_from_files')) {
+        folder_learn_from_files($foundFiles, $walk);
+    }
+    $library = [
+        'version' => 1,
+        'scanned_at' => $old['scanned_at'] ?? null,
+        'video_roots' => settings_video_roots(),
+        'items' => $out,
+    ];
+    if (!cache_write_library($library)) {
+        $stats['ok'] = false;
+        $stats['error'] = 'Could not write the video catalog database.';
+        return $stats;
+    }
+    $stats['roots'] = $walk;
+    if (function_exists('app_log')) {
+        app_log('scan', 'Indexed ' . $stats['added'] . ' new file' . ($stats['added'] === 1 ? '' : 's')
+            . ' from ' . count($walk) . ' source' . (count($walk) === 1 ? '' : 's')
+            . ' (kept ' . $stats['kept'] . ', dropped ' . $stats['dropped'] . ').', $stats);
+    }
+    return $stats;
 }
 
 function library_carry_file(array $item, array $file): array
@@ -940,76 +1120,25 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         'grok_cached_tokens' => 0,
         'grok_cost_usd' => 0.0,
         'grok_cost_label' => '$0.0000',
-        'message' => 'Walking ' . $noun . ' folders…',
+        'message' => 'Preparing ' . $noun . ' look-ups…',
     ]);
 
-    $files = [];
     $absentRoots = [];
-    $walkedRoots = [];
+    $presentRoots = [];
     if (function_exists('source_presence_refresh')) {
         source_presence_refresh('video', $roots);
     }
     foreach ($roots as $root) {
-        if (scan_cancelled()) {
-            break;
-        }
         $norm = settings_normalize_path($root);
         $present = function_exists('source_is_present') ? source_is_present($root) : (is_dir($root) && is_readable($root));
         if (!$present) {
             $absentRoots[] = $norm;
-            if (function_exists('app_log')) {
-                app_log('scan', 'Skipping absent source: ' . $norm);
-            }
             continue;
         }
-        $walkedRoots[] = $norm;
-        $base = count($files);
-        $batch = scan_files($root, null, static function (int $n) use ($base, $started, $noun, $catalog, $targets): void {
-            $count = $base + $n;
-            scan_status_write([
-                'state' => 'running',
-                'phase' => 'walk',
-                'started_at' => $started,
-                'processed' => $count,
-                'catalog' => $catalog,
-                'lookup_targets' => $targets,
-                'message' => 'Walking ' . $noun . ' folders… ' . $count . ' files found.',
-            ]);
-        });
-        foreach ($batch as $file) {
-            $files[] = $file;
-        }
-        $walked = count($files);
-        scan_status_write([
-            'state' => 'running',
-            'phase' => 'walk',
-            'started_at' => $started,
-            'processed' => $walked,
-            'catalog' => $catalog,
-            'lookup_targets' => $targets,
-            'message' => 'Walking ' . $noun . ' folders… ' . $walked . ' files found.',
-        ]);
+        $presentRoots[] = $norm;
     }
 
-    if (scan_cancelled()) {
-        scan_job_clear();
-        scan_clear_cancel();
-        scan_status_write([
-            'state' => 'stopped',
-            'phase' => 'walk',
-            'cancel_requested' => false,
-            'started_at' => $started,
-            'catalog' => $catalog,
-            'lookup_targets' => $targets,
-            'message' => $title . ' scan stopped during the folder walk. The catalog was left as it was.',
-        ]);
-        if (function_exists('app_log')) {
-            app_log('scan', $title . ' scan stopped during the folder walk.', ['files' => count($files)], 'warn');
-        }
-        return scan_status_read();
-    }
-
-    if ($walkedRoots === [] && $absentRoots !== []) {
+    if ($presentRoots === [] && $absentRoots !== []) {
         $msg = 'All ' . $noun . ' sources are absent. Catalog unchanged.';
         scan_status_write([
             'state' => 'done',
@@ -1026,20 +1155,50 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         return scan_status_read();
     }
 
-    folder_learn_from_files($files, $walkedRoots);
-
     $old = cache_read_library();
-    [$oldByPath] = scan_index_library($old);
+    $files = [];
     $pending = 0;
-    foreach ($files as $file) {
-        $root = (string) ($file['root'] ?? '');
-        $prev = $oldByPath[$root . "\n" . $file['path']] ?? $oldByPath[$file['path']] ?? null;
-        $unchanged = $prev
-            && (int) ($prev['mtime'] ?? 0) === $file['mtime']
-            && (int) ($prev['size'] ?? 0) === $file['size'];
-        if (scan_file_needs_lookup($prev, $unchanged, $targets)) {
-            $pending++;
+    $presentSet = array_fill_keys($presentRoots, true);
+    foreach (is_array($old['items'] ?? null) ? $old['items'] : [] as $item) {
+        if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
+            continue;
         }
+        $root = settings_normalize_path((string) ($item['root'] ?? ''));
+        if ($root === '' || !isset($presentSet[$root])) {
+            continue;
+        }
+        $full = function_exists('format_source_path') ? format_source_path($item) : '';
+        if ($full === '' || !is_file($full)) {
+            continue;
+        }
+        $file = scan_file_from_item($item);
+        $file['mtime'] = (int) @filemtime($full);
+        $file['size'] = (int) @filesize($full);
+        $unchanged = (int) ($item['mtime'] ?? 0) === (int) $file['mtime']
+            && (int) ($item['size'] ?? 0) === (int) $file['size'];
+        if (!scan_file_needs_lookup($item, $unchanged, $targets)) {
+            continue;
+        }
+        $files[] = $file;
+        $pending++;
+    }
+
+    if ($files === []) {
+        $msg = 'No ' . $noun . ' files match the current scan options. Catalog unchanged.';
+        scan_status_write([
+            'state' => 'done',
+            'phase' => 'done',
+            'cancel_requested' => false,
+            'started_at' => $started,
+            'catalog' => $catalog,
+            'lookup_targets' => $targets,
+            'pending' => 0,
+            'message' => $msg,
+        ]);
+        if (function_exists('app_log')) {
+            app_log('scan', $msg);
+        }
+        return scan_status_read();
     }
 
     $job = [
@@ -1048,9 +1207,10 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         'mode' => $mode,
         'catalog' => $catalog,
         'lookup_targets' => $targets,
+        'lookup_only' => true,
         'started_at' => $started,
         'roots' => $roots,
-        'walked_roots' => $walkedRoots,
+        'walked_roots' => [],
         'files' => $files,
         'index' => 0,
         'items' => [],
@@ -1078,7 +1238,7 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
     scan_job_write($job);
     scan_job_publish($job);
     if (function_exists('app_log')) {
-        app_log('scan', 'Folder walk finished: ' . count($files) . ' files, ' . $pending . ' TMDB lookups queued.', [
+        app_log('scan', 'Queued ' . $pending . ' ' . $noun . ' TMDB look-up' . ($pending === 1 ? '' : 's') . '.', [
             'files' => count($files),
             'pending' => $pending,
             'mode' => $mode,

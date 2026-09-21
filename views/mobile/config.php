@@ -41,7 +41,16 @@ if ($configTab !== 'music' && $configTab !== 'general') {
   </header>
 
   <?php if ($saved): ?>
-  <p class="form-banner is-ok" role="status">Settings saved. Removed sources disappear from Video immediately. Scan the video library to pick up new folders and match titles.</p>
+  <?php if (!empty($discoverBusy)): ?>
+  <p class="form-banner is-ok" role="status">Settings saved. A scan is running, so new folders were not indexed. Save again after the scan finishes.</p>
+  <?php elseif (!empty($discoverError)): ?>
+  <p class="form-banner is-error" role="alert">Settings saved, but the new folder could not be indexed. Check cache/ permissions.</p>
+  <?php elseif ($discoverAdded !== null): ?>
+  <p class="form-banner is-ok" role="status">Settings saved. Indexed <?= (int) $discoverAdded ?> new file<?= (int) $discoverAdded === 1 ? '' : 's' ?><?= $discoverFiles !== null ? ' (' . (int) $discoverFiles . ' video file' . ((int) $discoverFiles === 1 ? '' : 's') . ' on disk)' : '' ?>. They appear in Video as unidentified until you Scan for metadata.</p>
+  <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Look up titles</a>
+  <?php else: ?>
+  <p class="form-banner is-ok" role="status">Settings saved. Removed sources leave the catalog immediately. New present folders are indexed on save; Scan looks up titles.</p>
+  <?php endif; ?>
   <?php endif; ?>
   <?php if ($error !== ''): ?>
   <p class="form-banner is-error" role="alert"><?= h($error) ?></p>
@@ -58,7 +67,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <div id="config-panel-video" class="config-panel" data-config-panel="video" role="tabpanel" aria-labelledby="config-tab-video"<?= $configTab === 'video' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Video folders</h2>
-      <p class="hint">Absolute paths to video shares, one per row. Removable drives can be Absent until they are plugged in again; titles already in the catalog stay until you remove the source.</p>
+      <p class="hint">Absolute paths to video shares, one per row. Saving a Present source indexes its video files into the catalog (names only). Scan looks up posters and overviews. Removable drives can be Absent until they are plugged in again; titles already in the catalog stay until you remove the source.</p>
       <div class="folder-list" data-folder-list="video">
         <?php foreach ($videoSources as $source):
             $root = (string) ($source['path'] ?? '');
@@ -104,7 +113,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
 
     <section class="form-section">
       <h2>Video library</h2>
-      <p class="hint">Walk the video folders above and look up titles on TMDB, then Grok if enabled. Save folder changes first.</p>
+      <p class="hint">Look up titles on TMDB, then Grok if enabled, for files already in the catalog. Save new folders first so they can be indexed.</p>
       <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Open video scan page</a>
     </section>
     </div>

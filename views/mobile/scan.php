@@ -39,7 +39,7 @@ $optionsSummary = $isMusic
     : 'Grok toggles apply immediately, even during a scan.';
 $advancedSummary = $isMusic
     ? 'These choices will pick which files a music scan looks up when scanning is available.'
-    : 'Choose which file states the next video scan looks up. Unidentified and unmatched are on by default. Turn on a matched option only when you want those titles sent to TMDB again. Titles you matched yourself are never looked up. These choices apply when you start a scan.';
+    : 'Choose which catalog files the next scan looks up. Unidentified and unmatched are on by default. Turn on a matched option only when you want those titles sent to TMDB again. Titles you matched yourself are never looked up. These choices apply when you start a scan.';
 $launchLabel = 'Start a ' . $title . ' scan';
 ?>
 <main class="page scan-page">

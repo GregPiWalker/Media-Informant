@@ -4,10 +4,15 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
+require dirname(__DIR__) . '/lib/scanner.php';
 
 cache_init();
 
 $saved = isset($_GET['saved']);
+$discoverAdded = isset($_GET['added']) ? (int) $_GET['added'] : null;
+$discoverFiles = isset($_GET['files']) ? (int) $_GET['files'] : null;
+$discoverBusy = (string) ($_GET['discover'] ?? '') === 'busy';
+$discoverError = (string) ($_GET['discover'] ?? '') === 'error';
 $error = '';
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
@@ -50,9 +55,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     } elseif (!settings_save($payload)) {
         $error = 'Could not write settings.json. Check cache/ permissions.';
     } else {
+        $oldVideo = settings_source_paths(is_array($current['video_roots'] ?? null) ? $current['video_roots'] : []);
+        $oldMusic = settings_source_paths(is_array($current['music_roots'] ?? null) ? $current['music_roots'] : []);
         if (function_exists('catalog_store_drop_root')) {
-            $oldVideo = settings_source_paths(is_array($current['video_roots'] ?? null) ? $current['video_roots'] : []);
-            $oldMusic = settings_source_paths(is_array($current['music_roots'] ?? null) ? $current['music_roots'] : []);
             $newVideo = settings_video_roots();
             $newMusic = settings_music_roots();
             $newVideoSet = array_fill_keys($newVideo, true);
@@ -68,6 +73,54 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 }
             }
         }
+        $discoverQuery = '';
+        $newVideo = settings_video_roots();
+        if (function_exists('source_presence_refresh')) {
+            source_presence_refresh('video', $newVideo);
+        }
+        $toDiscover = [];
+        $emptyRoots = [];
+        if (function_exists('source_roots_without_titles')) {
+            $lib = function_exists('cache_read_library') ? cache_read_library() : ['items' => []];
+            $emptyRoots = array_fill_keys(source_roots_without_titles($newVideo, $lib['items'] ?? []), true);
+        }
+        foreach ($newVideo as $root) {
+            $present = function_exists('source_is_present') ? source_is_present($root) : (is_dir($root) && is_readable($root));
+            if (!$present) {
+                continue;
+            }
+            $wasConfigured = in_array($root, $oldVideo, true);
+            if (!$wasConfigured || isset($emptyRoots[$root])) {
+                $toDiscover[] = $root;
+            }
+        }
+        if ($toDiscover !== [] && function_exists('catalog_discover_roots')) {
+            $lock = function_exists('scan_lock_open') ? scan_lock_open() : false;
+            if (function_exists('scan_lock_try') && !scan_lock_try($lock)) {
+                if (is_resource($lock)) {
+                    fclose($lock);
+                }
+                $discoverQuery = '&discover=busy';
+            } else {
+                try {
+                    @set_time_limit(180);
+                    $result = catalog_discover_roots($toDiscover, 'video');
+                    $discoverQuery = '&added=' . (int) ($result['added'] ?? 0)
+                        . '&kept=' . (int) ($result['kept'] ?? 0)
+                        . '&files=' . (int) ($result['files'] ?? 0);
+                    if (empty($result['ok'])) {
+                        $discoverQuery .= '&discover=error';
+                    }
+                } finally {
+                    if (function_exists('scan_lock_release')) {
+                        scan_lock_release($lock);
+                    } elseif (is_resource($lock)) {
+                        flock($lock, LOCK_UN);
+                        fclose($lock);
+                    }
+                }
+            }
+        }
         if (function_exists('app_log')) {
             app_log('config', 'Settings saved.', [
                 'video_roots' => is_array($payload['video_roots']) ? count($payload['video_roots']) : 0,
@@ -78,7 +131,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         if ($tab !== 'music' && $tab !== 'general') {
             $tab = 'video';
         }
-        header('Location: index.php?saved=1&tab=' . rawurlencode($tab), true, 303);
+        header('Location: index.php?saved=1&tab=' . rawurlencode($tab) . $discoverQuery, true, 303);
         exit;
     }
 }

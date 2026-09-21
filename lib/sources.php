@@ -107,3 +107,45 @@ function source_presence_label(string $presence): string
         default => 'Absent',
     };
 }
+
+/**
+ * Present configured roots that have no catalog files yet.
+ *
+ * @param list<string> $roots
+ * @param list<array<string, mixed>> $items
+ * @return list<string>
+ */
+function source_roots_without_titles(array $roots, array $items): array
+{
+    $counts = [];
+    foreach ($roots as $root) {
+        $root = function_exists('settings_normalize_path')
+            ? settings_normalize_path((string) $root)
+            : (string) $root;
+        if ($root === '') {
+            continue;
+        }
+        if (!source_is_present($root)) {
+            continue;
+        }
+        $counts[$root] = 0;
+    }
+    foreach ($items as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        $root = function_exists('settings_item_root')
+            ? settings_item_root($item)
+            : settings_normalize_path((string) ($item['root'] ?? ''));
+        if (isset($counts[$root])) {
+            $counts[$root]++;
+        }
+    }
+    $out = [];
+    foreach ($counts as $root => $n) {
+        if ($n < 1) {
+            $out[] = $root;
+        }
+    }
+    return $out;
+}

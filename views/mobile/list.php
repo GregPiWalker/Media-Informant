@@ -103,6 +103,16 @@ $view = $prefs->view;
     <?php endforeach; ?>
   </style>
   <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>">
+    <?php if (!empty($unscannedRoots)): ?>
+    <div class="catalog-scan-hint">
+      <p class="form-banner" role="status">
+        Present source<?= count($unscannedRoots) === 1 ? '' : 's' ?> with no video files in the catalog:
+        <?= h(implode(', ', $unscannedRoots)) ?>.
+        Save Config while the folder is Present to index files, then Scan to look up titles.
+      </p>
+      <a class="btn btn-accent" href="<?= h(app_href('config/index.php?tab=video')) ?>">Open Config</a>
+    </div>
+    <?php endif; ?>
     <div class="catalog-toolbar">
       <p class="catalog-meta">
         <?= (int) $groupCount ?> <?= $groupCount === 1 ? 'title' : 'titles' ?>

@@ -26,8 +26,8 @@ $showGrokUi = $grokAvailable && $grokOn;
 $scanEnabled = true;
 $scanOptions = scan_options_read($catalog);
 $idleCopy = $showGrokUi
-    ? 'One video scan: TMDB lookups queue Grok work. Every 25 queued titles, Grok runs a batch. Continue after each Grok batch.'
-    : 'Video scan uses TMDB only. Unmatched titles stay unmatched unless you turn Grok on.';
+    ? 'Scan looks up files already in the catalog. TMDB queues Grok work. Every 25 queued titles, Grok runs a batch. Continue after each Grok batch. New folders are indexed when you save them in Config.'
+    : 'Scan looks up files already in the catalog with TMDB. Unmatched titles stay unmatched unless you turn Grok on. New folders are indexed when you save them in Config.';
 
 render_start('Video scan · Media Informant');
 render_header(['section' => 'config', 'branches' => true]);

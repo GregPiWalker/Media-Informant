@@ -38,5 +38,8 @@ foreach ($items as $item) {
 $groups = catalog_sort_groups(catalog_collect_groups($records), $prefs);
 $genreGroups = $prefs->view === 'genre' ? catalog_genre_rails($groups) : [];
 $scannedAt = isset($library['scanned_at']) ? (int) $library['scanned_at'] : null;
+$unscannedRoots = function_exists('source_roots_without_titles')
+    ? source_roots_without_titles($allowedRoots, $library['items'] ?? [])
+    : [];
 
 require app_view('list');
