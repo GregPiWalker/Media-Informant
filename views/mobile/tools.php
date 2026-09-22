@@ -11,11 +11,11 @@ foreach ($sources as $source) {
     }
 }
 ?>
-<main class="page tools-page" data-tools-page data-tools-browse-url="<?= h(app_href('tools/browse.php')) ?>" data-tools-rename-url="<?= h(app_href('tools/rename-group.php')) ?>">
+<main class="page tools-page" data-tools-page data-tools-browse-url="<?= h(app_href('tools/browse.php')) ?>" data-tools-rename-url="<?= h(app_href('tools/rename-group.php')) ?>" data-tools-smart-plan-url="<?= h(app_href('tools/smart-rename-plan.php')) ?>" data-tools-smart-run-url="<?= h(app_href('tools/smart-rename-run.php')) ?>">
   <header class="home-intro">
     <p class="scan-kicker">Tools</p>
     <h1>File tools</h1>
-    <p>Browse one source folder. Right-click (or press and hold) a folder to rename a group of files that share the same text in their names.</p>
+    <p>Right-click (or press and hold) a folder of media files for Rename Group. Use Smart Rename on a folder that only contains other folders — Grok plans episode-name cleanups, then you approve them.</p>
   </header>
 
   <?php if ($sources === []): ?>
@@ -35,12 +35,13 @@ foreach ($sources as $source) {
       <?php endforeach; ?>
     </select>
   </label>
-  <p class="hint" data-tools-status><?= $first ? 'Open a folder, then right-click it for Rename Group.' : 'All configured sources are absent.' ?></p>
+  <p class="hint" data-tools-status><?= $first ? 'Right-click a folder of files for Rename Group, or a folder of folders for Smart Rename.' : 'All configured sources are absent.' ?></p>
   <div class="tools-tree-wrap">
     <ul class="tools-tree" data-tools-tree></ul>
   </div>
   <div class="col-panel" data-tools-menu hidden role="menu" aria-label="Folder actions">
     <button type="button" class="page-menu-item" data-tools-rename role="menuitem">Rename Group</button>
+    <button type="button" class="page-menu-item" data-tools-smart-rename role="menuitem">Smart Rename</button>
   </div>
   <?php endif; ?>
 </main>
@@ -67,6 +68,36 @@ foreach ($sources as $source) {
     <p class="form-banner is-ok" data-rename-ok hidden></p>
     <ol class="tools-rename-log" data-rename-log hidden></ol>
     <button type="button" class="btn btn-accent btn-block" data-rename-run>Rename</button>
+  </div>
+</div>
+
+<div class="overlay" data-overlay="smart-rename-plan" id="smart-rename-plan-overlay" hidden>
+  <div class="overlay-backdrop" data-overlay-dismiss></div>
+  <button type="button" class="overlay-close" data-overlay-dismiss aria-label="Close">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="overlay-pane overlay-pane-tools overlay-pane-smart" role="dialog" aria-modal="true" aria-labelledby="smart-plan-title">
+    <h2 id="smart-plan-title">Smart Rename</h2>
+    <p class="hint" data-smart-plan-status>Asking Grok to plan renames…</p>
+    <p class="form-banner is-error" data-smart-plan-error hidden></p>
+    <ul class="smart-plan-list" data-smart-plan-list hidden></ul>
+    <div class="smart-plan-actions" data-smart-plan-actions hidden>
+      <button type="button" class="btn btn-ghost" data-overlay-dismiss>Cancel</button>
+      <button type="button" class="btn btn-accent" data-smart-plan-run>Rename</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" data-overlay="smart-rename-result" id="smart-rename-result-overlay" hidden>
+  <div class="overlay-backdrop" data-overlay-dismiss></div>
+  <button type="button" class="overlay-close" data-overlay-dismiss aria-label="Close">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+  </button>
+  <div class="overlay-pane overlay-pane-tools overlay-pane-smart" role="dialog" aria-modal="true" aria-labelledby="smart-result-title">
+    <h2 id="smart-result-title">Smart Rename results</h2>
+    <p class="form-banner is-ok" data-smart-result-summary></p>
+    <ul class="smart-plan-list" data-smart-result-list></ul>
+    <button type="button" class="btn btn-accent btn-block" data-overlay-dismiss>Close</button>
   </div>
 </div>
 <?php

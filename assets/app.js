@@ -1858,7 +1858,10 @@
     var toolsMenu = document.querySelector('[data-tools-menu]');
     var browseUrl = toolsPage.getAttribute('data-tools-browse-url') || '';
     var renameUrl = toolsPage.getAttribute('data-tools-rename-url') || '';
+    var smartPlanUrl = toolsPage.getAttribute('data-tools-smart-plan-url') || '';
+    var smartRunUrl = toolsPage.getAttribute('data-tools-smart-run-url') || '';
     var menuTarget = null;
+    var smartPlans = [];
     var menuTimer = 0;
     var menuFromPress = false;
 
@@ -1875,8 +1878,25 @@
       toolsMenu.hidden = true;
     }
 
+    function toolsApplyMenu(folder) {
+      var hasMedia = folder.getAttribute('data-tools-has-media') === '1';
+      var hasFolders = folder.getAttribute('data-tools-has-folders') === '1';
+      var renameBtn = document.querySelector('[data-tools-rename]');
+      var smartBtn = document.querySelector('[data-tools-smart-rename]');
+      if (renameBtn) renameBtn.hidden = !hasMedia;
+      if (smartBtn) smartBtn.hidden = !hasFolders || hasMedia;
+      return (renameBtn && !renameBtn.hidden) || (smartBtn && !smartBtn.hidden);
+    }
+
+    function toolsSetFlags(li, data) {
+      if (!li || !data) return;
+      li.setAttribute('data-tools-has-media', data.has_media ? '1' : '0');
+      li.setAttribute('data-tools-has-folders', data.has_folders ? '1' : '0');
+    }
+
     function toolsOpenMenu(x, y, folder) {
-      if (!toolsMenu) return;
+      if (!toolsMenu || !folder) return;
+      if (!toolsApplyMenu(folder)) return;
       menuTarget = folder;
       toolsMenu.hidden = false;
       var pad = 8;
@@ -1903,6 +1923,8 @@
         var li = document.createElement('li');
         li.setAttribute('data-tools-folder', rel);
         li.setAttribute('data-tools-name', folder.name);
+        li.setAttribute('data-tools-has-media', folder.has_media ? '1' : '0');
+        li.setAttribute('data-tools-has-folders', folder.has_folders ? '1' : '0');
         var row = document.createElement('button');
         row.type = 'button';
         row.className = 'tools-row is-folder';
@@ -1953,6 +1975,7 @@
             ul.dataset.loaded = '1';
             ul.dataset.extensions = JSON.stringify(data.extensions || []);
             ul.dataset.files = JSON.stringify((data.files || []).map(function (f) { return f.name; }));
+            if (ul.parentElement) toolsSetFlags(ul.parentElement, data);
           }
           if (done) done(data);
         })
@@ -1996,7 +2019,8 @@
       li.appendChild(kids);
       toolsTree.appendChild(li);
       toolsLoad('', kids, function (data) {
-        if (data) toolsSetStatus('Open a folder, then right-click it for Rename Group.');
+        toolsSetFlags(li, data);
+        if (data) toolsSetStatus('Right-click a folder of files for Rename Group, or a folder of folders for Smart Rename.');
       });
     }
 
@@ -2237,6 +2261,145 @@
         }).catch(function () {
           renameRun.disabled = false;
           if (err) { err.hidden = false; err.textContent = 'Rename failed.'; }
+        });
+      });
+    }
+
+    function smartPlanLine(plan) {
+      var label = plan.label || 'Folder';
+      if (plan.skip) {
+        return label + ': no change';
+      }
+      return label + ':  \'' + (plan.sample || '') + '\' -> \'' + (plan.preview || '') + '\'';
+    }
+
+    var smartRenameBtn = document.querySelector('[data-tools-smart-rename]');
+    var smartPlanRun = document.querySelector('[data-smart-plan-run]');
+    if (smartRenameBtn) {
+      smartRenameBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        toolsCloseMenu();
+        if (!menuTarget || !smartPlanUrl || !toolsSource) return;
+        smartPlans = [];
+        var status = document.querySelector('[data-smart-plan-status]');
+        var err = document.querySelector('[data-smart-plan-error]');
+        var list = document.querySelector('[data-smart-plan-list]');
+        var actions = document.querySelector('[data-smart-plan-actions]');
+        if (status) status.textContent = 'Asking Grok to plan renames…';
+        if (err) { err.hidden = true; err.textContent = ''; }
+        if (list) { list.hidden = true; list.innerHTML = ''; }
+        if (actions) actions.hidden = true;
+        if (smartPlanRun) smartPlanRun.disabled = true;
+        overlayOpen('smart-rename-plan');
+        fetch(smartPlanUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            src: toolsSource.value,
+            dir: menuTarget.getAttribute('data-tools-folder') || ''
+          })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+          if (!data || !data.ok) {
+            if (status) status.textContent = '';
+            if (err) {
+              err.hidden = false;
+              err.textContent = (data && data.error) || 'Could not plan Smart Rename.';
+            }
+            return;
+          }
+          smartPlans = data.plans || [];
+          if (status) {
+            status.textContent = smartPlans.length
+              ? 'Review the planned renames, then tap Rename.'
+              : 'Grok did not return any plans.';
+          }
+          if (list) {
+            list.innerHTML = '';
+            smartPlans.forEach(function (plan) {
+              var li = document.createElement('li');
+              if (plan.skip) li.className = 'is-skip';
+              li.textContent = smartPlanLine(plan);
+              list.appendChild(li);
+            });
+            list.hidden = smartPlans.length === 0;
+          }
+          var runnable = smartPlans.some(function (plan) { return plan.find && !plan.skip; });
+          if (actions) actions.hidden = !runnable;
+          if (smartPlanRun) smartPlanRun.disabled = !runnable;
+        }).catch(function () {
+          if (status) status.textContent = '';
+          if (err) { err.hidden = false; err.textContent = 'Could not plan Smart Rename.'; }
+        });
+      });
+    }
+
+    if (smartPlanRun) {
+      smartPlanRun.addEventListener('click', function () {
+        if (!smartRunUrl || !toolsSource) return;
+        var runnable = smartPlans.filter(function (plan) { return plan.find && !plan.skip; });
+        if (!runnable.length) return;
+        smartPlanRun.disabled = true;
+        fetch(smartRunUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            src: toolsSource.value,
+            plans: runnable
+          })
+        }).then(function (r) { return r.json(); }).then(function (data) {
+          smartPlanRun.disabled = false;
+          overlayClose(document.querySelector('[data-overlay="smart-rename-plan"]'));
+          var summary = document.querySelector('[data-smart-result-summary]');
+          var list = document.querySelector('[data-smart-result-list]');
+          if (!data || !data.ok) {
+            if (summary) {
+              summary.className = 'form-banner is-error';
+              summary.textContent = (data && data.error) || 'Smart Rename failed.';
+            }
+            if (list) list.innerHTML = '';
+            overlayOpen('smart-rename-result');
+            return;
+          }
+          if (summary) {
+            summary.className = 'form-banner is-ok';
+            summary.textContent = 'Renamed ' + (data.renamed || 0)
+              + (data.catalog ? ', catalog updated ' + data.catalog : '')
+              + (data.skipped ? ', skipped ' + data.skipped : '')
+              + (data.errors ? ', errors ' + data.errors : '') + '.';
+          }
+          if (list) {
+            list.innerHTML = '';
+            (data.folders || []).forEach(function (folder) {
+              var head = document.createElement('li');
+              head.textContent = (folder.label || 'Folder') + ': '
+                + (folder.renamed || 0) + ' renamed'
+                + (folder.skipped ? ', ' + folder.skipped + ' skipped' : '')
+                + (folder.errors ? ', ' + folder.errors + ' errors' : '');
+              list.appendChild(head);
+              (folder.changes || []).forEach(function (row) {
+                var li = document.createElement('li');
+                if (!row.ok) li.className = 'is-skip';
+                li.textContent = row.from + ' → ' + row.to + (row.ok ? '' : ' (' + (row.error || 'failed') + ')');
+                list.appendChild(li);
+              });
+            });
+          }
+          overlayOpen('smart-rename-result');
+          if (menuTarget) {
+            var kids = toolsKids(menuTarget);
+            if (kids) toolsLoad(menuTarget.getAttribute('data-tools-folder') || '', kids);
+          }
+        }).catch(function () {
+          smartPlanRun.disabled = false;
+          overlayClose(document.querySelector('[data-overlay="smart-rename-plan"]'));
+          var summary = document.querySelector('[data-smart-result-summary]');
+          if (summary) {
+            summary.className = 'form-banner is-error';
+            summary.textContent = 'Smart Rename failed.';
+          }
+          overlayOpen('smart-rename-result');
         });
       });
     }

@@ -550,7 +550,7 @@ function grok_format_usd(float $usd): string
     return '$' . number_format($usd, $places, '.', '');
 }
 
-function grok_chat(array $messages, string $model): array
+function grok_chat(array $messages, string $model, int $maxTokens = 2500): array
 {
     $key = grok_api_key();
     if ($key === '' || !function_exists('curl_init')) {
@@ -558,11 +558,17 @@ function grok_chat(array $messages, string $model): array
     }
     grok_verbose_log('Grok model ' . $model . ' system: ' . (string) ($messages[0]['content'] ?? ''));
     grok_verbose_log('Grok prompt: ' . (string) ($messages[1]['content'] ?? ''));
+    if ($maxTokens < 256) {
+        $maxTokens = 256;
+    }
+    if ($maxTokens > 8000) {
+        $maxTokens = 8000;
+    }
 
     $body = json_encode([
         'model' => $model,
         'temperature' => 0,
-        'max_tokens' => 2500,
+        'max_tokens' => $maxTokens,
         'messages' => $messages,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     if ($body === false) {
@@ -612,10 +618,10 @@ function grok_chat(array $messages, string $model): array
     return ['ok' => true, 'status' => $status, 'content' => $content, 'error' => '', 'model' => $model, 'usage' => $usage];
 }
 
-function grok_chat_with_fallback(array $messages): array
+function grok_chat_with_fallback(array $messages, int $maxTokens = 2500): array
 {
     $primary = (string) XAI_MODEL;
-    $result = grok_chat($messages, $primary);
+    $result = grok_chat($messages, $primary, $maxTokens);
     if ($result['ok']) {
         return $result;
     }
@@ -623,7 +629,7 @@ function grok_chat_with_fallback(array $messages): array
     $err = lower((string) ($result['error'] ?? ''));
     $fallback = (string) XAI_MODEL_FALLBACK;
     if ($fallback !== '' && $fallback !== $primary && ($status === 404 || $status === 400 || str_contains($err, 'model'))) {
-        return grok_chat($messages, $fallback);
+        return grok_chat($messages, $fallback, $maxTokens);
     }
     return $result;
 }

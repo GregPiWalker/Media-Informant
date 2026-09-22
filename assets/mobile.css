@@ -1132,6 +1132,10 @@ button.col-option,
   background: var(--card-bg);
 }
 
+.page-menu-item[hidden] {
+  display: none !important;
+}
+
 .detail {
   padding: 0 1.1rem 0.5rem;
 }
@@ -2246,6 +2250,44 @@ html[data-theme="dark"] .overlay-backdrop {
 
 .overlay-pane-tools .btn-block {
   margin-top: 0.9rem;
+}
+
+.overlay-pane-smart {
+  width: min(32rem, calc(100vw - 2.4rem));
+}
+
+.smart-plan-list {
+  list-style: none;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  text-align: left;
+}
+
+.smart-plan-list li {
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.smart-plan-list li:last-child {
+  border-bottom: 0;
+}
+
+.smart-plan-list .is-skip {
+  color: var(--dim-fg);
+}
+
+.smart-plan-actions {
+  display: flex;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+}
+
+.smart-plan-actions .btn {
+  flex: 1;
+  margin-top: 0;
 }
 
 .tools-page {
