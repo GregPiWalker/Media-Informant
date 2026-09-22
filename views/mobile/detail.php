@@ -67,13 +67,18 @@ if ($found) {
 }
 
 $pageTitle = $found ? $display . ' · Media Informant' : 'Not found · Media Informant';
+$gkey = (string) ($gkey ?? '');
+$backHref = $gkey !== ''
+    ? app_href('video/group.php?key=' . rawurlencode($gkey))
+    : app_href('video/index.php');
+$titleQs = $itemId !== '' ? ('id=' . rawurlencode($itemId) . ($gkey !== '' ? '&gkey=' . rawurlencode($gkey) : '')) : '';
 
 render_start($pageTitle);
 render_header(['section' => 'video']);
 ?>
 <main class="page detail-page<?= $sourceAbsent ? ' is-source-absent' : '' ?>">
   <div class="detail-toolbar">
-    <a class="back" href="<?= h(app_href('video/index.php')) ?>">
+    <a class="back" href="<?= h($backHref) ?>">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Back
     </a>
@@ -85,29 +90,32 @@ render_header(['section' => 'video']);
         </svg>
       </button>
       <div class="page-menu-panel" id="detail-menu" data-menu-panel hidden role="menu" aria-label="Title actions">
-        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/match.php?id=' . $itemId)) ?>">
+        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/match.php?id=' . $itemId . ($gkey !== '' ? '&gkey=' . rawurlencode($gkey) : ''))) ?>">
           <?= $status === 'matched' ? 'Change match' : 'Match title' ?>
         </a>
         <?php if (!$editing): ?>
-        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/title.php?id=' . $itemId . '&edit=1')) ?>">Edit Data</a>
+        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/title.php?' . $titleQs . '&edit=1')) ?>">Edit Data</a>
         <?php endif; ?>
         <?php if ($status === 'matched' || $status === 'unmatched'): ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="clear_match">
           <button type="submit" class="page-menu-item" role="menuitem">Clear Match</button>
         </form>
         <?php endif; ?>
         <?php if (library_item_kind($item) !== 'show'): ?>
         <?php if (library_item_grouped($item)): ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="treat_individual">
           <button type="submit" class="page-menu-item" role="menuitem">Treat Individually</button>
         </form>
         <?php else: ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="treat_series">
           <button type="submit" class="page-menu-item" role="menuitem">Treat as Series</button>
         </form>
@@ -121,33 +129,38 @@ render_header(['section' => 'video']);
         if ($folderHome !== ''):
         ?>
         <?php if ($folderKind === 'show'): ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="folder_as_movie">
           <button type="submit" class="page-menu-item" role="menuitem">Treat Folder as Movies</button>
         </form>
         <?php else: ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="folder_as_show">
           <button type="submit" class="page-menu-item" role="menuitem">Treat Folder as TV Show</button>
         </form>
         <?php endif; ?>
         <?php endif; ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="exclude_parent">
           <button type="submit" class="page-menu-item" role="menuitem">Exclude Parent Dir</button>
         </form>
         <?php if (library_item_hidden($item)): ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="unhide">
           <button type="submit" class="page-menu-item" role="menuitem">Unhide</button>
         </form>
         <?php else: ?>
-        <form method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>" role="none">
+        <form method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>" role="none">
           <input type="hidden" name="id" value="<?= h($itemId) ?>">
+          <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="hide">
           <button type="submit" class="page-menu-item" role="menuitem">Hide</button>
         </form>
@@ -200,8 +213,9 @@ render_header(['section' => 'video']);
     </header>
 
     <?php if ($editing): ?>
-    <form class="detail-edit" method="post" action="<?= h(app_href('video/title.php?id=' . $itemId)) ?>">
+    <form class="detail-edit" method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>">
       <input type="hidden" name="id" value="<?= h($itemId) ?>">
+      <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
       <input type="hidden" name="action" value="save_data">
       <section class="detail-section">
         <h2>Title</h2>
@@ -233,7 +247,7 @@ render_header(['section' => 'video']);
       </section>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-accent btn-block">Save</button>
-        <a class="btn btn-ghost btn-block" href="<?= h(app_href('video/title.php?id=' . $itemId)) ?>">Cancel</a>
+        <a class="btn btn-ghost btn-block" href="<?= h(app_href('video/title.php?' . $titleQs)) ?>">Cancel</a>
       </div>
     </form>
     <?php else: ?>

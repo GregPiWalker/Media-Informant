@@ -15,6 +15,22 @@ if ($id === '' && isset($_POST['id']) && is_string($_POST['id'])) {
 if (!preg_match('/^[a-f0-9]{16}$/', $id)) {
     $id = '';
 }
+$gkey = isset($_GET['gkey']) && is_string($_GET['gkey']) ? $_GET['gkey'] : '';
+if ($gkey === '' && isset($_POST['gkey']) && is_string($_POST['gkey'])) {
+    $gkey = $_POST['gkey'];
+}
+if (strlen($gkey) > 400) {
+    $gkey = '';
+}
+
+function title_self_url(string $id, string $gkey, array $extra = []): string
+{
+    $q = array_merge(['id' => $id], $extra);
+    if ($gkey !== '') {
+        $q['gkey'] = $gkey;
+    }
+    return 'title.php?' . http_build_query($q);
+}
 $library = cache_read_library();
 $item = $id !== '' ? cache_find_item($library, $id) : null;
 if ($item !== null && !settings_item_in_roots($item, settings_video_roots(), $library)) {
@@ -37,7 +53,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string)
             app_log('title', ($grouped ? 'Treat as series: ' : 'Treat individually: ')
                 . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '.', ['id' => $id, 'grouped' => $grouped]);
         }
-        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
     }
 }
@@ -100,7 +116,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
             header('Location: index.php', true, 303);
             exit;
         }
-        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
     }
 }
@@ -116,7 +132,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
         if (function_exists('app_log')) {
             app_log('title', 'Unhid “' . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '”.', ['id' => $id]);
         }
-        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
     }
 }
@@ -132,7 +148,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
         if (function_exists('app_log')) {
             app_log('match', 'Cleared match; set unidentified: ' . (string) ($item['display_title'] ?? $item['title'] ?? $id) . '.', ['id' => $id]);
         }
-        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
     }
 }
@@ -197,7 +213,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
         if (function_exists('app_log')) {
             app_log('title', 'Saved edits for “' . $displayTitle . '”.', ['id' => $id, 'genres' => count($genres)]);
         }
-        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+        header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
     }
 }

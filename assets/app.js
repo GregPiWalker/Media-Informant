@@ -1850,6 +1850,55 @@
     });
   }
 
+  var groupDetail = document.querySelector('[data-group-detail]');
+  if (groupDetail) {
+    try { history.scrollRestoration = 'manual'; } catch (e) {}
+    var groupScrollTimer = 0;
+    function groupScrollKey() {
+      return 'media-group-scroll:' + (groupDetail.getAttribute('data-group-detail') || location.search);
+    }
+    function groupPersistScroll() {
+      try {
+        sessionStorage.setItem(groupScrollKey(), String(window.scrollY || window.pageYOffset || 0));
+      } catch (e) {}
+    }
+    function groupRestoreScroll() {
+      var raw;
+      try { raw = sessionStorage.getItem(groupScrollKey()); } catch (e) { return; }
+      if (raw == null || raw === '') return;
+      var y = parseInt(raw, 10);
+      if (!isFinite(y) || y < 1) return;
+      function apply() {
+        var max = Math.max(0, (document.documentElement.scrollHeight || 0) - window.innerHeight);
+        window.scrollTo(0, Math.min(y, max));
+      }
+      apply();
+      requestAnimationFrame(apply);
+      window.addEventListener('load', apply, { once: true });
+      var n = 0;
+      var timer = window.setInterval(function () {
+        apply();
+        n += 1;
+        if (n >= 10) window.clearInterval(timer);
+      }, 100);
+    }
+    window.addEventListener('scroll', function () {
+      if (groupScrollTimer) return;
+      groupScrollTimer = window.setTimeout(function () {
+        groupScrollTimer = 0;
+        groupPersistScroll();
+      }, 80);
+    }, { passive: true });
+    window.addEventListener('pagehide', function () { groupPersistScroll(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') groupPersistScroll();
+    });
+    document.querySelectorAll('.group-ep-row').forEach(function (link) {
+      link.addEventListener('click', function () { groupPersistScroll(); });
+    });
+    groupRestoreScroll();
+  }
+
   var toolsPage = document.querySelector('[data-tools-page]');
   if (toolsPage) {
     var toolsTree = toolsPage.querySelector('[data-tools-tree]');

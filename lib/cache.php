@@ -492,6 +492,24 @@ function cache_update_item(string $id, callable $mutator): ?array
     return $next;
 }
 
+/** @param list<string> $ids */
+function cache_update_items(array $ids, callable $mutator): int
+{
+    $n = 0;
+    $seen = [];
+    foreach ($ids as $id) {
+        $id = (string) $id;
+        if ($id === '' || isset($seen[$id])) {
+            continue;
+        }
+        $seen[$id] = true;
+        if (cache_update_item($id, $mutator) !== null) {
+            $n++;
+        }
+    }
+    return $n;
+}
+
 function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'direct'): array
 {
     if ($meta === null || empty($meta['tmdb_id'])) {

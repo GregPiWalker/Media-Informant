@@ -216,11 +216,15 @@ $view = $prefs->view;
             <tr class="catalog-group" data-group="<?= h($group->id) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?>>
               <td data-col="poster"><?= catalog_thumb_button($head, 'sm', $head->seriesTitle, ((int) $epCount) . ' ' . ($epCount === 1 ? 'episode' : 'episodes')) ?></td>
               <td data-col="title">
-                <button type="button" class="expand-btn" data-expand="<?= h($group->id) ?>" aria-expanded="false">
-                  <span class="expand-caret" aria-hidden="true"></span>
-                  <span class="catalog-row-title"><?= h($head->seriesTitle) ?></span>
-                  <span class="episode-count"><?= (int) $epCount ?> <?= $epCount === 1 ? 'episode' : 'episodes' ?></span>
-                </button>
+                <div class="catalog-group-cell">
+                  <button type="button" class="expand-btn" data-expand="<?= h($group->id) ?>" aria-expanded="false" aria-label="Show episodes">
+                    <span class="expand-caret" aria-hidden="true"></span>
+                  </button>
+                  <a class="catalog-group-link" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>">
+                    <span class="catalog-row-title"><?= h($head->seriesTitle) ?></span>
+                    <span class="episode-count"><?= (int) $epCount ?> <?= $epCount === 1 ? 'episode' : 'episodes' ?></span>
+                  </a>
+                </div>
               </td>
               <td data-col="year"><?= h($head->cells['year']) ?></td>
               <td data-col="status"><?= h($head->cells['status']) ?></td>
@@ -308,7 +312,7 @@ $view = $prefs->view;
                 ?>
         <h2 class="poster-bucket" data-poster-bucket><?= h($bucket) ?></h2>
             <?php endif; ?>
-        <a class="card" href="<?= h($head->href) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?><?= $group->isSeries() ? ' data-open-list="' . h($group->id) . '"' : '' ?>>
+        <a class="card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?>>
           <div class="poster">
             <?php if ($head->poster): ?>
             <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">
@@ -358,7 +362,7 @@ $view = $prefs->view;
               $head = $group->head;
               $title = $group->isSeries() ? $head->seriesTitle : $head->title;
               ?>
-          <a class="card genre-card" href="<?= h($head->href) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?>>
+          <a class="card genre-card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?>>
             <div class="poster">
               <?php if ($head->poster): ?>
               <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">

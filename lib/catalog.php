@@ -582,6 +582,43 @@ final class CatalogGroup
     }
 }
 
+function catalog_record_thumb_html(CatalogRecord $record, string $size, string $label = ''): string
+{
+    $class = 'catalog-thumb catalog-thumb-' . $size;
+    $initial = $label !== '' ? $label : $record->title;
+    if ($record->poster) {
+        return '<span class="' . $class . '"><img src="' . h($record->poster) . '" alt="" loading="lazy" decoding="async"></span>';
+    }
+    return '<span class="' . $class . ' poster-fallback" aria-hidden="true"><span>' . h(initial($initial)) . '</span></span>';
+}
+
+function catalog_group_href(CatalogGroup $group): string
+{
+    if (!$group->isSeries()) {
+        return $group->head->href;
+    }
+    return 'group.php?key=' . rawurlencode($group->id);
+}
+
+function catalog_file_href_from_group(CatalogRecord $record, string $groupId): string
+{
+    return 'title.php?id=' . rawurlencode($record->id) . '&gkey=' . rawurlencode($groupId);
+}
+
+/** @param list<CatalogRecord> $records */
+function catalog_find_group_by_id(array $records, string $id): ?CatalogGroup
+{
+    if ($id === '') {
+        return null;
+    }
+    foreach (catalog_collect_groups($records) as $group) {
+        if ($group->id === $id) {
+            return $group;
+        }
+    }
+    return null;
+}
+
 /** @param list<CatalogRecord> $records */
 function catalog_collect_groups(array $records): array
 {
