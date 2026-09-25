@@ -240,11 +240,7 @@ function render_header(array $opts = []): void
       </button>
       <a class="btn btn-icon<?= $section === 'tools' ? ' is-active' : '' ?>" href="<?= h(app_href('tools/index.php')) ?>" aria-label="Tools"<?= $section === 'tools' ? ' aria-current="page"' : '' ?>>
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14.2 3.6h3.6v2.7l-1.8 1.8V12"/>
-          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M16 12.2v8.2"/>
-          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4.6 19.2 11.4 12l2.2 2.2-6.8 7.2"/>
-          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M3.8 20.2h3.1"/>
-          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M13.6 10.2 16 7.8l1.6 1.6-2.4 2.4z"/>
+          <path fill="currentColor" d="M22.7 19 13.6 9.9a5.4 5.4 0 0 0-1.5-6.9 5.5 5.5 0 0 0-7.4-1.3L9 6 6 9 1.6 4.7A5.5 5.5 0 0 0 2.9 12a5.4 5.4 0 0 0 6.9 1.5L19 22.7a1.5 1.5 0 0 0 2.1 0l1.6-1.6a1.5 1.5 0 0 0 0-2.1Z"/>
         </svg>
       </a>
       <a class="btn btn-icon<?= $section === 'config' ? ' is-active' : '' ?>" href="<?= h(app_href('config/index.php')) ?>" aria-label="Settings"<?= $section === 'config' ? ' aria-current="page"' : '' ?>>
