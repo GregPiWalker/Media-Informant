@@ -876,6 +876,17 @@ function scan_tally_status(array &$job, string $status): void
     }
 }
 
+function scan_grok_match_phrase(array $job): string
+{
+    $matched = (int) ($job['grok_matched'] ?? 0);
+    $attempted = (int) ($job['grok_attempted'] ?? 0);
+    if ($attempted > 0 && $matched > $attempted) {
+        $choice = $attempted === 1 ? 'choice' : 'choices';
+        return 'Grok matched ' . $matched . ' from ' . $attempted . ' Grok ' . $choice;
+    }
+    return 'Grok matched ' . $matched . ' of ' . $attempted;
+}
+
 function scan_lookup_message(int $found, int $pending, string $catalog = 'video'): string
 {
     $noun = scan_catalog_label($catalog);
@@ -959,6 +970,305 @@ function scan_job_write_library(array $job): void
     }
     if (function_exists('cache_prune_orphan_titles')) {
         cache_prune_orphan_titles($items);
+    }
+}
+
+function scan_tv_show_folder(string $path, array $item): string
+{
+    if (!function_exists('search_query_tv_folders')) {
+        return '';
+    }
+    $kind = (string) ($item['kind'] ?? '');
+    $tv = $kind === 'show' || (function_exists('search_query_path_is_tv') && search_query_path_is_tv($path, tmdb_search_meta_from_item($item)));
+    if (!$tv) {
+        return '';
+    }
+    return (string) (search_query_tv_folders($path)['show'] ?? '');
+}
+
+function scan_tv_season_folder(string $path): string
+{
+    if (!function_exists('search_query_tv_folders')) {
+        return '';
+    }
+    return (string) (search_query_tv_folders($path)['season'] ?? '');
+}
+
+function scan_tv_store_show(array &$job, string $folder, array $meta): void
+{
+    if ($folder === '' || empty($meta['tmdb_id'])) {
+        return;
+    }
+    if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+        $job['tv_shows'] = [];
+    }
+    $job['tv_shows'][$folder] = [
+        'tmdb_id' => (int) $meta['tmdb_id'],
+        'title' => (string) ($meta['title'] ?? ''),
+        'year' => $meta['year'] ?? null,
+        'poster_path' => $meta['poster_path'] ?? null,
+        'genres' => cache_string_list($meta['genres'] ?? []),
+        'pending' => false,
+    ];
+}
+
+function scan_part_bundle_key(array $item): string
+{
+    $part = trim((string) ($item['part'] ?? ''));
+    if (!preg_match('/^Part (\d{1,2})$/', $part) || (int) substr($part, 5) < 1) {
+        $named = function_exists('parse_named_part') ? parse_named_part((string) ($item['filename'] ?? '')) : null;
+        if ($named === null) {
+            return '';
+        }
+        $part = $named['part'];
+    }
+    $kind = function_exists('library_item_kind') ? library_item_kind($item) : (string) ($item['kind'] ?? 'movie');
+    if ($kind === 'show') {
+        $show = scan_tv_show_folder((string) ($item['path'] ?? ''), $item);
+        if ($show === '') {
+            $show = lower((string) ($item['title'] ?? ''));
+        }
+        $epTitle = lower(trim((string) ($item['episode_title'] ?? '')));
+        return 'show|' . lower($show) . '|' . (string) ($item['season'] ?? '') . '|' . (string) ($item['episode'] ?? '') . '|' . $epTitle;
+    }
+    return 'title|' . $kind . '|' . lower((string) ($item['title'] ?? '')) . '|' . (string) ($item['year'] ?? '');
+}
+
+function scan_part_bundle_from_item(array $item): array
+{
+    return [
+        'tmdb_id' => (int) ($item['tmdb_id'] ?? 0),
+        'title' => (string) ($item['display_title'] ?? $item['title'] ?? ''),
+        'year' => $item['year'] ?? null,
+        'poster_path' => $item['poster_path'] ?? null,
+        'genres' => $item['genres'] ?? [],
+        'overview' => (string) ($item['overview'] ?? ''),
+        'episode_title' => (string) ($item['episode_title'] ?? ''),
+        'season' => $item['season'] ?? null,
+        'episode' => $item['episode'] ?? null,
+        'match_source' => (string) ($item['match_source'] ?? 'direct'),
+        'status' => (string) ($item['status'] ?? 'matched'),
+        'pending' => false,
+        'miss' => false,
+        'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
+    ];
+}
+
+function scan_part_apply_bundle(array $item, array $bundle): array
+{
+    if (!empty($bundle['miss'])) {
+        $item['status'] = 'unmatched';
+        $item['match_source'] = 'none';
+        $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
+        return $item;
+    }
+    if (!empty($bundle['pending']) || (int) ($bundle['tmdb_id'] ?? 0) < 1) {
+        $item['status'] = 'unidentified';
+        $item['match_source'] = 'none';
+        $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
+        $item['part_bundle'] = scan_part_bundle_key($item);
+        return $item;
+    }
+    $item['tmdb_id'] = (int) $bundle['tmdb_id'];
+    $item['status'] = 'matched';
+    $item['poster_path'] = $bundle['poster_path'] ?? null;
+    $item['genres'] = function_exists('cache_string_list') ? cache_string_list($bundle['genres'] ?? []) : ($bundle['genres'] ?? []);
+    $item['overview'] = (string) ($bundle['overview'] ?? '');
+    if (!empty($bundle['episode_title'])) {
+        $item['episode_title'] = (string) $bundle['episode_title'];
+    }
+    if (isset($bundle['season']) && $bundle['season'] !== null && $bundle['season'] !== '') {
+        $item['season'] = (int) $bundle['season'];
+    }
+    if (isset($bundle['episode']) && $bundle['episode'] !== null && $bundle['episode'] !== '') {
+        $item['episode'] = (int) $bundle['episode'];
+    }
+    $source = (string) ($bundle['match_source'] ?? 'direct');
+    $item['match_source'] = $source === 'tmdb' ? 'direct' : $source;
+    $display = (string) ($bundle['title'] ?? '');
+    if ($display !== '' && (!function_exists('library_has_custom_title') || !library_has_custom_title($item))) {
+        $item = library_set_auto_title($item, $display);
+    }
+    if (!empty($bundle['year'])) {
+        $item['year'] = (int) $bundle['year'];
+    }
+    return $item;
+}
+
+function scan_part_remember(array &$job, array $item, bool $pending = false, bool $miss = false, string $key = ''): void
+{
+    if ($key === '') {
+        $key = scan_part_bundle_key($item);
+    }
+    if ($key === '') {
+        return;
+    }
+    if (!isset($job['part_bundles']) || !is_array($job['part_bundles'])) {
+        $job['part_bundles'] = [];
+    }
+    if ($miss) {
+        $job['part_bundles'][$key] = [
+            'tmdb_id' => 0,
+            'pending' => false,
+            'miss' => true,
+            'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
+        ];
+        return;
+    }
+    if ($pending || (($item['status'] ?? '') !== 'matched')) {
+        $job['part_bundles'][$key] = [
+            'tmdb_id' => 0,
+            'pending' => true,
+            'miss' => false,
+            'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
+        ];
+        $item['part_bundle'] = $key;
+        return;
+    }
+    $job['part_bundles'][$key] = scan_part_bundle_from_item($item);
+}
+
+function scan_part_backfill(array &$job, string $key, array $source): void
+{
+    if ($key === '') {
+        return;
+    }
+    $bundle = scan_part_bundle_from_item($source);
+    if (!isset($job['part_bundles']) || !is_array($job['part_bundles'])) {
+        $job['part_bundles'] = [];
+    }
+    $job['part_bundles'][$key] = $bundle;
+    foreach ($job['items'] as $i => $row) {
+        if (!is_array($row) || scan_part_bundle_key($row) !== $key) {
+            continue;
+        }
+        if (($row['status'] ?? '') === 'matched' && !empty($row['tmdb_id'])) {
+            continue;
+        }
+        $job['items'][$i] = scan_part_apply_bundle($row, $bundle);
+        if (($job['items'][$i]['status'] ?? '') === 'matched') {
+            $job['found'] = (int) ($job['found'] ?? 0) + 1;
+        }
+    }
+}
+
+function scan_tv_apply_show(array &$job, array $item, array $cached): array
+{
+    $tmdbId = (int) ($cached['tmdb_id'] ?? 0);
+    if ($tmdbId < 1) {
+        return $item;
+    }
+    $partKey = scan_part_bundle_key($item);
+    $existing = ($partKey !== '' && is_array($job['part_bundles'][$partKey] ?? null)) ? $job['part_bundles'][$partKey] : null;
+    if (is_array($existing) && (int) ($existing['tmdb_id'] ?? 0) > 0) {
+        return scan_part_apply_bundle($item, $existing);
+    }
+    $title = (string) ($item['title'] ?? '');
+    $item['tmdb_id'] = $tmdbId;
+    $item['status'] = 'matched';
+    $item['poster_path'] = $cached['poster_path'] ?? null;
+    $item = library_set_auto_title($item, (string) ($cached['title'] !== '' ? $cached['title'] : $title));
+    if (!empty($cached['year'])) {
+        $item['year'] = (int) $cached['year'];
+    }
+    $item['genres'] = cache_string_list($cached['genres'] ?? []);
+    $item['match_source'] = (string) ($item['match_source'] ?? 'direct');
+    if ($item['match_source'] === 'none' || $item['match_source'] === '') {
+        $item['match_source'] = 'direct';
+    }
+    $seasonKey = scan_tv_season_folder((string) ($item['path'] ?? ''));
+    if ($seasonKey === '') {
+        $seasonKey = scan_tv_show_folder((string) ($item['path'] ?? ''), $item) . '#s' . (string) ($item['season'] ?? '');
+    }
+    $cachedSeason = is_array($job['tv_seasons'][$seasonKey] ?? null) ? $job['tv_seasons'][$seasonKey] : null;
+    if (is_array($cachedSeason) && isset($cachedSeason['season_number']) && $cachedSeason['season_number'] !== null) {
+        $item['season'] = (int) $cachedSeason['season_number'];
+    }
+    if (function_exists('tmdb_enrich_item_episode')) {
+        $item = tmdb_enrich_item_episode($item, $tmdbId);
+    }
+    $parsedSeason = isset($item['season']) ? (int) $item['season'] : null;
+    $episode = isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null ? (int) $item['episode'] : null;
+    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+    $resolved = function_exists('tmdb_fetch_season') && $parsedSeason !== null
+        && ($data = tmdb_fetch_season($tmdbId, $parsedSeason)) !== null
+        && function_exists('tmdb_pick_season_episode')
+        && tmdb_pick_season_episode($data, $episode, $episodeTitle) !== null;
+    if (!$resolved && $seasonKey !== '' && !isset($job['tv_seasons'][$seasonKey]) && function_exists('grok_choose_season') && function_exists('tmdb_show_seasons')) {
+        $chosen = grok_choose_season(
+            (string) ($cached['title'] ?? $title),
+            $seasonKey,
+            $parsedSeason,
+            (string) ($item['filename'] ?? ''),
+            tmdb_show_seasons($tmdbId)
+        );
+        if (!isset($job['tv_seasons']) || !is_array($job['tv_seasons'])) {
+            $job['tv_seasons'] = [];
+        }
+        $job['tv_seasons'][$seasonKey] = ['season_number' => $chosen];
+        if ($chosen !== null) {
+            $item['season'] = $chosen;
+            if (function_exists('tmdb_enrich_item_episode')) {
+                $item = tmdb_enrich_item_episode($item, $tmdbId);
+            }
+            if (function_exists('app_log')) {
+                app_log('tmdb', 'Grok chose season ' . $chosen . ' for ' . $seasonKey);
+            }
+        }
+    }
+    if ($partKey !== '') {
+        scan_part_remember($job, $item, false, false, $partKey);
+    }
+    return $item;
+}
+
+function scan_tv_backfill_show(array &$job, string $folder, ?int $tmdbId): void
+{
+    if ($folder === '') {
+        return;
+    }
+    if ($tmdbId !== null && $tmdbId > 0) {
+        $meta = function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+        if (!is_array($meta)) {
+            $meta = ['tmdb_id' => $tmdbId, 'title' => '', 'year' => null, 'poster_path' => null, 'genres' => []];
+        }
+        scan_tv_store_show($job, $folder, $meta);
+        $job['tv_shows'][$folder]['via'] = 'grok';
+    } else {
+        if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+            $job['tv_shows'] = [];
+        }
+        $prev = is_array($job['tv_shows'][$folder] ?? null) ? $job['tv_shows'][$folder] : [];
+        $job['tv_shows'][$folder] = $prev + ['tmdb_id' => 0, 'pending' => false, 'miss' => true];
+    }
+    $n = 0;
+    foreach ($job['items'] as $i => $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        if (scan_tv_show_folder((string) ($item['path'] ?? ''), $item) !== $folder) {
+            continue;
+        }
+        if ($tmdbId === null || $tmdbId < 1) {
+            if (($item['status'] ?? '') !== 'matched') {
+                $job['items'][$i]['status'] = 'unmatched';
+                $job['items'][$i]['match_source'] = 'none';
+            }
+            continue;
+        }
+        $before = (string) ($item['status'] ?? '');
+        $job['items'][$i] = scan_tv_apply_show($job, $item, $job['tv_shows'][$folder]);
+        $job['items'][$i]['match_source'] = 'grok';
+        if (($job['items'][$i]['status'] ?? '') === 'matched') {
+            $job['found'] = (int) ($job['found'] ?? 0) + 1;
+            if ($before !== 'matched') {
+                $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+            }
+        }
+        $n++;
+    }
+    if (function_exists('app_log')) {
+        app_log('tmdb', 'Show ' . $folder . ' resolved to ' . (string) ($tmdbId ?? 'none') . ' for ' . $n . ' files.');
     }
 }
 
@@ -1062,7 +1372,7 @@ function scan_job_publish(array $job, array $extra = []): void
     ], scan_grok_cost_fields($job), $extra));
 }
 
-function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): array
+function scan_job_begin(string $mode = 'retry', string $catalog = 'video', string $groupKey = ''): array
 {
     cache_init();
     if (!cache_writable()) {
@@ -1084,11 +1394,38 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
     }
 
     $started = time();
+    $scopeLabel = '';
+    $scopeIds = null;
+    if ($groupKey !== '') {
+        if (!function_exists('catalog_find_group_by_id')) {
+            require_once __DIR__ . '/catalog.php';
+        }
+        $scopeRecords = [];
+        $scopeLibrary = cache_read_library();
+        foreach (is_array($scopeLibrary['items'] ?? null) ? $scopeLibrary['items'] : [] as $scopeItem) {
+            if (is_array($scopeItem)) {
+                $scopeRecords[] = CatalogRecord::fromVideo($scopeItem);
+            }
+        }
+        $scopeGroup = catalog_find_group_by_id($scopeRecords, $groupKey);
+        if ($scopeGroup === null || !$scopeGroup->isSeries()) {
+            throw new RuntimeException('That series is not in the catalog.');
+        }
+        $scopeIds = [];
+        foreach ($scopeGroup->members as $member) {
+            if ($member->id !== '') {
+                $scopeIds[$member->id] = true;
+            }
+        }
+        $scopeLabel = $scopeGroup->head->seriesTitle !== '' ? $scopeGroup->head->seriesTitle : $scopeGroup->head->title;
+    }
     if (function_exists('app_log')) {
-        app_log('scan', $title . ' scan started (' . scan_options_summary($targets) . ').', [
+        app_log('scan', ($scopeLabel !== '' ? 'Re-scanning ' . $scopeLabel : $title . ' scan started')
+            . ' (' . scan_options_summary($targets) . ').', [
             'mode' => $mode,
             'catalog' => $catalog,
             'lookup_targets' => $targets,
+            'group' => $groupKey,
         ]);
     }
     scan_status_write([
@@ -1120,7 +1457,7 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         'grok_cached_tokens' => 0,
         'grok_cost_usd' => 0.0,
         'grok_cost_label' => '$0.0000',
-        'message' => 'Preparing ' . $noun . ' look-ups…',
+        'message' => $scopeLabel !== '' ? ('Re-scanning ' . $scopeLabel . '…') : ('Preparing ' . $noun . ' look-ups…'),
     ]);
 
     $absentRoots = [];
@@ -1163,6 +1500,9 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
             continue;
         }
+        if ($scopeIds !== null && !isset($scopeIds[(string) ($item['id'] ?? '')])) {
+            continue;
+        }
         $root = settings_normalize_path((string) ($item['root'] ?? ''));
         if ($root === '' || !isset($presentSet[$root])) {
             continue;
@@ -1184,7 +1524,9 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
     }
 
     if ($files === []) {
-        $msg = 'No ' . $noun . ' files match the current scan options. Catalog unchanged.';
+        $msg = $scopeLabel !== ''
+            ? ('No files in ' . $scopeLabel . ' match the current scan options. Catalog unchanged.')
+            : ('No ' . $noun . ' files match the current scan options. Catalog unchanged.');
         scan_status_write([
             'state' => 'done',
             'phase' => 'done',
@@ -1208,6 +1550,8 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         'catalog' => $catalog,
         'lookup_targets' => $targets,
         'lookup_only' => true,
+        'scope_group' => $groupKey,
+        'scope_label' => $scopeLabel,
         'started_at' => $started,
         'roots' => $roots,
         'walked_roots' => [],
@@ -1232,6 +1576,7 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video'): arra
         'grok_cached_tokens' => 0,
         'grok_cost_usd' => 0.0,
         'tmdb_item' => 0,
+        'tv_shows' => [],
         'wait_continue' => false,
         'message' => scan_lookup_message(0, $pending, $catalog),
     ];
@@ -1331,6 +1676,20 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         }
     }
 
+    $partKey = scan_part_bundle_key($item);
+    $partBundle = ($partKey !== '' && is_array($job['part_bundles'][$partKey] ?? null)) ? $job['part_bundles'][$partKey] : null;
+    if (is_array($partBundle)) {
+        $item = scan_part_apply_bundle($item, $partBundle);
+        $job['items'][] = $item;
+        if (($item['status'] ?? '') === 'matched') {
+            $job['found'] = (int) $job['found'] + 1;
+            if (($item['match_source'] ?? '') === 'grok') {
+                $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+            }
+        }
+        return false;
+    }
+
     $source = null;
     if ($sameParse) {
         $source = $prev;
@@ -1361,10 +1720,36 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 $item['year'] = (int) $meta['year'];
             }
             $item['genres'] = cache_string_list($meta['genres'] ?? $source['genres'] ?? []);
-            $item['match_source'] = 'direct';
+            $item['match_source'] = (($source['match_source'] ?? '') === 'grok') ? 'grok' : 'direct';
+            if (function_exists('tmdb_enrich_item_episode')) {
+                $item = tmdb_enrich_item_episode($item, $tmdbId);
+            }
+            $showFolderEarly = '';
+            if (function_exists('search_query_tv_folders')) {
+                $showFolderEarly = (string) (search_query_tv_folders($path)['show'] ?? '');
+            }
+            if ($showFolderEarly !== '') {
+                if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+                    $job['tv_shows'] = [];
+                }
+                $job['tv_shows'][$showFolderEarly] = [
+                    'tmdb_id' => $tmdbId,
+                    'title' => (string) ($meta['title'] ?? $source['display_title'] ?? $title),
+                    'year' => $meta['year'] ?? null,
+                    'poster_path' => $meta['poster_path'] ?? $source['poster_path'] ?? null,
+                    'genres' => cache_string_list($meta['genres'] ?? $source['genres'] ?? []),
+                ];
+                if (($source['match_source'] ?? '') === 'grok') {
+                    $job['tv_shows'][$showFolderEarly]['via'] = 'grok';
+                }
+            }
             $knownMatches[$key] = $item;
+            scan_part_remember($job, $item);
             $job['items'][] = $item;
             $job['found'] = (int) $job['found'] + 1;
+            if (($item['match_source'] ?? '') === 'grok') {
+                $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+            }
             return false;
         }
     }
@@ -1390,11 +1775,65 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
     if (function_exists('app_log')) {
         app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
     }
+    $showFolder = '';
+    if (function_exists('search_query_tv_folders') && (($item['kind'] ?? '') === 'show' || (function_exists('search_query_path_is_tv') && search_query_path_is_tv($path, tmdb_search_meta_from_item($item))))) {
+        $folders = search_query_tv_folders($path);
+        $showFolder = (string) ($folders['show'] ?? '');
+    }
+    $cachedShow = ($showFolder !== '' && is_array($job['tv_shows'][$showFolder] ?? null))
+        ? $job['tv_shows'][$showFolder]
+        : null;
+    if (is_array($cachedShow) && !empty($cachedShow['tmdb_id'])) {
+        $item = scan_tv_apply_show($job, $item, $cachedShow);
+        $viaGrok = (($cachedShow['via'] ?? '') === 'grok');
+        $item['match_source'] = $viaGrok ? 'grok' : 'direct';
+        if (function_exists('app_log')) {
+            app_log('tmdb', 'TMDB item ' . $itemNo . ' reusing show ' . (int) $cachedShow['tmdb_id'] . ' from ' . $showFolder . ' file=' . $filename);
+        }
+        $knownMatches[$key] = $item;
+        scan_part_remember($job, $item);
+        $job['found'] = (int) $job['found'] + 1;
+        if ($viaGrok) {
+            $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+        }
+        $job['items'][] = $item;
+        if (function_exists('tmdb_scan_item_end')) {
+            tmdb_scan_item_end();
+        }
+        return true;
+    }
+    if (is_array($cachedShow) && (!empty($cachedShow['pending']) || !empty($cachedShow['miss']))) {
+        $item['show_folder'] = $showFolder;
+        $item['tmdb_candidates'] = is_array($cachedShow['candidates'] ?? null) ? $cachedShow['candidates'] : [];
+        $item['status'] = !empty($cachedShow['miss']) ? 'unmatched' : 'unidentified';
+        $item['match_source'] = 'none';
+        if (function_exists('app_log')) {
+            app_log('tmdb', 'TMDB item ' . $itemNo . ' waiting on one show choice for ' . $showFolder . ' file=' . $filename);
+        }
+        $job['items'][] = $item;
+        if (function_exists('tmdb_scan_item_end')) {
+            tmdb_scan_item_end();
+        }
+        return true;
+    }
     try {
-        $payload = tmdb_search_first_results($title, $year, $filename, tmdb_search_meta_from_item($item));
+        $lookupFile = $filename;
+        if (function_exists('parse_named_part')) {
+            $namedLookup = parse_named_part($filename);
+            if ($namedLookup !== null && $namedLookup['stem'] !== '') {
+                $ext = pathinfo($filename, PATHINFO_EXTENSION);
+                $lookupFile = $namedLookup['stem'] . ($ext !== '' ? ('.' . $ext) : '');
+            }
+        }
+        $payload = tmdb_search_first_results($title, $year, $lookupFile, tmdb_search_meta_from_item($item));
         $job['lookups'] = (int) $job['lookups'] + 1;
         $query = (string) ($payload['query'] ?? '');
-        $weak = $query !== '' && function_exists('search_query_is_weak') && search_query_is_weak($query);
+        $tvSeries = $showFolder !== '' || ($payload['source'] ?? '') === 'tv';
+        $weak = $query !== '' && (
+            function_exists('search_query_skip_as_weak')
+                ? search_query_skip_as_weak($query, $tvSeries)
+                : (!$tvSeries && function_exists('search_query_is_weak') && search_query_is_weak($query))
+        );
         $cands = [];
         foreach ($payload['results'] as $row) {
             if (!is_array($row)) {
@@ -1421,9 +1860,27 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $item['status'] = 'unmatched';
             $item['match_source'] = 'none';
             $job['unmatched'] = (int) $job['unmatched'] + 1;
-            scan_queue_grok($job, $item, 'choose');
-            if (function_exists('app_log')) {
-                app_log('tmdb', 'TMDB item ' . $itemNo . ' no usable hits; queued for Grok (' . scan_grok_pending($job) . ' waiting) file=' . $filename);
+            if ($showFolder !== '') {
+                $item['show_folder'] = $showFolder;
+                if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+                    $job['tv_shows'] = [];
+                }
+                $job['tv_shows'][$showFolder] = [
+                    'tmdb_id' => 0,
+                    'pending' => false,
+                    'miss' => true,
+                    'candidates' => [],
+                ];
+                if (function_exists('app_log')) {
+                    app_log('tmdb', 'TMDB item ' . $itemNo . ' no show hits for ' . $showFolder . '; later episodes will not search again. file=' . $filename);
+                }
+            } else {
+                $item['part_bundle'] = scan_part_bundle_key($item);
+                scan_part_remember($job, $item, true);
+                scan_queue_grok($job, $item, 'choose');
+                if (function_exists('app_log')) {
+                    app_log('tmdb', 'TMDB item ' . $itemNo . ' no usable hits; queued for Grok (' . scan_grok_pending($job) . ' waiting) file=' . $filename);
+                }
             }
             $job['items'][] = $item;
             return true;
@@ -1450,8 +1907,24 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 }
                 $item['genres'] = cache_string_list($meta['genres'] ?? []);
                 $item['match_source'] = 'tmdb';
+                if (function_exists('tmdb_enrich_item_episode')) {
+                    $item = tmdb_enrich_item_episode($item, (int) $meta['tmdb_id']);
+                }
+                if ($showFolder !== '' && (($usable[0]['media_type'] ?? '') === 'tv' || ($item['kind'] ?? '') === 'show')) {
+                    if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+                        $job['tv_shows'] = [];
+                    }
+                    $job['tv_shows'][$showFolder] = [
+                        'tmdb_id' => (int) $meta['tmdb_id'],
+                        'title' => (string) ($meta['title'] ?? $title),
+                        'year' => $meta['year'] ?? null,
+                        'poster_path' => $meta['poster_path'] ?? null,
+                        'genres' => cache_string_list($meta['genres'] ?? []),
+                    ];
+                }
                 $knownMatches[$key] = $item;
                 $knownMatches[scan_match_key($item['display_title'], $item['year'])] = $item;
+                scan_part_remember($job, $item);
                 $job['found'] = (int) $job['found'] + 1;
                 if (defined('GROK_VERIFY_SINGLES') && GROK_VERIFY_SINGLES) {
                     scan_queue_grok($job, $item, 'verify');
@@ -1462,6 +1935,8 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $item['status'] = 'unmatched';
             $item['match_source'] = 'none';
             $job['unmatched'] = (int) $job['unmatched'] + 1;
+            $item['part_bundle'] = scan_part_bundle_key($item);
+            scan_part_remember($job, $item, true);
             scan_queue_grok($job, $item, 'choose');
             $job['items'][] = $item;
             return true;
@@ -1469,11 +1944,29 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
 
         $item['status'] = 'unmatched';
         $item['match_source'] = 'none';
+        $item['tmdb_candidates'] = $usable;
         $job['unmatched'] = (int) $job['unmatched'] + 1;
-        scan_queue_grok($job, $item, 'choose');
-        if (function_exists('app_log')) {
-            app_log('tmdb', 'TMDB item ' . $itemNo . ' queued for Grok (' . scan_grok_pending($job) . ' waiting) file=' . $filename);
+        if ($showFolder !== '') {
+            $item['show_folder'] = $showFolder;
+            if (!isset($job['tv_shows']) || !is_array($job['tv_shows'])) {
+                $job['tv_shows'] = [];
+            }
+            $job['tv_shows'][$showFolder] = [
+                'tmdb_id' => 0,
+                'pending' => true,
+                'candidates' => $usable,
+            ];
+            if (function_exists('app_log')) {
+                app_log('tmdb', 'TMDB item ' . $itemNo . ' ambiguous show; one Grok choice for ' . $showFolder . ' file=' . $filename);
+            }
+        } elseif (function_exists('app_log')) {
+            app_log('tmdb', 'TMDB item ' . $itemNo . ' queued for Grok file=' . $filename);
         }
+        if ($showFolder === '') {
+            $item['part_bundle'] = scan_part_bundle_key($item);
+            scan_part_remember($job, $item, true);
+        }
+        scan_queue_grok($job, $item, 'choose');
         $job['items'][] = $item;
         return true;
     } finally {
@@ -1555,8 +2048,7 @@ function scan_job_finalize(array $job, bool $cancelled): array
         'catalog' => scan_job_catalog($job),
         'lookup_targets' => scan_lookup_targets_from($job),
         'message' => ($cancelled ? scan_catalog_title(scan_job_catalog($job)) . ' scan stopped. ' : scan_catalog_title(scan_job_catalog($job)) . ' scan finished. ')
-            . 'TMDB found ' . $found . '. Grok matched ' . (int) ($job['grok_matched'] ?? 0)
-            . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.',
+            . 'TMDB found ' . $found . '. ' . scan_grok_match_phrase($job) . '.',
     ], scan_grok_cost_fields($job)));
     if (function_exists('catalog_store_record_scan')) {
         catalog_store_record_scan('video', $job, $cancelled);
@@ -1763,8 +2255,7 @@ function scan_job_run_grok_batch(array $job, bool $filesDone): array
     if (!$moreWork) {
         $job['phase'] = 'lookup';
         $job['wait_continue'] = false;
-        $job['message'] = 'Grok finished. Matched ' . (int) ($job['grok_matched'] ?? 0)
-            . ' of ' . (int) ($job['grok_attempted'] ?? 0) . '.';
+        $job['message'] = 'Grok finished. ' . scan_grok_match_phrase($job) . '.';
         scan_job_write($job);
         return scan_job_finalize($job, false);
     }
@@ -1772,8 +2263,7 @@ function scan_job_run_grok_batch(array $job, bool $filesDone): array
     $job['phase'] = 'lookup';
     if ($pause) {
         $job['wait_continue'] = true;
-        $job['message'] = 'Grok batch done. Matched ' . (int) ($job['grok_matched'] ?? 0)
-            . ' of ' . (int) ($job['grok_attempted'] ?? 0)
+        $job['message'] = 'Grok batch done. ' . scan_grok_match_phrase($job)
             . ' (' . $left . ' Grok left). Press Continue.';
         scan_job_write($job);
         scan_job_publish($job, ['paused' => true]);
@@ -1809,29 +2299,105 @@ function scan_grok_is_running(): bool
     return (grok_status_read()['state'] ?? '') === 'running';
 }
 
-function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false, string $catalog = 'video'): array
+function scan_fail(Throwable $e): array
+{
+    scan_job_clear();
+    $where = basename($e->getFile()) . ':' . $e->getLine();
+    $message = $e->getMessage() . ' (' . $where . ')';
+    if (function_exists('app_log')) {
+        app_log('scan', $message, [], 'error');
+    }
+    scan_status_write([
+        'state' => 'error',
+        'cancel_requested' => false,
+        'message' => $message,
+    ]);
+    return scan_status_read();
+}
+
+function scan_tick(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false, string $catalog = 'video', string $groupKey = ''): array
+{
+    try {
+        return scan_tick_run($allowStart, $mode, $resumePause, $catalog, $groupKey);
+    } catch (Throwable $e) {
+        return scan_fail($e);
+    }
+}
+
+function scan_tick_run(bool $allowStart = false, string $mode = 'retry', bool $resumePause = false, string $catalog = 'video', string $groupKey = ''): array
 {
     cache_init();
     $mode = scan_normalize_mode($mode);
     $catalog = scan_catalog_normalize($catalog);
     $job = scan_job_read();
-    if (($job['state'] ?? '') === 'running') {
+    $statusNow = scan_status_read();
+    $jobRunning = ($job['state'] ?? '') === 'running';
+    $statusRunning = ($statusNow['state'] ?? '') === 'running';
+    // A crash writes status error/done and used to leave scan-job.json on running.
+    // That is not a live scan and it is not a pause. Drop it so Start / Re-scan can proceed.
+    if ($jobRunning && !$statusRunning) {
+        scan_job_clear();
+        $job = ['state' => 'idle'];
+        $jobRunning = false;
+        if (function_exists('app_log')) {
+            $prior = trim((string) ($statusNow['message'] ?? ''));
+            if (strlen($prior) > 180) {
+                $prior = substr($prior, 0, 177) . '...';
+            }
+            app_log(
+                'scan',
+                $prior !== ''
+                    ? ('No scan was running. Cleared a leftover job from an earlier error: ' . $prior)
+                    : 'No scan was running. Cleared a leftover job so this scan can start.',
+                [],
+                'warn'
+            );
+        }
+    }
+    if ($jobRunning) {
+        if ($allowStart) {
+            $status = $statusNow;
+            $scope = trim((string) ($job['scope_label'] ?? ''));
+            $status['busy'] = true;
+            $status['already_running'] = true;
+            $status['message'] = $scope !== ''
+                ? ('A re-scan of ' . $scope . ' is already running.')
+                : 'A scan is already running.';
+            if (function_exists('app_log')) {
+                app_log('scan', (string) $status['message'], [], 'warn');
+            }
+            return $status;
+        }
         return scan_job_continue($resumePause);
     }
     if (!$allowStart) {
         $status = scan_status_read();
         if (($status['state'] ?? '') === 'running') {
             $title = scan_catalog_title((string) ($status['catalog'] ?? 'video'));
+            $message = $title . ' scan interrupted. Start again from the scan page.';
+            if (function_exists('app_log')) {
+                app_log('scan', $message, [], 'error');
+            }
             scan_status_write([
                 'state' => 'error',
                 'cancel_requested' => false,
-                'message' => $title . ' scan interrupted. Start again from the scan page.',
+                'message' => $message,
             ]);
             return scan_status_read();
         }
         return $status;
     }
-    return scan_job_begin($mode, $catalog);
+    // Replace a previous error before the library is read, so the overlay poll
+    // does not keep painting that message while this start is still working.
+    scan_status_write([
+        'state' => 'running',
+        'phase' => 'walk',
+        'cancel_requested' => false,
+        'paused' => false,
+        'catalog' => $catalog,
+        'message' => 'Starting scan…',
+    ]);
+    return scan_job_begin($mode, $catalog, $groupKey);
 }
 
 function scan_build_library(?callable $progress = null): array

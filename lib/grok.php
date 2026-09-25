@@ -659,6 +659,64 @@ function grok_collect_unmatched_ids(array $library): array
     return $ids;
 }
 
+function grok_choose_season(string $showTitle, string $folder, ?int $parsedSeason, string $sampleFile, array $seasons): ?int
+{
+    if ($seasons === [] || !grok_has_key() || !function_exists('grok_live_enabled') || !grok_live_enabled()) {
+        return null;
+    }
+    $list = [];
+    foreach ($seasons as $row) {
+        if (!is_array($row) || !isset($row['season_number'])) {
+            continue;
+        }
+        $list[] = [
+            'id' => (int) ($row['id'] ?? 0),
+            'season_number' => (int) $row['season_number'],
+            'name' => (string) ($row['name'] ?? ''),
+            'episode_count' => (int) ($row['episode_count'] ?? 0),
+        ];
+    }
+    if ($list === []) {
+        return null;
+    }
+    $messages = [
+        ['role' => 'system', 'content' => "Pick the TMDB season for this TV folder.\n"
+            . "Use only a season_number from the list. Do not invent one.\n"
+            . "Reply with JSON only: {\"season_number\":1} or {\"season_number\":null}."],
+        ['role' => 'user', 'content' => (string) json_encode([
+            'show' => $showTitle,
+            'folder' => $folder,
+            'parsed_season' => $parsedSeason,
+            'sample_file' => $sampleFile,
+            'seasons' => $list,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+    ];
+    $chat = grok_chat_with_fallback($messages, 200);
+    if (empty($chat['ok'])) {
+        return null;
+    }
+    $content = trim((string) ($chat['content'] ?? ''));
+    if (str_starts_with($content, '```')) {
+        $content = preg_replace('/^```(?:json)?\s*/i', '', $content) ?? $content;
+        $content = preg_replace('/\s*```$/', '', $content) ?? $content;
+        $content = trim($content);
+    }
+    $decoded = json_decode($content, true);
+    if (!is_array($decoded) && preg_match('/\{[\s\S]*\}/', $content, $match)) {
+        $decoded = json_decode($match[0], true);
+    }
+    if (!is_array($decoded) || !isset($decoded['season_number']) || $decoded['season_number'] === null) {
+        return null;
+    }
+    $n = (int) $decoded['season_number'];
+    foreach ($list as $row) {
+        if ((int) $row['season_number'] === $n) {
+            return $n;
+        }
+    }
+    return null;
+}
+
 function grok_apply_choice(array $item, int $tmdbId): array
 {
     $meta = cache_read_title($tmdbId);
@@ -1142,13 +1200,42 @@ function grok_run_scan_batch(array &$job): void
 
         if ($tmdbId === null || $tmdbId < 1 || $confidence < $minConf) {
             grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'choose skipped');
+            $showFolder = (string) ($item['show_folder'] ?? '');
+            if ($showFolder !== '' && function_exists('scan_tv_backfill_show')) {
+                scan_tv_backfill_show($job, $showFolder, null);
+            }
+            $partKey = (string) ($item['part_bundle'] ?? '');
+            if ($partKey === '' && function_exists('scan_part_bundle_key')) {
+                $partKey = scan_part_bundle_key($item);
+            }
+            if ($partKey !== '' && function_exists('scan_part_remember')) {
+                scan_part_remember($job, $item, false, true);
+            }
             continue;
         }
         try {
-            $job['items'][$pos] = grok_apply_choice($item, $tmdbId);
-            $job['items'][$pos]['grok_verified'] = 1;
+            $prevStatus = (string) ($item['status'] ?? '');
+            $updated = grok_apply_choice($item, $tmdbId);
+            $updated['grok_verified'] = 1;
+            $job['items'][$pos] = $updated;
             $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+            if ($prevStatus === 'unmatched') {
+                $job['unmatched'] = max(0, (int) ($job['unmatched'] ?? 0) - 1);
+            } elseif ($prevStatus === 'unidentified') {
+                $job['unidentified'] = max(0, (int) ($job['unidentified'] ?? 0) - 1);
+            }
             grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'choose matched');
+            $showFolder = (string) ($item['show_folder'] ?? '');
+            if ($showFolder !== '' && function_exists('scan_tv_backfill_show')) {
+                scan_tv_backfill_show($job, $showFolder, $tmdbId);
+            }
+            $partKey = (string) ($item['part_bundle'] ?? '');
+            if ($partKey === '' && function_exists('scan_part_bundle_key')) {
+                $partKey = scan_part_bundle_key($updated);
+            }
+            if ($partKey !== '' && function_exists('scan_part_backfill')) {
+                scan_part_backfill($job, $partKey, $updated);
+            }
         } catch (Throwable $e) {
             $job['grok_errors'] = (int) ($job['grok_errors'] ?? 0) + 1;
             grok_log_line($path, $tmdbId, $confidence, grok_scrub($e->getMessage()));

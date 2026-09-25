@@ -66,6 +66,50 @@ if ($found) {
     }
 }
 
+$kind = $found ? library_item_kind($item) : 'movie';
+$seasonNum = null;
+$episodeNum = null;
+$episodeTitle = '';
+if ($found) {
+    if (isset($item['season']) && $item['season'] !== '' && $item['season'] !== null) {
+        $seasonNum = (int) $item['season'];
+    }
+    if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
+        $episodeNum = (int) $item['episode'];
+    }
+    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+}
+$isEpisode = $kind === 'show' && ($seasonNum !== null || $episodeNum !== null || $episodeTitle !== '');
+$showHeading = $display;
+if ($isEpisode) {
+    $showHeading .= ' - ' . ($year ? (string) $year : 'Year unknown');
+}
+$episodeCodeBits = [];
+if ($seasonNum !== null) {
+    $episodeCodeBits[] = 'Season ' . $seasonNum;
+}
+if ($episodeNum !== null) {
+    $episodeCodeBits[] = 'Episode ' . $episodeNum;
+}
+$episodeCode = implode(' - ', $episodeCodeBits);
+$matchNote = '';
+$matchClass = 'hint';
+if ($found) {
+    if ($status === 'unidentified') {
+        $matchNote = 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
+        $matchClass = 'unmatched-note';
+    } elseif ($status !== 'matched') {
+        $matchNote = 'No confident TMDB match. Showing the title parsed from the folder or filename.';
+        $matchClass = 'unmatched-note';
+    } elseif ($matchSource === 'manual') {
+        $matchNote = 'Matched by you. Scan will keep this title.';
+    } elseif ($matchSource === 'grok') {
+        $matchNote = 'Matched by Grok. Scan will keep this title.';
+    } elseif ($matchSource === 'direct') {
+        $matchNote = 'Matched directly by TMDB.';
+    }
+}
+
 $pageTitle = $found ? $display . ' · Media Informant' : 'Not found · Media Informant';
 $gkey = (string) ($gkey ?? '');
 $backHref = $gkey !== ''
@@ -192,23 +236,22 @@ render_header(['section' => 'video']);
     </div>
 
     <header class="detail-header">
+      <?php if ($isEpisode): ?>
+      <h1><?= h($showHeading) ?></h1>
+      <?php if ($episodeCode !== ''): ?>
+      <p class="detail-episode-code"><?= h($episodeCode) ?></p>
+      <?php endif; ?>
+      <?php if ($episodeTitle !== ''): ?>
+      <p class="detail-episode-title"><?= h($episodeTitle) ?></p>
+      <?php endif; ?>
+      <?php else: ?>
       <?php if (!$editing): ?>
       <h1><?= h($display) ?></h1>
       <?php endif; ?>
       <p class="detail-year"><?= $year ? h((string) $year) : 'Year unknown' ?></p>
+      <?php endif; ?>
       <?php if (library_item_hidden($item)): ?>
       <p class="hint">This file is hidden from the catalog.</p>
-      <?php endif; ?>
-      <?php if ($status === 'unidentified'): ?>
-      <p class="unmatched-note">Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.</p>
-      <?php elseif ($status !== 'matched'): ?>
-      <p class="unmatched-note">No confident TMDB match. Showing the title parsed from the folder or filename.</p>
-      <?php elseif ($matchSource === 'manual'): ?>
-      <p class="hint">Matched by you. Scan will keep this title.</p>
-      <?php elseif ($matchSource === 'grok'): ?>
-      <p class="hint">Matched by Grok. Scan will keep this title.</p>
-      <?php elseif ($matchSource === 'direct'): ?>
-      <p class="hint">Matched directly by TMDB.</p>
       <?php endif; ?>
     </header>
 
@@ -290,6 +333,9 @@ render_header(['section' => 'video']);
     <p class="absent-banner">Source folder is absent. This title stays in the catalog until the drive is mounted again, or you remove the source in Config.</p>
     <?php endif; ?>
     <p class="file-path<?= $sourceAbsent ? ' is-absent' : '' ?>"><?= h($path) ?></p>
+    <?php if ($matchNote !== ''): ?>
+    <p class="<?= h($matchClass) ?> detail-match"><?= h($matchNote) ?></p>
+    <?php endif; ?>
   </article>
   <?php endif; ?>
 </main>

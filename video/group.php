@@ -105,10 +105,15 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
             $genres[] = $genre;
         }
     }
-    $n = cache_update_items(group_member_ids($group), static function (array $row) use ($displayTitle, $overview, $genres): array {
-        $row['title'] = $displayTitle;
-        $row['display_title'] = $displayTitle;
-        $row['title_source'] = 'user';
+    $partEpisodeSave = str_starts_with($key, 'parts::');
+    $n = cache_update_items(group_member_ids($group), static function (array $row) use ($displayTitle, $overview, $genres, $partEpisodeSave): array {
+        if ($partEpisodeSave) {
+            $row['episode_title'] = $displayTitle;
+        } else {
+            $row['title'] = $displayTitle;
+            $row['display_title'] = $displayTitle;
+            $row['title_source'] = 'user';
+        }
         $row['overview'] = $overview;
         $row['genres'] = $genres;
         return $row;
@@ -118,7 +123,7 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
         $editing = true;
     } else {
         $headItem = $group->head->id !== '' ? catalog_store_find('video', $group->head->id) : null;
-        if (is_array($headItem) && !empty($headItem['tmdb_id'])) {
+        if (!$partEpisodeSave && is_array($headItem) && !empty($headItem['tmdb_id'])) {
             $tmdbId = (int) $headItem['tmdb_id'];
             $titleMeta = cache_read_title($tmdbId) ?? ['tmdb_id' => $tmdbId];
             $titleMeta['overview'] = $overview;
@@ -132,7 +137,15 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
                 'count' => $n,
             ]);
         }
-        $newKey = 'series:' . $group->kind . ':' . lower($displayTitle);
+        if ($partEpisodeSave) {
+            $rest = substr($key, strlen('parts::'));
+            $markerPos = strpos($rest, '::ep::');
+            $seriesId = $markerPos === false ? '' : substr($rest, 0, $markerPos);
+            $season = $group->head->season ?? 0;
+            $newKey = 'parts::' . $seriesId . '::ep::' . sprintf('%02d|%s', $season, lower($displayTitle));
+        } else {
+            $newKey = 'series:' . $group->kind . ':' . lower($displayTitle);
+        }
         header('Location: group.php?key=' . rawurlencode($newKey), true, 303);
         exit;
     }

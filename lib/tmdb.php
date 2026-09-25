@@ -360,7 +360,11 @@ function tmdb_rank_want_keys(string $title, string $filename, string $query): ar
             }
         }
     }
-    return array_keys($keys);
+    $out = [];
+    foreach (array_keys($keys) as $key) {
+        $out[] = (string) $key;
+    }
+    return $out;
 }
 
 function tmdb_rank_spinoff_blob(string $title, string $overview): bool
@@ -436,6 +440,7 @@ function tmdb_shortlist_results(array $results, string $title, string $filename,
         $exact = false;
 
         foreach ($wantKeys as $want) {
+            $want = (string) $want;
             if ($want === '') {
                 continue;
             }
@@ -447,6 +452,7 @@ function tmdb_shortlist_results(array $results, string $title, string $filename,
         }
         if (!$exact && ($candKey !== '' || $origKey !== '')) {
             foreach ($coreKeys as $core => $_) {
+                $core = (string) $core;
                 if ($core !== '' && ($candKey === $core || $origKey === $core)) {
                     $score += 80;
                     $exact = true;
@@ -455,6 +461,7 @@ function tmdb_shortlist_results(array $results, string $title, string $filename,
             }
         }
         foreach ($wantKeys as $want) {
+            $want = (string) $want;
             if ($want === '' || strlen($want) < 3) {
                 continue;
             }
@@ -610,13 +617,26 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
     $endpoints = $isTv
         ? [
             ['path' => '/search/tv', 'yearKey' => 'first_air_date_year', 'source' => 'tv'],
-            ['path' => '/search/movie', 'yearKey' => 'primary_release_year', 'source' => 'movie'],
         ]
         : [
             ['path' => '/search/movie', 'yearKey' => 'primary_release_year', 'source' => 'movie'],
         ];
     $first = true;
     foreach ($queries as $q) {
+        if ($isTv && function_exists('search_query_tv_series_skip_reason')) {
+            $tvSkip = search_query_tv_series_skip_reason($q);
+            if ($tvSkip !== '' && $tvSkip !== 'empty series name') {
+                if (function_exists('app_log')) {
+                    $fileBit = '';
+                    $itemCtx = tmdb_scan_item();
+                    if (!empty($itemCtx['file'])) {
+                        $fileBit = ' file=' . (string) $itemCtx['file'];
+                    }
+                    app_log('tmdb', 'TMDB tv series query skipped: query="' . $q . '" (' . $tvSkip . ')' . $fileBit);
+                }
+                continue;
+            }
+        }
         $attempts = [];
         // Episode air years are not first_air_date_year; skip year on TV searches.
         if ($first && !$isTv && $year !== null && $year >= 1870) {
@@ -632,16 +652,20 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
                 $defaultMedia = $ep['source'] === 'tv' ? 'tv' : 'movie';
                 $payload = tmdb_list_payload(tmdb_get($ep['path'], $params), $defaultMedia);
                 $hits = count($payload['results']);
-                $weak = function_exists('search_query_is_weak') && search_query_is_weak($q);
+                $weak = function_exists('search_query_skip_as_weak')
+                    ? search_query_skip_as_weak($q, $isTv)
+                    : (!$isTv && function_exists('search_query_is_weak') && search_query_is_weak($q));
                 tmdb_verbose_log('TMDB ' . $ep['source'] . ' query "' . $q . '" (' . $attempt['label'] . ($weak ? ', weak' : '') . ') hits=' . $hits);
-                if ($hits > 0 && $weak) {
+                if ($hits > 0 && $weak && !$isTv) {
                     tmdb_verbose_log('TMDB weak query ignored: "' . $q . '"');
                     usleep(TMDB_REQUEST_SLEEP_US);
                     continue;
                 }
                 if ($hits > 0) {
                     tmdb_verbose_log('TMDB query hit: "' . $q . '" (' . $ep['source'] . ')');
-                    $payload['results'] = tmdb_shortlist_results($payload['results'], $title, $filename, $year, $q);
+                    $rankTitle = $isTv ? $q : $title;
+                    $rankFile = $isTv ? '' : $filename;
+                    $payload['results'] = tmdb_shortlist_results($payload['results'], $rankTitle, $rankFile, $year, $q);
                     $payload['query'] = $q;
                     $payload['source'] = $ep['source'];
                     return $payload;
@@ -649,6 +673,10 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
                 usleep(TMDB_REQUEST_SLEEP_US);
             }
         }
+    }
+
+    if ($isTv) {
+        return $empty;
     }
 
     tmdb_verbose_log('TMDB movie/tv queries empty; trying /search/multi "' . $bestClean . '"');
@@ -793,7 +821,49 @@ function tmdb_details_from_data(array $data, string $mediaType): ?array
         'cast' => $cast,
         'genres' => $genres,
         'media_type' => $isTv ? 'tv' : 'movie',
+        'seasons' => $isTv ? tmdb_season_rows($data['seasons'] ?? []) : [],
     ];
+}
+
+/** @return list<array{id:int,season_number:int,name:string,episode_count:int}> */
+function tmdb_season_rows($rows): array
+{
+    $out = [];
+    if (!is_array($rows)) {
+        return $out;
+    }
+    foreach ($rows as $row) {
+        if (!is_array($row) || !isset($row['season_number'])) {
+            continue;
+        }
+        $out[] = [
+            'id' => (int) ($row['id'] ?? 0),
+            'season_number' => (int) $row['season_number'],
+            'name' => (string) ($row['name'] ?? ''),
+            'episode_count' => (int) ($row['episode_count'] ?? 0),
+        ];
+    }
+    return $out;
+}
+
+/** @return list<array{id:int,season_number:int,name:string,episode_count:int}> */
+function tmdb_show_seasons(int $seriesId): array
+{
+    if ($seriesId < 1) {
+        return [];
+    }
+    $meta = function_exists('cache_read_title') ? cache_read_title($seriesId) : null;
+    if (is_array($meta) && !empty($meta['seasons']) && is_array($meta['seasons'])) {
+        return tmdb_season_rows($meta['seasons']);
+    }
+    $data = tmdb_get('/tv/' . $seriesId);
+    usleep(TMDB_REQUEST_SLEEP_US);
+    $seasons = tmdb_season_rows(is_array($data) ? ($data['seasons'] ?? []) : []);
+    if ($seasons !== [] && is_array($meta)) {
+        $meta['seasons'] = $seasons;
+        cache_write_title($seriesId, $meta);
+    }
+    return $seasons;
 }
 
 function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
@@ -810,6 +880,255 @@ function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
     $otherPath = $other === 'tv' ? '/tv/' . $tmdbId : '/movie/' . $tmdbId;
     $otherData = tmdb_get($otherPath, ['append_to_response' => 'credits']);
     return is_array($otherData) ? tmdb_details_from_data($otherData, $other) : null;
+}
+
+function tmdb_season_cache_path(int $seriesId, int $season): string
+{
+    return CACHE_DIR . '/titles/tv-' . $seriesId . '-s' . $season . '.json';
+}
+
+function tmdb_season_cache_payload(array $data): array
+{
+    $episodes = [];
+    foreach (is_array($data['episodes'] ?? null) ? $data['episodes'] : [] as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $still = $row['still_path'] ?? null;
+        $episodes[] = [
+            'id' => (int) ($row['id'] ?? 0),
+            'episode_number' => (int) ($row['episode_number'] ?? 0),
+            'season_number' => (int) ($row['season_number'] ?? ($data['season_number'] ?? 0)),
+            'name' => (string) ($row['name'] ?? ''),
+            'overview' => (string) ($row['overview'] ?? ''),
+            'still_path' => is_string($still) && $still !== '' ? $still : null,
+        ];
+    }
+    return [
+        'id' => (int) ($data['id'] ?? 0),
+        'season_number' => (int) ($data['season_number'] ?? 0),
+        'name' => (string) ($data['name'] ?? ''),
+        'episodes' => $episodes,
+    ];
+}
+
+function tmdb_remember_season(int $seriesId, int $season, array $data): void
+{
+    if ($seriesId < 1 || !function_exists('catalog_store_show_season_write')) {
+        return;
+    }
+    $payload = tmdb_season_cache_payload($data);
+    if ($payload['episodes'] === []) {
+        return;
+    }
+    catalog_store_show_season_write($seriesId, $season, $payload);
+}
+
+function tmdb_fetch_season(int $seriesId, int $season): ?array
+{
+    static $mem = [];
+    $key = $seriesId . ':' . $season;
+    if (isset($mem[$key]) && is_array($mem[$key])) {
+        return $mem[$key];
+    }
+    if (function_exists('catalog_store_show_season_read')) {
+        $fromShow = catalog_store_show_season_read($seriesId, $season);
+        if (is_array($fromShow) && is_array($fromShow['episodes'] ?? null) && $fromShow['episodes'] !== []) {
+            tmdb_verbose_log(
+                'TMDB season cache hit series=' . $seriesId
+                . ' season=' . $season
+                . ' source=show'
+            );
+            return $mem[$key] = $fromShow;
+        }
+    }
+    $path = tmdb_season_cache_path($seriesId, $season);
+    if (is_file($path)) {
+        $raw = @file_get_contents($path);
+        $cached = is_string($raw) ? json_decode($raw, true) : null;
+        if (is_array($cached) && isset($cached['episodes']) && is_array($cached['episodes'])) {
+            tmdb_verbose_log(
+                'TMDB season cache hit series=' . $seriesId
+                . ' season=' . $season
+                . ' id=' . (int) ($cached['id'] ?? 0)
+            );
+            tmdb_remember_season($seriesId, $season, $cached);
+            return $mem[$key] = $cached;
+        }
+    }
+    tmdb_verbose_log('TMDB season request series=' . $seriesId . ' season=' . $season);
+    $data = tmdb_get('/tv/' . $seriesId . '/season/' . $season);
+    usleep(TMDB_REQUEST_SLEEP_US);
+    if (!is_array($data) || !isset($data['episodes']) || !is_array($data['episodes'])) {
+        return null;
+    }
+    if (function_exists('cache_init')) {
+        cache_init();
+    }
+    @file_put_contents($path, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+    tmdb_remember_season($seriesId, $season, $data);
+    return $mem[$key] = $data;
+}
+
+function tmdb_norm_episode_name(string $s): string
+{
+    $s = function_exists('search_query_clean') ? search_query_clean($s) : trim($s);
+    $s = function_exists('search_query_drop_article') ? search_query_drop_article($s) : $s;
+    $s = preg_replace('/^episode\s+\d+\s*/i', '', $s) ?? $s;
+    return tmdb_norm($s);
+}
+
+/**
+ * Episode-title variants for season matching.
+ * "01_Mole Hunt (Aka Pilot).mp4" → "Mole Hunt (Aka Pilot)" and "Mole Hunt".
+ *
+ * @return list<string>
+ */
+function tmdb_episode_title_variants(string $raw): array
+{
+    $name = str_replace('\\', '/', trim($raw));
+    $name = basename($name);
+    $name = preg_replace('/\.[A-Za-z0-9]{2,5}$/', '', $name) ?? $name;
+    $name = str_replace(['_', '.'], ' ', $name);
+    $name = preg_replace('/\s+/', ' ', $name) ?? $name;
+    $name = trim($name, " \t-");
+    $noLead = preg_replace('/^\d{1,3}\s+/', '', $name) ?? $name;
+    $noLead = trim($noLead);
+    $pieces = [];
+    foreach ([$noLead, $name] as $piece) {
+        if ($piece === '') {
+            continue;
+        }
+        $pieces[] = $piece;
+        $bare = trim((string) preg_replace('/\s*\([^)]*\)\s*/', ' ', $piece));
+        $bare = trim((string) preg_replace('/\s+/', ' ', $bare));
+        if ($bare !== '') {
+            $pieces[] = $bare;
+        }
+    }
+    $out = [];
+    $seen = [];
+    foreach ($pieces as $piece) {
+        $key = function_exists('lower') ? lower($piece) : strtolower($piece);
+        if ($key === '' || isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = $piece;
+    }
+    return $out;
+}
+
+/**
+ * @return array{episode_id:int,episode_title:string,overview:string,still_path:?string,season:int,episode:int}|null
+ */
+function tmdb_pick_season_episode(array $seasonData, ?int $episode, string $episodeTitle = ''): ?array
+{
+    $episodes = is_array($seasonData['episodes'] ?? null) ? $seasonData['episodes'] : [];
+    $hit = null;
+    if ($episode !== null && $episode >= 0) {
+        foreach ($episodes as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if ((int) ($row['episode_number'] ?? -1) === $episode) {
+                $hit = $row;
+                break;
+            }
+        }
+    }
+    if ($hit === null && $episodeTitle !== '') {
+        $wants = [];
+        foreach (tmdb_episode_title_variants($episodeTitle) as $variant) {
+            $want = tmdb_norm_episode_name($variant);
+            if ($want !== '') {
+                $wants[$want] = true;
+            }
+        }
+        $direct = tmdb_norm_episode_name($episodeTitle);
+        if ($direct !== '') {
+            $wants[$direct] = true;
+        }
+        if ($wants !== []) {
+            foreach ($episodes as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $name = tmdb_norm_episode_name((string) ($row['name'] ?? ''));
+                if ($name !== '' && isset($wants[$name])) {
+                    $hit = $row;
+                    break;
+                }
+            }
+        }
+    }
+    if (!is_array($hit) || empty($hit['id'])) {
+        return null;
+    }
+    $still = $hit['still_path'] ?? null;
+    return [
+        'episode_id' => (int) $hit['id'],
+        'episode_title' => trim((string) ($hit['name'] ?? '')),
+        'overview' => trim((string) ($hit['overview'] ?? '')),
+        'still_path' => is_string($still) && $still !== '' ? $still : null,
+        'season' => (int) ($hit['season_number'] ?? ($seasonData['season_number'] ?? 0)),
+        'episode' => (int) ($hit['episode_number'] ?? 0),
+    ];
+}
+
+/**
+ * After a TV series is identified, load that season and attach the episode
+ * name/overview using season + episode numbers (or episode title).
+ *
+ * @param array<string, mixed> $item
+ * @return array<string, mixed>
+ */
+function tmdb_enrich_item_episode(array $item, int $seriesId): array
+{
+    if ($seriesId < 1) {
+        return $item;
+    }
+    $season = isset($item['season']) && $item['season'] !== null && $item['season'] !== ''
+        ? (int) $item['season']
+        : null;
+    $episode = isset($item['episode']) && $item['episode'] !== null && $item['episode'] !== ''
+        ? (int) $item['episode']
+        : null;
+    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+    if ($season === null && ($episode !== null || $episodeTitle !== '')) {
+        $season = 1;
+    }
+    if ($season === null || ($episode === null && $episodeTitle === '')) {
+        return $item;
+    }
+    tmdb_verbose_log(
+        'TMDB episode lookup series=' . $seriesId
+        . ' season=' . $season
+        . ' episode=' . (string) ($episode ?? '')
+        . ' title=' . $episodeTitle
+    );
+    $seasonData = tmdb_fetch_season($seriesId, $season);
+    if ($seasonData === null) {
+        return $item;
+    }
+    $ep = tmdb_pick_season_episode($seasonData, $episode, $episodeTitle);
+    if ($ep === null) {
+        tmdb_verbose_log('TMDB episode miss series=' . $seriesId . ' s=' . $season . ' e=' . (string) ($episode ?? ''));
+        return $item;
+    }
+    if ($ep['episode_title'] !== '') {
+        $item['episode_title'] = $ep['episode_title'];
+    }
+    if ($ep['overview'] !== '') {
+        $item['overview'] = $ep['overview'];
+    }
+    $item['season'] = $ep['season'];
+    $item['episode'] = $ep['episode'];
+    tmdb_verbose_log(
+        'TMDB episode hit s' . $ep['season'] . 'e' . $ep['episode']
+        . ' "' . $ep['episode_title'] . '"'
+    );
+    return $item;
 }
 
 function tmdb_lookup(string $title, ?int $year, string $filename = '', array $meta = []): ?array

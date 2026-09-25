@@ -22,6 +22,8 @@ require_once __DIR__ . '/parser.php';
  *     33 1/3 variant; must not win on “and a Third” / “33 and a Third”.
  * - TV: Show/Season 1/Rose.mkv → includes the show title from the grandparent
  *     folder, not only the episode filename.
+ * - TV: Archer/01_Mole Hunt (Aka Pilot).mp4 → query is Archer, not the filename.
+ *     A one-word series name is not a weak movie query.
  */
 
 function search_query_junk_pattern(): string
@@ -168,6 +170,37 @@ function search_query_is_weak(string $q): bool
         return false;
     }
     return search_query_content_count($q) < 2;
+}
+
+/**
+ * Movie scans still use search_query_is_weak (short leftovers such as "and a Third").
+ * Series searches do not: a one-word show title is a real /search/tv query.
+ * Episode-code-only strings (S01E01, 1x02, E01) are not series titles.
+ * A bare number such as "24" is kept, because that can be the series name.
+ */
+function search_query_tv_series_skip_reason(string $q): string
+{
+    $q = trim($q);
+    if ($q === '') {
+        return 'empty series name';
+    }
+    $compact = strtolower(str_replace(' ', '', search_query_clean($q)));
+    if ($compact === '') {
+        return 'empty series name';
+    }
+    if (preg_match('/^(?:s\d{1,2}e\d{1,3}|e\d{1,3}|\d{1,2}x\d{1,3})$/', $compact)) {
+        return 'series query is only an episode code';
+    }
+    return '';
+}
+
+function search_query_skip_as_weak(string $q, bool $isTv): bool
+{
+    if ($isTv) {
+        $reason = search_query_tv_series_skip_reason($q);
+        return $reason !== '' && $reason !== 'empty series name';
+    }
+    return search_query_is_weak($q);
 }
 
 function search_query_peel_trailing(string $s): ?string
@@ -319,9 +352,50 @@ function search_query_folder_is_title(string $name): bool
 }
 
 /**
- * Show title from grandparent when parent is a season folder
- * (Show/Season 1/file.mkv). Season folder names are never returned.
+ * Show folder and season folder for a relative path.
+ * Show/Season 1/file.mkv → show "Show", season "Show/Season 1".
+ *
+ * @return array{show: string, season: string}
  */
+function search_query_tv_folders(string $path): array
+{
+    $parts = search_query_path_parts($path);
+    if ($parts === []) {
+        return ['show' => '', 'season' => ''];
+    }
+    $last = (string) array_pop($parts);
+    if (!str_contains($last, '.')) {
+        $parts[] = $last;
+    }
+    if ($parts === []) {
+        return ['show' => '', 'season' => ''];
+    }
+    $seasonIdx = null;
+    foreach ($parts as $i => $part) {
+        if (search_query_is_season_folder($part)) {
+            $seasonIdx = $i;
+        }
+    }
+    $showIdx = null;
+    if ($seasonIdx !== null) {
+        $showIdx = $seasonIdx - 1;
+        while ($showIdx >= 0 && (search_query_is_season_folder($parts[$showIdx]) || (function_exists('is_generic_folder') && is_generic_folder($parts[$showIdx])))) {
+            $showIdx--;
+        }
+    } else {
+        $showIdx = count($parts) - 1;
+        while ($showIdx >= 0 && function_exists('is_generic_folder') && is_generic_folder($parts[$showIdx])) {
+            $showIdx--;
+        }
+    }
+    if ($showIdx === null || $showIdx < 0) {
+        return ['show' => '', 'season' => ''];
+    }
+    $show = implode('/', array_slice($parts, 0, $showIdx + 1));
+    $season = $seasonIdx !== null ? implode('/', array_slice($parts, 0, $seasonIdx + 1)) : '';
+    return ['show' => $show, 'season' => $season];
+}
+
 function search_query_tv_show_from_path(string $path): string
 {
     $parts = search_query_path_parts($path);
@@ -438,47 +512,46 @@ function tmdb_search_queries(string $parsedTitle, string $rawFilename = '', ?int
     $path = (string) ($meta['path'] ?? $rawFilename);
     $isTv = search_query_path_is_tv($path, $meta);
     $showFromPath = $isTv ? search_query_parent_show_from_path($path) : search_query_tv_show_from_path($path);
-    $episodeTitle = search_query_clean((string) ($meta['episode_title'] ?? ''));
     $cleanTitle = search_query_clean($parsedTitle);
     $cleanFile = search_query_strip_episode_codes(search_query_clean($rawFilename));
 
     if ($isTv) {
-        $show = $cleanTitle;
-        if ($showFromPath !== '' && ($show === '' || search_query_is_episode_code($show) || ($episodeTitle !== '' && strcasecmp($show, $episodeTitle) === 0))) {
-            $show = $showFromPath;
-        } elseif ($showFromPath !== '' && $show !== '' && search_query_is_weak($show)) {
-            $show = $showFromPath;
-        }
-        if ($show === '' && $showFromPath !== '') {
-            $show = $showFromPath;
-        }
+        $show = $showFromPath !== '' ? $showFromPath : $cleanTitle;
         if ($show !== '' && search_query_is_season_folder($show)) {
-            $show = $showFromPath;
+            $show = '';
         }
-        if ($episodeTitle === '' || search_query_is_episode_code($episodeTitle)) {
-            $fromFile = search_query_episode_title_from_filename($rawFilename, $show);
-            if ($fromFile !== '') {
-                $episodeTitle = $fromFile;
+        // /search/tv finds the series. The episode filename is not a query.
+        // One-word show names are pushed even though movie scans call them weak.
+        foreach ([$show, search_query_drop_article($show)] as $seriesQuery) {
+            $seriesQuery = trim($seriesQuery);
+            if ($seriesQuery === '') {
+                continue;
             }
-        }
-        // Season folder names are detection-only, never sent as a query.
-        search_query_push($out, $show, $seen, true);
-        $noArticle = search_query_drop_article($show);
-        search_query_push($out, $noArticle, $seen);
-        if ($episodeTitle !== '' && strcasecmp($episodeTitle, $show) !== 0 && !search_query_is_episode_code($episodeTitle)) {
-            search_query_push($out, trim($show . ' ' . $episodeTitle), $seen);
-            search_query_push($out, $episodeTitle, $seen);
-        }
-        if ($cleanFile !== '' && !search_query_is_episode_code($cleanFile) && strcasecmp($cleanFile, $show) !== 0 && strcasecmp($cleanFile, $episodeTitle) !== 0) {
-            $remainder = search_query_episode_title_from_filename($cleanFile, $show);
-            if ($remainder !== '' && strcasecmp($remainder, $episodeTitle) !== 0) {
-                search_query_push($out, trim($show . ' ' . $remainder), $seen);
+            $seriesKey = lower($seriesQuery);
+            if (isset($seen[$seriesKey])) {
+                continue;
             }
+            $skip = search_query_tv_series_skip_reason($seriesQuery);
+            if ($skip !== '') {
+                if (function_exists('app_log')) {
+                    $fileBit = '';
+                    if (function_exists('tmdb_scan_item')) {
+                        $ctx = tmdb_scan_item();
+                        if (!empty($ctx['file'])) {
+                            $fileBit = ' file=' . (string) $ctx['file'];
+                        }
+                    }
+                    app_log('tmdb', 'TMDB tv series query skipped: query="' . $seriesQuery . '" (' . $skip . ')' . $fileBit);
+                }
+                $seen[$seriesKey] = true;
+                continue;
+            }
+            search_query_push($out, $seriesQuery, $seen, true);
         }
-        $primary = $show !== '' ? $show : $cleanTitle;
-        if ($primary === '') {
-            $primary = $cleanFile;
+        if (count($out) > 6) {
+            $out = array_slice($out, 0, 6);
         }
+        return $out;
     } else {
         $primary = $cleanTitle !== '' ? $cleanTitle : $cleanFile;
         if ($primary === '' && $cleanFile !== '') {

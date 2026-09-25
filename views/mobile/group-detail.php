@@ -11,8 +11,15 @@ $found = $group instanceof CatalogGroup && $group->isSeries();
 $editing = !empty($editing);
 $error = (string) ($error ?? '');
 $key = (string) ($key ?? '');
+$partEpisode = $found && str_starts_with($group->id, 'parts::');
+$partMovie = $found && $group->isPartMovie();
 $head = $found ? $group->head : null;
 $display = $found ? ($head->seriesTitle !== '' ? $head->seriesTitle : $head->title) : 'Not found';
+if ($partEpisode && $head->episodeTitle !== '') {
+    $episodeHeading = $head->episodeTitle;
+} else {
+    $episodeHeading = '';
+}
 $year = $found && ($head->cells['year'] ?? '—') !== '—' ? $head->cells['year'] : null;
 $overview = '';
 $genres = $found ? $group->genres() : [];
@@ -60,17 +67,49 @@ if ($found) {
     }
 }
 
-$kindLabel = $found
-    ? ($group->kind === 'show' ? 'TV show' : ($group->kind === 'documentary' ? 'Documentary series' : 'Series'))
-    : '';
-$pageTitle = $found ? $display . ' · Media Informant' : 'Not found · Media Informant';
+$kindLabel = '';
+if ($found) {
+    if ($partMovie) {
+        $kindLabel = $group->kind === 'documentary' ? 'Documentary' : 'Movie';
+    } elseif ($partEpisode) {
+        $kindLabel = 'Episode';
+    } elseif ($group->kind === 'show') {
+        $kindLabel = 'TV show';
+    } elseif ($group->kind === 'documentary') {
+        $kindLabel = 'Documentary series';
+    } else {
+        $kindLabel = 'Series';
+    }
+}
+$partCount = $found ? count($group->members) : 0;
+$showHeading = $display;
+if ($partEpisode) {
+    $showHeading .= ' - ' . ($year ? (string) $year : 'Year unknown');
+}
+$episodeCodeBits = [];
+if ($partEpisode && $head->season !== null) {
+    $episodeCodeBits[] = 'Season ' . $head->season;
+}
+if ($partEpisode && $head->episode !== null) {
+    $episodeCodeBits[] = 'Episode ' . $head->episode;
+}
+$episodeCode = implode(' - ', $episodeCodeBits);
+$parentGroupHref = '';
+if ($partEpisode) {
+    $rest = substr($group->id, strlen('parts::'));
+    $markerPos = strpos($rest, '::ep::');
+    if ($markerPos !== false) {
+        $parentGroupHref = 'group.php?key=' . rawurlencode(substr($rest, 0, $markerPos));
+    }
+}
+$pageTitle = $found ? (($partEpisode && $episodeHeading !== '') ? $episodeHeading : $display) . ' · Media Informant' : 'Not found · Media Informant';
 
 render_start($pageTitle);
 render_header(['section' => 'video']);
 ?>
 <main class="page detail-page<?= $sourceAbsent ? ' is-source-absent' : '' ?>" data-group-detail="<?= h($key) ?>">
   <div class="detail-toolbar">
-    <a class="back" href="<?= h(app_href('video/index.php')) ?>">
+    <a class="back" href="<?= h(app_href('video/' . ($parentGroupHref !== '' ? $parentGroupHref : 'index.php'))) ?>">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Back
     </a>
@@ -84,6 +123,7 @@ render_header(['section' => 'video']);
       <div class="page-menu-panel" id="group-menu" data-menu-panel hidden role="menu" aria-label="Group actions">
         <?php if (!$editing): ?>
         <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key) . '&edit=1')) ?>">Edit Data</a>
+        <button type="button" class="page-menu-item" role="menuitem" data-group-rescan="<?= h($key) ?>" data-group-rescan-label="<?= h($partEpisode && $episodeHeading !== '' ? $episodeHeading : $display) ?>">Re-scan</button>
         <?php endif; ?>
         <?php if ($canClear): ?>
         <form method="post" action="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>" role="none">
@@ -119,17 +159,31 @@ render_header(['section' => 'video']);
     </div>
 
     <header class="detail-header">
+      <?php if ($partEpisode): ?>
+      <h1><?= h($showHeading) ?></h1>
+      <?php if ($episodeCode !== ''): ?>
+      <p class="detail-episode-code"><?= h($episodeCode) ?></p>
+      <?php endif; ?>
+      <?php if ($episodeHeading !== ''): ?>
+      <p class="detail-episode-title"><?= h($episodeHeading) ?></p>
+      <?php endif; ?>
+      <?php else: ?>
       <?php if (!$editing): ?>
       <h1><?= h($display) ?></h1>
       <?php endif; ?>
       <p class="detail-year">
         <?= $year ? h((string) $year) : 'Year unknown' ?>
         · <?= h($kindLabel) ?>
+        <?php if ($partMovie): ?>
+        · <?= (int) $partCount ?> <?= $partCount === 1 ? 'part' : 'parts' ?>
+        <?php else: ?>
         · <?= (int) $epCount ?> <?= $epCount === 1 ? 'episode' : 'episodes' ?>
         <?php if ($fileCount !== $epCount): ?>
         · <?= (int) $fileCount ?> files
         <?php endif; ?>
+        <?php endif; ?>
       </p>
+      <?php endif; ?>
       <p class="hint"><?= (int) $matched ?> of <?= (int) $fileCount ?> matched.</p>
     </header>
 
@@ -140,8 +194,8 @@ render_header(['section' => 'video']);
       <section class="detail-section">
         <h2>Title</h2>
         <label class="visually-hidden" for="edit-title">Title</label>
-        <input id="edit-title" type="text" name="display_title" class="title-input folder-input" value="<?= h($display) ?>" maxlength="200" required autocomplete="off" spellcheck="false">
-        <p class="hint">This name applies to the whole series in the catalog.</p>
+        <input id="edit-title" type="text" name="display_title" class="title-input folder-input" value="<?= h($partEpisode && $episodeHeading !== '' ? $episodeHeading : $display) ?>" maxlength="200" required autocomplete="off" spellcheck="false">
+        <p class="hint"><?= $partEpisode ? 'This name is the episode title shared by these parts.' : ($partMovie ? 'This name applies to every part of this movie.' : 'This name applies to the whole series in the catalog.') ?></p>
       </section>
       <section class="detail-section detail-overview">
         <h2>Overview</h2>
@@ -208,7 +262,26 @@ render_header(['section' => 'video']);
     <p class="absent-banner">Source folder is absent. This series stays in the catalog until the drive is mounted again, or you remove the source in Config.</p>
     <?php endif; ?>
 
-    <?php if (!$editing): ?>
+    <?php if (!$editing && ($partMovie || $partEpisode)): ?>
+    <section class="detail-section">
+      <h2>Parts</h2>
+      <div class="group-ep-list">
+        <?php foreach ($group->members as $part):
+            $label = $part->partLabel !== '' ? $part->partLabel : $part->title;
+            $href = catalog_file_href_from_group($part, $key);
+            $metaBits = [$part->cells['status']];
+            ?>
+        <a class="group-ep-row" href="<?= h(app_href('video/' . $href)) ?>">
+          <?= catalog_record_thumb_html($part, 'sm', $label) ?>
+          <span class="group-ep-text">
+            <span class="group-ep-title"><?= h($label) ?></span>
+            <span class="group-ep-meta"><?= h(implode(' · ', $metaBits)) ?></span>
+          </span>
+        </a>
+        <?php endforeach; ?>
+      </div>
+    </section>
+    <?php elseif (!$editing): ?>
     <section class="detail-section">
       <h2><?= $group->kind === 'show' ? 'Episodes' : 'Parts' ?></h2>
       <div class="group-ep-list">
@@ -218,6 +291,31 @@ render_header(['section' => 'video']);
             $parts = $cluster['parts'];
             $first = $parts[0];
             $season = $first->season;
+            $namedParts = count($parts) > 1 && catalog_is_named_part($first->partLabel);
+            if ($namedParts) {
+                $href = catalog_episode_parts_href($group->id, $first->episodeGroupKey);
+                $label = (string) $cluster['label'];
+                $metaBits = [];
+                if (($first->cells['year'] ?? '—') !== '—') {
+                    $metaBits[] = $first->cells['year'];
+                }
+                $metaBits[] = count($parts) . ' parts';
+                $metaBits[] = $first->cells['status'];
+                if ($season !== null && $season !== $lastSeason) {
+                    $lastSeason = $season;
+                    echo '<h3 class="group-ep-season">Season ' . (int) $season . '</h3>';
+                }
+                ?>
+        <a class="group-ep-row" href="<?= h(app_href('video/' . $href)) ?>">
+          <?= catalog_record_thumb_html($first, 'sm', $label) ?>
+          <span class="group-ep-text">
+            <span class="group-ep-title"><?= h($label) ?></span>
+            <span class="group-ep-meta"><?= h(implode(' · ', $metaBits)) ?></span>
+          </span>
+        </a>
+                <?php
+                continue;
+            }
             if ($season !== null && $season !== $lastSeason):
                 $lastSeason = $season;
                 ?>

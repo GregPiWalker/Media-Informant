@@ -292,9 +292,31 @@ final class CatalogRecord
             $grouped = true;
         }
         $seriesTitle = $parsed !== '' ? $parsed : $title;
-        $groupKey = $grouped ? ($kind . ':' . lower($seriesTitle)) : $id;
+        $groupKey = '';
         $episodeTitle = (string) ($item['episode_title'] ?? '');
         $partLabel = (string) ($item['part'] ?? '');
+        $filename = (string) ($item['filename'] ?? '');
+        if (function_exists('parse_named_part')) {
+            $namedPart = parse_named_part($filename !== '' ? $filename : $episodeTitle);
+            if ($namedPart !== null) {
+                $partLabel = $namedPart['part'];
+                $epNamed = parse_named_part($episodeTitle);
+                if ($epNamed !== null && $epNamed['stem'] !== '') {
+                    $episodeTitle = $epNamed['stem'];
+                }
+                if ($kind !== 'show') {
+                    $titleNamed = parse_named_part($seriesTitle);
+                    if ($titleNamed !== null) {
+                        $cleanTitle = (string) (parse_name($titleNamed['stem'])['title'] ?? '');
+                        if ($cleanTitle !== '') {
+                            $seriesTitle = $cleanTitle;
+                        }
+                    }
+                    $grouped = true;
+                }
+            }
+        }
+        $groupKey = $grouped ? ($kind . ':' . lower($seriesTitle)) : $id;
         if ($partLabel === '' && $episodeTitle !== '') {
             $fn = pathinfo((string) ($item['filename'] ?? ''), PATHINFO_FILENAME);
             if ($fn !== '' && lower($fn) !== lower($episodeTitle)) {
@@ -303,10 +325,14 @@ final class CatalogRecord
         }
         $episodeLabel = '';
         if ($grouped) {
-            if ($episodeTitle !== '') {
-                $episodeLabel = ($season !== null ? sprintf('S%02d · ', $season) : '') . $episodeTitle;
-            } elseif ($season !== null || $episode !== null) {
-                $episodeLabel = sprintf('S%02dE%02d', $season ?? 0, $episode ?? 0);
+            $epName = trim($episodeTitle);
+            if ($epName !== '' && strcasecmp($epName, $seriesTitle) === 0) {
+                $epName = '';
+            }
+            if ($episode !== null) {
+                $episodeLabel = $epName !== '' ? ($episode . ' ' . $epName) : (string) $episode;
+            } elseif ($epName !== '') {
+                $episodeLabel = $epName;
             } else {
                 $fn = (string) ($item['filename'] ?? '');
                 $episodeLabel = $fn !== '' ? pathinfo($fn, PATHINFO_FILENAME) : $title;
@@ -524,6 +550,19 @@ final class CatalogGroup
         return $this->head->grouped || $this->kind === 'show';
     }
 
+    public function isPartMovie(): bool
+    {
+        if ($this->kind === 'show') {
+            return false;
+        }
+        foreach ($this->members as $member) {
+            if (catalog_is_named_part($member->partLabel)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** @return list<array{id: string, label: string, parts: list<CatalogRecord>}> */
     public function episodeClusters(): array
     {
@@ -543,11 +582,48 @@ final class CatalogGroup
         $out = [];
         foreach ($order as $key) {
             $parts = $buckets[$key];
+            usort($parts, static function (CatalogRecord $a, CatalogRecord $b): int {
+                return catalog_part_number($a->partLabel) <=> catalog_part_number($b->partLabel);
+            });
             $first = $parts[0];
             $out[] = [
                 'id' => $this->id . ':ep:' . rawurlencode($key),
                 'label' => $first->episodeLabel !== '' ? $first->episodeLabel : $first->title,
                 'parts' => $parts,
+            ];
+        }
+        return $out;
+    }
+
+    /** @return list<array{id: string, label: string, season: ?int, clusters: list<array{id: string, label: string, parts: list<CatalogRecord>}>}> */
+    public function seasonGroups(): array
+    {
+        $clusters = $this->episodeClusters();
+        $buckets = [];
+        $order = [];
+        foreach ($clusters as $cluster) {
+            $season = $cluster['parts'][0]->season ?? null;
+            $key = $season === null ? 'x' : (string) $season;
+            if (!isset($buckets[$key])) {
+                $buckets[$key] = ['season' => $season, 'clusters' => []];
+                $order[] = $key;
+            }
+            $buckets[$key]['clusters'][] = $cluster;
+        }
+        usort($order, static function (string $a, string $b) use ($buckets): int {
+            $sa = $buckets[$a]['season'];
+            $sb = $buckets[$b]['season'];
+            return ($sa ?? 999) <=> ($sb ?? 999);
+        });
+        $out = [];
+        foreach ($order as $key) {
+            $season = $buckets[$key]['season'];
+            $label = $season === null ? 'Episodes' : ($season === 0 ? 'Specials' : ('Season ' . $season));
+            $out[] = [
+                'id' => $this->id . ':s:' . $key,
+                'label' => $label,
+                'season' => $season,
+                'clusters' => $buckets[$key]['clusters'],
             ];
         }
         return $out;
@@ -592,6 +668,24 @@ function catalog_record_thumb_html(CatalogRecord $record, string $size, string $
     return '<span class="' . $class . ' poster-fallback" aria-hidden="true"><span>' . h(initial($initial)) . '</span></span>';
 }
 
+function catalog_part_number(string $label): int
+{
+    if (preg_match('/(\d+)/', $label, $m)) {
+        return (int) $m[1];
+    }
+    return 999;
+}
+
+function catalog_is_named_part(string $label): bool
+{
+    return (bool) preg_match('/^Part \d{1,2}$/', trim($label));
+}
+
+function catalog_episode_parts_href(string $seriesGroupId, string $episodeGroupKey): string
+{
+    return 'group.php?key=' . rawurlencode('parts::' . $seriesGroupId . '::ep::' . $episodeGroupKey);
+}
+
 function catalog_group_href(CatalogGroup $group): string
 {
     if (!$group->isSeries()) {
@@ -606,10 +700,48 @@ function catalog_file_href_from_group(CatalogRecord $record, string $groupId): s
 }
 
 /** @param list<CatalogRecord> $records */
+function catalog_find_part_group(array $records, string $id): ?CatalogGroup
+{
+    $rest = substr($id, strlen('parts::'));
+    $marker = '::ep::';
+    $pos = strpos($rest, $marker);
+    if ($pos === false) {
+        return null;
+    }
+    $seriesId = substr($rest, 0, $pos);
+    $episodeKey = substr($rest, $pos + strlen($marker));
+    $series = null;
+    foreach (catalog_collect_groups($records) as $group) {
+        if ($group->id === $seriesId) {
+            $series = $group;
+            break;
+        }
+    }
+    if ($series === null || $episodeKey === '') {
+        return null;
+    }
+    $members = [];
+    foreach ($series->members as $member) {
+        if ($member->episodeGroupKey === $episodeKey) {
+            $members[] = $member;
+        }
+    }
+    if ($members === []) {
+        return null;
+    }
+    usort($members, static function (CatalogRecord $a, CatalogRecord $b): int {
+        return catalog_part_number($a->partLabel) <=> catalog_part_number($b->partLabel);
+    });
+    return new CatalogGroup($id, $series->kind, $members[0], $members);
+}
+
 function catalog_find_group_by_id(array $records, string $id): ?CatalogGroup
 {
     if ($id === '') {
         return null;
+    }
+    if (str_starts_with($id, 'parts::')) {
+        return catalog_find_part_group($records, $id);
     }
     foreach (catalog_collect_groups($records) as $group) {
         if ($group->id === $id) {
@@ -633,8 +765,8 @@ function catalog_collect_groups(array $records): array
     }
     foreach ($buckets as $key => $members) {
         usort($members, static function (CatalogRecord $a, CatalogRecord $b): int {
-            return [$a->season ?? -1, $a->episode ?? -1, $a->id]
-                <=> [$b->season ?? -1, $b->episode ?? -1, $b->id];
+            return [$a->season ?? -1, $a->episode ?? -1, catalog_part_number($a->partLabel), $a->id]
+                <=> [$b->season ?? -1, $b->episode ?? -1, catalog_part_number($b->partLabel), $b->id];
         });
         $groups[] = new CatalogGroup('series:' . $key, $members[0]->kind, $members[0], $members);
     }

@@ -538,6 +538,9 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
     }
     if (library_item_kind($item) === 'show') {
         $item['grouped'] = true;
+        if (function_exists('tmdb_enrich_item_episode') && !empty($item['tmdb_id'])) {
+            $item = tmdb_enrich_item_episode($item, (int) $item['tmdb_id']);
+        }
     }
     return $item;
 }

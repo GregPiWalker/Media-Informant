@@ -98,6 +98,9 @@ function scan_parse_path(string $root, string $path, string $category = ''): arr
         $kind = 'show';
     }
     $grouped = $kind === 'show' || $parsedKind === 'show' || $folderKind === 'show';
+    if (!$grouped && function_exists('parse_named_part') && parse_named_part(basename(str_replace('\\', '/', $path))) !== null) {
+        $grouped = true;
+    }
     $parsed['kind'] = $kind;
     $parsed['grouped'] = $grouped;
     return $parsed;

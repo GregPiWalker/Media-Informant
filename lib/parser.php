@@ -220,7 +220,10 @@ function parse_show_result(ParseContext $ctx): ?ParseResult
         $epTokens = parse_name($epFolder->raw);
         $episodeTitle = $epTokens['title'] !== '' ? $epTokens['title'] : $epFolder->raw;
     }
-    $part = parse_part_label(strip_extension($ctx->filename));
+    $baseName = strip_extension($ctx->filename);
+    $namedPart = parse_named_part($baseName);
+    $part = $namedPart['part'] ?? parse_part_label($baseName);
+    $episodeSource = $namedPart['stem'] ?? $baseName;
     if ($episodeTitle !== '' && $part === '') {
         $cleaned = $file['title'] !== '' ? $file['title'] : strip_extension($ctx->filename);
         if ($cleaned !== '' && lower($cleaned) !== lower($episodeTitle)) {
@@ -229,6 +232,36 @@ function parse_show_result(ParseContext $ctx): ?ParseResult
     }
     $season = $file['season'] ?? ($ctx->seasonFolder->seasonNumber ?? $showTokens['season']);
     $episode = $file['episode'] ?? $showTokens['episode'];
+    if ($episode === null) {
+        $hint = parse_leading_episode($episodeSource);
+        if ($hint !== null) {
+            $episode = $hint['episode'];
+            if ($episodeTitle === '' && $hint['title'] !== '') {
+                $rest = $hint['title'];
+                $stripped = trim((string) preg_replace('/^' . preg_quote($title, '/') . '\s*/iu', '', $rest));
+                $candidate = $stripped !== '' ? $stripped : $rest;
+                if (lower($candidate) !== lower($title)) {
+                    $episodeTitle = $candidate;
+                }
+            }
+        }
+    }
+    if ($namedPart !== null && $episodeTitle === '') {
+        $stemHint = parse_leading_episode($episodeSource);
+        $candidate = is_array($stemHint) ? (string) ($stemHint['title'] ?? '') : '';
+        if ($candidate !== '' && lower($candidate) !== lower($title)) {
+            $episodeTitle = $candidate;
+        }
+    }
+    if ($episodeTitle !== '') {
+        $epNamed = parse_named_part($episodeTitle);
+        if ($epNamed !== null && $epNamed['stem'] !== '') {
+            $episodeTitle = $epNamed['stem'];
+            if ($part === '') {
+                $part = $epNamed['part'];
+            }
+        }
+    }
     return new ParseResult(
         $title,
         $showTokens['year'] ?? $file['year'],
@@ -251,6 +284,53 @@ function parse_part_label(string $name): string
         return 'Part ' . $m[1];
     }
     return '';
+}
+
+/**
+ * "Part" plus a number, including underscores: Castrovalva_Part_1, "Part 2".
+ * The stem is the name with that token removed.
+ *
+ * @return array{part: string, stem: string}|null
+ */
+function parse_named_part(string $name): ?array
+{
+    $base = preg_replace('/\.[A-Za-z0-9]{2,5}$/', '', str_replace('\\', '/', $name)) ?? $name;
+    $base = basename($base);
+    if (!preg_match('/(?:^|[^A-Za-z])part[^A-Za-z]*(\d{1,2})(?!\d)/i', $base, $m, PREG_OFFSET_CAPTURE)) {
+        return null;
+    }
+    $num = (int) $m[1][0];
+    if ($num < 1) {
+        return null;
+    }
+    $start = $m[0][1];
+    $token = $m[0][0];
+    if ($start > 0 && preg_match('/[^A-Za-z]/', $token[0])) {
+        $start += 1;
+        $token = substr($token, 1);
+    }
+    $stem = substr($base, 0, $start) . substr($base, $start + strlen($token));
+    $stem = trim((string) preg_replace('/[\s._-]+/', ' ', str_replace(['.', '_'], ' ', $stem)));
+    $stem = trim($stem, " \t.-");
+    if ($stem === '') {
+        return null;
+    }
+    return ['part' => 'Part ' . $num, 'stem' => $stem];
+}
+
+/** @return array{0: string, 1: string} title, part label */
+function parse_movie_title_and_part(string $title, string $filename): array
+{
+    $named = parse_named_part($filename);
+    if ($named === null) {
+        return [$title, ''];
+    }
+    $fileTitle = (string) (parse_name(strip_extension(basename(str_replace('\\', '/', $filename))))['title'] ?? '');
+    $stemTitle = (string) (parse_name($named['stem'])['title'] ?? '');
+    if ($stemTitle !== '' && ($title === '' || strcasecmp($title, $fileTitle) === 0 || parse_named_part($title) !== null)) {
+        $title = $stemTitle;
+    }
+    return [$title, $named['part']];
 }
 
 final class SeasonFolderStrategy implements MediaParseStrategy
@@ -389,6 +469,7 @@ final class FacetMovieStrategy implements MediaParseStrategy
         if ($title === '') {
             return null;
         }
+        [$title, $part] = parse_movie_title_and_part($title, $ctx->filename);
         $kind = $ctx->formatRole() === 'documentary' ? 'documentary' : 'movie';
         return new ParseResult(
             $title,
@@ -398,6 +479,8 @@ final class FacetMovieStrategy implements MediaParseStrategy
             $kind,
             $ctx->facetMap(),
             '',
+            '',
+            $part,
         );
     }
 }
@@ -429,6 +512,7 @@ final class MovieFolderStrategy implements MediaParseStrategy
         if ($title === '') {
             return null;
         }
+        [$title, $part] = parse_movie_title_and_part($title, $ctx->filename);
         $kind = $ctx->formatRole() === 'documentary' ? 'documentary' : 'movie';
         return new ParseResult(
             $title,
@@ -438,6 +522,8 @@ final class MovieFolderStrategy implements MediaParseStrategy
             $kind,
             $ctx->facetMap(),
             '',
+            '',
+            $part,
         );
     }
 }
@@ -456,14 +542,21 @@ final class StandaloneFileStrategy implements MediaParseStrategy
             return null;
         }
         $kind = $ctx->formatRole() === 'music' ? 'track' : 'movie';
+        $title = $file['title'];
+        $part = '';
+        if ($kind === 'movie') {
+            [$title, $part] = parse_movie_title_and_part($title, $ctx->filename);
+        }
         return new ParseResult(
-            $file['title'],
+            $title,
             $file['year'],
             $file['season'],
             $file['episode'],
             $kind,
             $ctx->facetMap(),
             '',
+            '',
+            $part,
         );
     }
 }
@@ -647,7 +740,10 @@ function season_folder_number(string $name): ?int
     if (strcasecmp($name, 'specials') === 0) {
         return 0;
     }
-    if (preg_match('/^seasons?\s*(\d{1,2})$/i', $name, $m)) {
+    if (preg_match('/^(?:seasons?|series)\s*\.?\s*(\d{1,2})$/i', $name, $m)) {
+        return (int) $m[1];
+    }
+    if (preg_match('/^s(?:eason)?\s*\.?\s*(\d{1,2})$/i', $name, $m)) {
         return (int) $m[1];
     }
     return null;

@@ -210,7 +210,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=48">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=51">
 </head>
 <body>
 <?php
@@ -269,7 +269,7 @@ function render_header(array $opts = []): void
   <?php if ($showSearch): ?>
   <div class="search-wrap">
     <label class="visually-hidden" for="catalog-search">Search titles</label>
-    <input id="catalog-search" type="search" class="search-input" data-search-input placeholder="<?= app_shell() === 'desktop' ? 'Search titles' : 'Search, then press Search' ?>" autocomplete="off" autocapitalize="off" enterkeyhint="search" spellcheck="false">
+    <input id="catalog-search" type="search" class="search-input" data-search-input placeholder="Search, then press Search" autocomplete="off" autocapitalize="off" enterkeyhint="search" spellcheck="false">
     <button type="button" class="search-clear" data-search-clear hidden aria-label="Clear search">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
     </button>
@@ -363,6 +363,7 @@ function render_end(): void
       </div>
       <div class="log-console-actions">
         <button type="button" class="btn btn-ghost" data-log-verbose aria-pressed="false">Verbose</button>
+        <button type="button" class="btn btn-ghost" data-log-download>Download</button>
         <button type="button" class="btn btn-ghost" data-log-clear>Clear</button>
         <button type="button" class="btn btn-ghost" data-log-toggle>Close</button>
       </div>
@@ -370,7 +371,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=51" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=58" defer></script>
 </body>
 </html>
 <?php

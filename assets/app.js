@@ -41,10 +41,6 @@
   };
   window.AppLog = AppLog;
 
-  function isDesktopShell() {
-    return root.getAttribute('data-shell') === 'desktop';
-  }
-
   function bindTitleSearch(input, applyFn) {
     if (!input) return;
     var clear = document.querySelector('[data-search-clear]');
@@ -54,29 +50,21 @@
       clear.hidden = input.value === '';
     }
 
-    if (isDesktopShell()) {
-      input.placeholder = 'Search titles';
-      input.addEventListener('input', function () {
-        syncClear();
-        applyFn();
-      });
-    } else {
-      input.placeholder = 'Search, then press Search';
-      input.addEventListener('search', function () {
-        applyFn();
-        input.blur();
-      });
-      input.addEventListener('keydown', function (event) {
-        if (event.key !== 'Enter') return;
-        event.preventDefault();
-        applyFn();
-        input.blur();
-      });
-      input.addEventListener('input', function () {
-        syncClear();
-        if (input.value.trim() === '') applyFn();
-      });
-    }
+    input.placeholder = 'Search, then press Search';
+    input.addEventListener('search', function () {
+      applyFn();
+      input.blur();
+    });
+    input.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      applyFn();
+      input.blur();
+    });
+    input.addEventListener('input', function () {
+      syncClear();
+      if (input.value.trim() === '') applyFn();
+    });
 
     if (clear) {
       clear.addEventListener('click', function (event) {
@@ -590,10 +578,7 @@
     }
 
     function searchQuery() {
-      var input = document.querySelector('[data-search-input]');
-      return isDesktopShell()
-        ? (input ? input.value.trim().toLowerCase() : '')
-        : searchCommitted;
+      return searchCommitted;
     }
 
     function searchHit(el, query) {
@@ -1069,9 +1054,13 @@
   var lastScanKind = 'tmdb';
   var lastScanPaused = false;
   var scanPumping = false;
+  var scanStartPending = false;
+  var scanEpoch = 0;
   var grokPumping = false;
   var scanStopRequested = false;
   var grokStopRequested = false;
+  var scanGroupKey = '';
+  var detailReloadAfterScan = false;
 
   function scanRunUrl() {
     if (scanLive && scanLive.getAttribute('data-scan-run-url')) {
@@ -1300,6 +1289,12 @@
       grokPauseToggle.checked = data.grok_pause;
     }
 
+    if (detailReloadAfterScan && (state === 'done' || state === 'stopped')) {
+      detailReloadAfterScan = false;
+      window.location.reload();
+      return;
+    }
+
     lastScanState = state;
     lastScanKind = 'tmdb';
     lastScanPaused = running && !!data.paused;
@@ -1377,30 +1372,48 @@
     var runUrl = scanRunUrl();
     if (!runUrl || scanPumping) return;
     if (start && scanPanel && scanPanel.getAttribute('data-scan-enabled') === '0') return;
+    var starting = !!start;
     if (start) {
       var mode = typeof start === 'string' ? start : ((scanPanel && scanPanel.getAttribute('data-scan-start')) || 'retry');
       if (mode === '1' || mode === 'true') mode = 'retry';
       if (mode !== 'unidentified') mode = 'retry';
       runUrl += (runUrl.indexOf('?') >= 0 ? '&' : '?') + 'start=1&mode=' + encodeURIComponent(mode);
+      if (scanGroupKey) {
+        runUrl += '&group=' + encodeURIComponent(scanGroupKey);
+        scanGroupKey = '';
+      }
     }
     if (resumePause) {
       runUrl += (runUrl.indexOf('?') >= 0 ? '&' : '?') + 'continue=1';
     }
+    if (starting) {
+      scanEpoch += 1;
+      scanStartPending = true;
+    }
+    var epoch = scanEpoch;
     scanPumping = true;
     fetch(runUrl, { method: 'POST', credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (epoch !== scanEpoch) {
+          scanPumping = false;
+          return;
+        }
+        paintLive(data);
         scanPumping = false;
+        if (starting) scanStartPending = false;
         if (data && data.blocked) {
+          paintLive(data);
+          return;
+        }
+        if (data && data.already_running) {
           paintLive(data);
           return;
         }
         if (data && data.unsupported) {
           lastScanState = data.state || 'idle';
-          paintLive(data);
           return;
         }
-        paintLive(data);
         var state = data && data.state;
         var kind = data && data.kind;
         if (data && data.paused) {
@@ -1422,6 +1435,8 @@
       })
       .catch(function () {
         scanPumping = false;
+        if (epoch !== scanEpoch) return;
+        if (starting) scanStartPending = false;
         setTimeout(function () {
           if (lastScanState === 'running' && lastScanKind === 'tmdb' && !lastScanPaused && !scanStopRequested) pumpScan();
         }, 1500);
@@ -1480,9 +1495,12 @@
     if (!scanLive) return;
     var url = scanLive.getAttribute('data-scan-status-url');
     if (!url) return;
+    var epoch = scanEpoch;
     fetch(url, { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
+        if (epoch !== scanEpoch) return;
+        if (scanStartPending && (!data || data.state !== 'running')) return;
         paintLive(data);
         if (!data || data.state !== 'running') return;
         if (data.paused || scanStopRequested) return;
@@ -1507,21 +1525,58 @@
     pumpScan(scanPanel.getAttribute('data-scan-start'));
   }
 
+  document.querySelectorAll('[data-group-rescan]').forEach(function (btn) {
+    btn.addEventListener('click', function (event) {
+      event.preventDefault();
+      if (activityBusy()) {
+        overlayOpen('scan');
+        setText('[data-scan-overlay-message]', 'A scan is already running.');
+        return;
+      }
+      var menu = btn.closest('[data-menu]');
+      if (menu) {
+        var panel = menu.querySelector('[data-menu-panel]');
+        var toggle = menu.querySelector('[data-menu-btn]');
+        if (panel) panel.hidden = true;
+        if (toggle) toggle.setAttribute('aria-expanded', 'false');
+      }
+      scanGroupKey = btn.getAttribute('data-group-rescan') || '';
+      if (document.querySelector('[data-group-detail]')) detailReloadAfterScan = true;
+      var label = btn.getAttribute('data-group-rescan-label') || 'this series';
+      var startMsg = 'Re-scanning ' + label + '…';
+      lastScanKind = 'tmdb';
+      lastScanState = 'running';
+      setLiveActive(true, startMsg);
+      setText('[data-scan-overlay-kicker]', 'In progress');
+      setText('[data-scan-overlay-title]', 'Scanning video');
+      setText('[data-scan-overlay-message]', startMsg);
+      setText('[data-scan-message]', startMsg);
+      overlayOpen('scan');
+      pumpScan('retry');
+    });
+  });
+
   document.querySelectorAll('[data-scan-launch]').forEach(function (btn) {
     btn.addEventListener('click', function (event) {
       if (!window.fetch) return;
       event.preventDefault();
       if (btn.disabled || btn.getAttribute('aria-disabled') === 'true') return;
       if (scanPanel && scanPanel.getAttribute('data-scan-enabled') === '0') return;
-      if (activityBusy() && lastScanKind === 'grok') {
+      if (activityBusy()) {
         overlayOpen('scan');
+        setText('[data-scan-overlay-message]', 'A scan is already running.');
         return;
       }
       var mode = btn.getAttribute('data-scan-launch') || 'retry';
       if (scanPanel) scanPanel.setAttribute('data-scan-start', mode);
+      var startMsg = 'Starting ' + catalogNoun(pageScanCatalog()) + ' scan…';
       lastScanKind = 'tmdb';
       lastScanState = 'running';
-      setLiveActive(true, 'Starting ' + catalogNoun(pageScanCatalog()) + ' scan…');
+      setLiveActive(true, startMsg);
+      setText('[data-scan-overlay-kicker]', 'In progress');
+      setText('[data-scan-overlay-title]', 'Scanning ' + catalogNoun(pageScanCatalog()));
+      setText('[data-scan-overlay-message]', startMsg);
+      setText('[data-scan-message]', startMsg);
       pumpScan(mode);
     });
   });
@@ -1708,6 +1763,7 @@
   if (logRoot) {
     var logList = logRoot.querySelector('[data-log-list]');
     var logSeen = {};
+    var logEvents = [];
     var logSince = 0;
     var logTimer = null;
     AppLog.feedUrl = logRoot.getAttribute('data-log-feed-url') || '';
@@ -1726,13 +1782,20 @@
         + String(d.getSeconds()).padStart(2, '0');
     }
 
+    function logNearBottom() {
+      if (!logList) return true;
+      return logList.scrollHeight - logList.scrollTop - logList.clientHeight < 24;
+    }
+
     function logAppend(event) {
       if (!logList || !event || !event.message) return;
       var id = String(event.id || event.ts + event.message);
       if (logSeen[id]) return;
       logSeen[id] = true;
+      logEvents.push(event);
       var ts = Number(event.ts || 0);
       if (ts > logSince) logSince = ts;
+      var follow = logNearBottom();
       var empty = logList.querySelector('.log-console-empty');
       if (empty) empty.remove();
       var li = document.createElement('li');
@@ -1752,7 +1815,7 @@
       li.appendChild(topic);
       li.appendChild(msg);
       logList.appendChild(li);
-      logList.scrollTop = logList.scrollHeight;
+      if (follow) logList.scrollTop = logList.scrollHeight;
     }
 
     function logEmpty() {
@@ -1822,12 +1885,52 @@
       });
     }
 
+    function logStamp(ts) {
+      var d = new Date((Number(ts) || 0) * 1000);
+      if (isNaN(d.getTime())) return '---- -- --:--:--';
+      function pad(n) { return String(n).padStart(2, '0'); }
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+        + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function logFileText() {
+      var lines = [];
+      logEvents.forEach(function (event) {
+        if (!event || !event.message) return;
+        lines.push(logStamp(event.ts) + '\t' + (event.level || 'info') + '\t' + (event.topic || 'app') + '\t' + event.message);
+      });
+      if (!lines.length) return 'No log events yet.\n';
+      return lines.join('\n') + '\n';
+    }
+
+    var downloadBtn = logRoot.querySelector('[data-log-download]');
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', function (event) {
+        event.preventDefault();
+        var blob = new Blob([logFileText()], { type: 'text/plain;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        var now = new Date();
+        function pad(n) { return String(n).padStart(2, '0'); }
+        link.href = url;
+        link.download = 'media-informant-log-'
+          + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+          + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds())
+          + '.txt';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+      });
+    }
+
     var clearBtn = logRoot.querySelector('[data-log-clear]');
     if (clearBtn) {
       clearBtn.addEventListener('click', function (event) {
         event.preventDefault();
         function wipeView() {
           logSeen = {};
+          logEvents = [];
           logSince = Date.now() / 1000;
           if (logList) logList.innerHTML = '';
           logEmpty();

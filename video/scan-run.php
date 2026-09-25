@@ -36,7 +36,8 @@ try {
     $allowStart = isset($_GET['start']) || isset($_POST['start']);
     $resumePause = isset($_GET['continue']) || isset($_POST['continue']);
     $mode = (string) ($_GET['mode'] ?? $_POST['mode'] ?? 'retry');
-    $status = scan_tick($allowStart, $mode, $resumePause, 'video');
+    $groupKey = $allowStart ? (string) ($_GET['group'] ?? $_POST['group'] ?? '') : '';
+    $status = scan_tick($allowStart, $mode, $resumePause, 'video', $groupKey);
     echo json_encode(array_merge($status, [
         'ok' => true,
         'busy' => false,
@@ -44,14 +45,14 @@ try {
         'catalog' => 'video',
     ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $e) {
-    scan_status_write([
-        'state' => 'error',
-        'cancel_requested' => false,
-        'catalog' => 'video',
-        'message' => $e->getMessage(),
-    ]);
+    $status = scan_fail($e);
     http_response_code(500);
-    echo json_encode(['ok' => false, 'state' => 'error', 'error' => $e->getMessage(), 'message' => $e->getMessage()]);
+    echo json_encode(array_merge($status, [
+        'ok' => false,
+        'state' => 'error',
+        'error' => $status['message'] ?? $e->getMessage(),
+        'message' => $status['message'] ?? $e->getMessage(),
+    ]));
 }
 
 scan_lock_release($lock);

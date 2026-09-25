@@ -96,6 +96,92 @@ function catalog_json_encode($value): string
     return $json === false ? '{}' : $json;
 }
 
+function catalog_show_season_key(int $season): string
+{
+    return 's' . $season;
+}
+
+function catalog_store_group_extras(PDO $pdo, string $groupId, string $kind): array
+{
+    $extras = ['kind' => $kind];
+    $stmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ?');
+    $stmt->execute([$groupId]);
+    $raw = $stmt->fetchColumn();
+    if (!is_string($raw) || $raw === '') {
+        return $extras;
+    }
+    $prev = catalog_json_decode($raw);
+    if (isset($prev['seasons']) && is_array($prev['seasons'])) {
+        $extras['seasons'] = $prev['seasons'];
+    }
+    return $extras;
+}
+
+function catalog_store_show_season_read(int $tmdbId, int $season): ?array
+{
+    if ($tmdbId < 1 || $season < 0 || !function_exists('db_open')) {
+        return null;
+    }
+    $pdo = db_open('video');
+    if ($pdo === null) {
+        return null;
+    }
+    $stmt = $pdo->prepare(
+        "SELECT extras_json FROM items
+         WHERE tmdb_id = ? AND grouping = 'group' AND parent_id IS NULL AND tmdb_media_type = 'tv'
+         LIMIT 1"
+    );
+    $stmt->execute([$tmdbId]);
+    $raw = $stmt->fetchColumn();
+    if (!is_string($raw) || $raw === '') {
+        return null;
+    }
+    $extras = catalog_json_decode($raw);
+    $seasons = $extras['seasons'] ?? null;
+    if (!is_array($seasons)) {
+        return null;
+    }
+    $payload = $seasons[catalog_show_season_key($season)] ?? null;
+    if (!is_array($payload) || !is_array($payload['episodes'] ?? null) || $payload['episodes'] === []) {
+        return null;
+    }
+    return $payload;
+}
+
+function catalog_store_show_season_write(int $tmdbId, int $season, array $payload): void
+{
+    if ($tmdbId < 1 || $season < 0 || !function_exists('db_open')) {
+        return;
+    }
+    if (!is_array($payload['episodes'] ?? null) || $payload['episodes'] === []) {
+        return;
+    }
+    $pdo = db_open('video');
+    if ($pdo === null) {
+        return;
+    }
+    $stmt = $pdo->prepare(
+        "SELECT id, extras_json FROM items
+         WHERE tmdb_id = ? AND grouping = 'group' AND parent_id IS NULL AND tmdb_media_type = 'tv'
+         LIMIT 1"
+    );
+    $stmt->execute([$tmdbId]);
+    $row = $stmt->fetch();
+    if (!is_array($row)) {
+        return;
+    }
+    $extras = catalog_json_decode(isset($row['extras_json']) ? (string) $row['extras_json'] : null);
+    if (!isset($extras['seasons']) || !is_array($extras['seasons'])) {
+        $extras['seasons'] = [];
+    }
+    $extras['seasons'][catalog_show_season_key($season)] = $payload;
+    $pdo->prepare('UPDATE items SET extras_json = ?, updated_at = ? WHERE id = ?')->execute([
+        catalog_json_encode($extras),
+        time(),
+        (string) $row['id'],
+    ]);
+}
+
 function catalog_json_decode(?string $raw): array
 {
     if ($raw === null || $raw === '') {
@@ -320,7 +406,7 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
             'tmdb_media_type' => $kind === 'show' ? 'tv' : ($kind === 'documentary' ? 'movie' : 'movie'),
             'overview' => (string) ($item['overview'] ?? ''),
             'poster_path' => $item['poster_path'] ?? null,
-            'extras_json' => catalog_json_encode(['kind' => $kind]),
+            'extras_json' => catalog_json_encode(catalog_store_group_extras($pdo, $groupId, $kind)),
         ], $now);
         $keepItemIds[$groupId] = true;
         $parentId = $groupId;

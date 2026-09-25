@@ -41,9 +41,16 @@ try {
         'kind' => 'grok',
     ]), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 } catch (Throwable $e) {
+    $message = grok_scrub($e->getMessage());
+    if (function_exists('app_log')) {
+        app_log('scan', $message, [
+            'file' => $e->getFile(),
+            'line' => $e->getLine(),
+        ], 'error');
+    }
     grok_status_write([
         'state' => 'error',
-        'message' => grok_scrub($e->getMessage()),
+        'message' => $message,
     ]);
     http_response_code(500);
     echo json_encode([

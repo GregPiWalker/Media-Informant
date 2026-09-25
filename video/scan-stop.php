@@ -19,6 +19,12 @@ if (scan_lock_try($lock)) {
         try {
             scan_job_finalize($job, true);
         } catch (Throwable $e) {
+            if (function_exists('app_log')) {
+                app_log('scan', $e->getMessage(), [
+                    'file' => $e->getFile(),
+                    'line' => $e->getLine(),
+                ], 'error');
+            }
             scan_status_write([
                 'state' => 'error',
                 'cancel_requested' => false,
