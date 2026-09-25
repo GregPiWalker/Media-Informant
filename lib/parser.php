@@ -399,6 +399,49 @@ final class FileEpisodeStrategy implements MediaParseStrategy
     }
 }
 
+/**
+ * Name to show for one episode file. Uses the saved episode title, then the
+ * filename with the show name and episode codes removed.
+ */
+function episode_display_title(array $item): string
+{
+    $show = trim((string) ($item['title'] ?? ''));
+    $stored = trim((string) ($item['episode_title'] ?? ''));
+    if ($stored !== '' && ($show === '' || strcasecmp($stored, $show) !== 0)) {
+        return $stored;
+    }
+    $file = trim((string) ($item['filename'] ?? ''));
+    if ($file === '') {
+        $path = str_replace('\\', '/', (string) ($item['path'] ?? ''));
+        $file = $path !== '' ? basename($path) : '';
+    }
+    if ($file === '') {
+        return '';
+    }
+    $base = strip_extension($file);
+    $named = parse_named_part($base);
+    if ($named !== null && $named['stem'] !== '') {
+        $base = $named['stem'];
+    }
+    $base = str_replace(['.', '_'], ' ', $base);
+    $base = preg_replace('/\bS\d{1,2}\s*E\d{1,3}\b/i', ' ', $base) ?? $base;
+    $base = preg_replace('/\b\d{1,2}\s*x\s*\d{1,3}\b/i', ' ', $base) ?? $base;
+    $base = preg_replace('/\b(?:e|ep|episode)\s*\d{1,3}\b/i', ' ', $base) ?? $base;
+    $base = trim((string) preg_replace('/\s+/', ' ', $base));
+    $hint = parse_leading_episode($base);
+    $candidate = is_array($hint) && trim((string) ($hint['title'] ?? '')) !== ''
+        ? trim((string) $hint['title'])
+        : $base;
+    if ($show !== '') {
+        $candidate = trim((string) preg_replace('/^' . preg_quote($show, '/') . '\s*/iu', '', $candidate));
+    }
+    $candidate = trim($candidate, " \t-._");
+    if ($candidate === '' || ($show !== '' && strcasecmp($candidate, $show) === 0)) {
+        return '';
+    }
+    return $candidate;
+}
+
 function parse_leading_episode(string $name): ?array
 {
     $clean = str_replace(['.', '_', '-'], ' ', $name);

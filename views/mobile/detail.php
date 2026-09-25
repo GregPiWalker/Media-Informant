@@ -77,7 +77,7 @@ if ($found) {
     if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
         $episodeNum = (int) $item['episode'];
     }
-    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+    $episodeTitle = episode_display_title($item);
 }
 $isEpisode = $kind === 'show' && ($seasonNum !== null || $episodeNum !== null || $episodeTitle !== '');
 $showHeading = $display;
