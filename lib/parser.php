@@ -400,46 +400,72 @@ final class FileEpisodeStrategy implements MediaParseStrategy
 }
 
 /**
- * Name to show for one episode file. Uses the saved episode title, then the
- * filename with the show name and episode codes removed.
+ * Episode title and number for one file. Saved values win. Otherwise the
+ * number and title are read from the filename (S01E05, 1x05, Episode 5, or a
+ * leading number such as "05 Title").
+ *
+ * @return array{title: string, episode: ?int}
  */
-function episode_display_title(array $item): string
+function episode_display_identity(array $item): array
 {
     $show = trim((string) ($item['title'] ?? ''));
-    $stored = trim((string) ($item['episode_title'] ?? ''));
-    if ($stored !== '' && ($show === '' || strcasecmp($stored, $show) !== 0)) {
-        return $stored;
+    $storedTitle = trim((string) ($item['episode_title'] ?? ''));
+    $storedEpisode = null;
+    if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
+        $storedEpisode = (int) $item['episode'];
     }
     $file = trim((string) ($item['filename'] ?? ''));
     if ($file === '') {
         $path = str_replace('\\', '/', (string) ($item['path'] ?? ''));
         $file = $path !== '' ? basename($path) : '';
     }
-    if ($file === '') {
-        return '';
+    $parsedEpisode = null;
+    $candidate = '';
+    if ($file !== '') {
+        $base = strip_extension($file);
+        $named = parse_named_part($base);
+        if ($named !== null && $named['stem'] !== '') {
+            $base = $named['stem'];
+        }
+        $base = str_replace(['.', '_'], ' ', $base);
+        $base = trim((string) preg_replace('/\s+/', ' ', $base));
+        if (preg_match('/\bS\d{1,2}\s*E(\d{1,3})\b/i', $base, $m)) {
+            $parsedEpisode = (int) $m[1];
+            $base = preg_replace('/\bS\d{1,2}\s*E\d{1,3}\b/i', ' ', $base) ?? $base;
+        } elseif (preg_match('/\b\d{1,2}\s*x\s*(\d{1,3})\b/i', $base, $m)) {
+            $parsedEpisode = (int) $m[1];
+            $base = preg_replace('/\b\d{1,2}\s*x\s*\d{1,3}\b/i', ' ', $base) ?? $base;
+        } elseif (preg_match('/\b(?:e|ep|episode)\s*(\d{1,3})\b/i', $base, $m)) {
+            $parsedEpisode = (int) $m[1];
+            $base = preg_replace('/\b(?:e|ep|episode)\s*\d{1,3}\b/i', ' ', $base) ?? $base;
+        }
+        $base = trim((string) preg_replace('/\s+/', ' ', $base));
+        $hint = parse_leading_episode($base);
+        if (is_array($hint)) {
+            if ($parsedEpisode === null) {
+                $parsedEpisode = (int) $hint['episode'];
+            }
+            $candidate = trim((string) ($hint['title'] ?? ''));
+        }
+        if ($candidate === '') {
+            $candidate = $base;
+        }
+        if ($show !== '') {
+            $candidate = trim((string) preg_replace('/^' . preg_quote($show, '/') . '\s*/iu', '', $candidate));
+        }
+        $candidate = trim($candidate, " \t-._");
+        if ($candidate === '' || ($show !== '' && strcasecmp($candidate, $show) === 0)) {
+            $candidate = '';
+        }
     }
-    $base = strip_extension($file);
-    $named = parse_named_part($base);
-    if ($named !== null && $named['stem'] !== '') {
-        $base = $named['stem'];
+    $title = ($storedTitle !== '' && ($show === '' || strcasecmp($storedTitle, $show) !== 0))
+        ? $storedTitle
+        : $candidate;
+    $episode = $storedEpisode ?? $parsedEpisode;
+    if ($episode !== null && $episode < 1) {
+        $episode = null;
     }
-    $base = str_replace(['.', '_'], ' ', $base);
-    $base = preg_replace('/\bS\d{1,2}\s*E\d{1,3}\b/i', ' ', $base) ?? $base;
-    $base = preg_replace('/\b\d{1,2}\s*x\s*\d{1,3}\b/i', ' ', $base) ?? $base;
-    $base = preg_replace('/\b(?:e|ep|episode)\s*\d{1,3}\b/i', ' ', $base) ?? $base;
-    $base = trim((string) preg_replace('/\s+/', ' ', $base));
-    $hint = parse_leading_episode($base);
-    $candidate = is_array($hint) && trim((string) ($hint['title'] ?? '')) !== ''
-        ? trim((string) $hint['title'])
-        : $base;
-    if ($show !== '') {
-        $candidate = trim((string) preg_replace('/^' . preg_quote($show, '/') . '\s*/iu', '', $candidate));
-    }
-    $candidate = trim($candidate, " \t-._");
-    if ($candidate === '' || ($show !== '' && strcasecmp($candidate, $show) === 0)) {
-        return '';
-    }
-    return $candidate;
+    return ['title' => $title, 'episode' => $episode];
 }
 
 function parse_leading_episode(string $name): ?array

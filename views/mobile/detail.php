@@ -77,7 +77,11 @@ if ($found) {
     if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
         $episodeNum = (int) $item['episode'];
     }
-    $episodeTitle = episode_display_title($item);
+    $episodeIdentity = episode_display_identity($item);
+    $episodeTitle = $episodeIdentity['title'];
+    if ($episodeNum === null && $episodeIdentity['episode'] !== null) {
+        $episodeNum = $episodeIdentity['episode'];
+    }
 }
 $isEpisode = $kind === 'show' && ($seasonNum !== null || $episodeNum !== null || $episodeTitle !== '');
 $showHeading = $display;
