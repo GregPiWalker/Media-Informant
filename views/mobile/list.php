@@ -240,7 +240,7 @@ $view = $prefs->view;
             <?php foreach ($partMembers as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->title;
                 ?>
-            <tr class="catalog-part" hidden data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+            <tr class="catalog-part" hidden data-nest="1" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
               <td data-col="poster"><?= catalog_thumb_button($record, 'sm', $partName) ?></td>
               <td data-col="title">
                 <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>"><?= h($partName) ?></a>
@@ -278,7 +278,7 @@ $view = $prefs->view;
                     }
                 }
                 ?>
-            <tr class="catalog-season" hidden data-group="<?= h($seasonGroup['id']) ?>" data-parent="<?= h($group->id) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h(implode(' ', $seasonSearch)) ?>"<?= catalog_source_attr($head) ?>>
+            <tr class="catalog-season" hidden data-nest="1" data-group="<?= h($seasonGroup['id']) ?>" data-parent="<?= h($group->id) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h(implode(' ', $seasonSearch)) ?>"<?= catalog_source_attr($head) ?>>
               <td data-col="poster"></td>
               <td data-col="title">
                 <button type="button" class="expand-btn" data-expand="<?= h($seasonGroup['id']) ?>" aria-expanded="false" aria-label="Show <?= h($seasonGroup['label']) ?>">
@@ -301,7 +301,7 @@ $view = $prefs->view;
                     : catalog_file_href_from_group($first, $group->id);
                 ?>
             <?php if ($multi): ?>
-            <tr class="catalog-episode" hidden data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
+            <tr class="catalog-episode" hidden data-nest="2" data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
               <td data-col="poster"><?= catalog_thumb_button($first, 'sm', $cluster['label'], count($parts) . ' parts') ?></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
@@ -321,7 +321,7 @@ $view = $prefs->view;
             <?php foreach ($parts as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->episodeLabel;
                 ?>
-            <tr class="catalog-part" hidden data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+            <tr class="catalog-part" hidden data-nest="3" data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($record, 'sm', $partName) ?>
               </td>
@@ -334,7 +334,7 @@ $view = $prefs->view;
             </tr>
             <?php endforeach; ?>
             <?php else: ?>
-            <tr class="catalog-episode" hidden data-card data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
+            <tr class="catalog-episode" hidden data-nest="2" data-card data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($first, 'sm', $cluster['label']) ?>
               </td>

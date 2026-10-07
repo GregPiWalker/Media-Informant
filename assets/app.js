@@ -723,11 +723,13 @@
         }
       }
       catalog.querySelectorAll('[data-genre-rail]').forEach(function (rail) {
-        var any = false;
+        var shown = 0;
         rail.querySelectorAll('[data-card]').forEach(function (card) {
-          if (!card.hidden) any = true;
+          if (!card.hidden) shown += 1;
         });
-        rail.hidden = !any;
+        rail.hidden = shown === 0;
+        var tally = rail.querySelector('.genre-head p');
+        if (tally) tally.textContent = String(shown);
       });
       syncPosterBuckets();
       var empty = document.querySelector('[data-search-empty]');

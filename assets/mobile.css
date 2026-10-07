@@ -710,16 +710,24 @@ button.col-option,
   white-space: nowrap;
 }
 
-.catalog-season td[data-col="title"] {
-  padding-left: 0.85rem;
+.catalog-table tr[data-nest="1"] { --nest-shift: var(--nest-step); }
+.catalog-table tr[data-nest="2"] { --nest-shift: calc(var(--nest-step) * 2); }
+.catalog-table tr[data-nest="3"] { --nest-shift: calc(var(--nest-step) * 3); }
+
+.catalog .catalog-table tr.catalog-season td[data-col="title"] {
+  padding-left: calc(var(--title-pad) + var(--caret-nudge));
 }
 
-.catalog-episode td[data-col="title"] {
-  padding-left: 2.1rem;
+.catalog .catalog-table tr.catalog-episode td[data-col="title"] {
+  padding-left: calc(var(--title-pad) + var(--caret-nudge) + 1.25rem);
 }
 
-.catalog-part td[data-col="title"] {
-  padding-left: 3.2rem;
+.catalog .catalog-table tr.catalog-part[data-nest="1"] td[data-col="title"] {
+  padding-left: calc(var(--title-pad) + var(--caret-btn) + 0.15rem);
+}
+
+.catalog .catalog-table tr.catalog-part[data-nest="3"] td[data-col="title"] {
+  padding-left: calc(var(--title-pad) + var(--caret-nudge) + 2.35rem);
 }
 
 .catalog:not([data-cols~="poster"]) [data-col="poster"],
@@ -739,10 +747,22 @@ button.col-option,
 }
 
 .catalog-table {
+  --title-pad: 0.7rem;
+  --caret-btn: 2.4rem;
+  --caret-size: 0.55rem;
+  --caret-nudge: calc((var(--caret-btn) - var(--caret-size)) / 2);
+  --nest-step: 0.65rem;
+  --poster-pad: 1rem;
+  --poster-base: 2.75rem;
+  --poster-col: calc(var(--poster-pad) + (var(--nest-step) * 3) + 2.5rem);
   width: max-content;
   min-width: 100%;
   border-collapse: separate;
   border-spacing: 0;
+}
+
+.catalog:not([data-cols~="poster"]) .catalog-table {
+  --title-pad: 1rem;
 }
 
 .catalog-table th,
@@ -782,28 +802,40 @@ button.col-option,
   position: sticky;
   left: 0;
   z-index: 3;
-  width: 2.75rem;
-  padding-left: 1rem;
+  width: var(--poster-col);
+  padding-left: var(--poster-pad);
+}
+
+.catalog-table tr[data-nest] td[data-col="poster"] {
+  padding-left: calc(var(--poster-pad) + var(--nest-shift));
 }
 
 .catalog-table th[data-col="title"],
 .catalog-table td[data-col="title"] {
   position: sticky;
-  left: 2.75rem;
+  left: var(--poster-base);
   z-index: 3;
   min-width: 10rem;
+  padding-left: var(--title-pad);
   white-space: normal;
 }
 
 .catalog[data-cols~="poster"] .catalog-table th[data-col="title"],
 .catalog[data-cols~="poster"] .catalog-table td[data-col="title"] {
-  left: 2.75rem;
+  left: var(--poster-base);
+}
+
+.catalog[data-cols~="poster"] .catalog-table tr[data-nest] td[data-col="title"] {
+  background: linear-gradient(
+    to right,
+    transparent calc(var(--nest-shift) + 0.45rem),
+    var(--window-bg) calc(var(--nest-shift) + 0.45rem)
+  );
 }
 
 .catalog:not([data-cols~="poster"]) .catalog-table th[data-col="title"],
 .catalog:not([data-cols~="poster"]) .catalog-table td[data-col="title"] {
   left: 0;
-  padding-left: 1rem;
 }
 
 .sort-btn {
@@ -981,6 +1013,10 @@ button.col-option,
   background: var(--card-bg);
   box-shadow: var(--shadow);
   border: 1px solid var(--border);
+}
+
+.card[hidden] {
+  display: none !important;
 }
 
 .card:active {
