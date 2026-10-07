@@ -367,7 +367,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=58" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=59" defer></script>
 </body>
 </html>
 <?php
