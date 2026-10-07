@@ -31,25 +31,11 @@
         }
     ],
     "music_categories": [],
-    "video_roots": [
-        {
-            "path": "/volume1/Video/M O V I E S",
-            "category": "movies"
-        },
-        {
-            "path": "/volume1/Video/T E L E V I S I O N",
-            "category": "tv-shows"
-        }
-    ],
-    "music_roots": [
-        {
-            "path": "/volume1/Music",
-            "category": ""
-        }
-    ],
+    "video_roots": [],
+    "music_roots": [],
     "video_excludes": [],
     "music_excludes": [],
-    "tmdb_api_key": "4d425ce89ae18873eabcda0890c8a1dc",
+    "tmdb_api_key": "",
     "tmdb_language": "en-US",
-    "xai_api_key": "xai-suoExMnkCyPlvI9PknTBeNa44fBwWxjns8AQKvVOq7QbxGv6rbxgpmHyJY64cXZRBl2rE992woe1qGFJ"
+    "xai_api_key": ""
 }
