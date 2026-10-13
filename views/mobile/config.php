@@ -11,6 +11,18 @@ declare(strict_types=1);
 /** @var bool $saved */
 /** @var string $error */
 
+function config_category_list(array $categories): string
+{
+    $labels = [];
+    foreach ($categories as $category) {
+        $label = trim((string) ($category['label'] ?? ''));
+        if ($label !== '') {
+            $labels[] = $label;
+        }
+    }
+    return $labels === [] ? 'None' : implode(', ', $labels);
+}
+
 function config_category_select(string $fieldName, string $selected, array $categories, string $domain): void
 {
     echo '<label class="visually-hidden">Category</label>';
@@ -57,9 +69,9 @@ if ($configTab !== 'music' && $configTab !== 'general') {
   <?php endif; ?>
 
   <nav class="branch-nav config-tabs" role="tablist" aria-label="Settings sections">
+    <button type="button" class="branch-tab<?= $configTab === 'general' ? ' is-active' : '' ?>" role="tab" id="config-tab-general" data-config-tab="general" aria-controls="config-panel-general" aria-selected="<?= $configTab === 'general' ? 'true' : 'false' ?>">General</button>
     <button type="button" class="branch-tab<?= $configTab === 'video' ? ' is-active' : '' ?>" role="tab" id="config-tab-video" data-config-tab="video" aria-controls="config-panel-video" aria-selected="<?= $configTab === 'video' ? 'true' : 'false' ?>">Video</button>
     <button type="button" class="branch-tab<?= $configTab === 'music' ? ' is-active' : '' ?>" role="tab" id="config-tab-music" data-config-tab="music" aria-controls="config-panel-music" aria-selected="<?= $configTab === 'music' ? 'true' : 'false' ?>">Music</button>
-    <button type="button" class="branch-tab<?= $configTab === 'general' ? ' is-active' : '' ?>" role="tab" id="config-tab-general" data-config-tab="general" aria-controls="config-panel-general" aria-selected="<?= $configTab === 'general' ? 'true' : 'false' ?>">General</button>
   </nav>
 
   <form class="config-form" method="post" action="<?= h(app_href('config/index.php')) ?>" autocomplete="off">
@@ -176,6 +188,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <section class="form-section">
       <h2>Categories</h2>
       <p class="hint">Names used when you assign a category to a source folder.</p>
+      <p class="hint">Video: <?= h(config_category_list($videoCategories)) ?><br>Music: <?= h(config_category_list($musicCategories)) ?></p>
       <a class="btn btn-ghost btn-block" href="<?= h(app_href('config/categories.php')) ?>">Edit categories</a>
     </section>
 
@@ -191,7 +204,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
 
     <section class="form-section">
       <h2>Catalog</h2>
-      <p class="hint">Hidden files stay in the library and keep their match data. They are omitted from Video until you turn this on.</p>
+      <p class="hint">Hidden files stay in the library and keep their match data. They are omitted from all catalogs until you turn this on.</p>
       <label class="grok-toggle">
         <input type="checkbox" name="show_hidden" value="1"<?= !empty($settings['show_hidden']) ? ' checked' : '' ?>>
         <span>Show hidden files</span>
@@ -200,7 +213,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
 
     <section class="form-section">
       <h2>TMDB</h2>
-      <p class="hint">Optional. Without a key, Video still lists files from folder and file names. Get a key at <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer">themoviedb.org</a>.</p>
+      <p class="hint">Optional, but required for video meta-data searches. Without a key, Video still lists files from folder and file names. Get a key at <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer">themoviedb.org</a>.</p>
       <label class="field">
         <span class="field-label">API key</span>
         <input type="text" name="tmdb_api_key" class="folder-input" value="<?= h((string) $settings['tmdb_api_key']) ?>" spellcheck="false" autocapitalize="off" autocomplete="off">
