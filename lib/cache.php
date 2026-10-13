@@ -519,8 +519,10 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
         $item['poster_path'] = null;
         $item = library_set_auto_title($item, (string) ($item['title'] ?? 'Untitled'));
         $item['genres'] = [];
+        unset($item['vote_average'], $item['vote_count'], $item['runtime']);
         return $item;
     }
+    $previousId = (int) ($item['tmdb_id'] ?? 0);
     $item['match_source'] = library_normalize_match_source($source);
     if ($item['match_source'] === 'none') {
         $item['match_source'] = 'direct';
@@ -534,6 +536,18 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
     }
     $item['genres'] = cache_string_list($meta['genres'] ?? []);
     $item['overview'] = trim((string) ($meta['overview'] ?? ''));
+    if (function_exists('tmdb_has_rating') && tmdb_has_rating($meta)) {
+        $item = tmdb_copy_rating($item, $meta);
+    } elseif ($previousId !== (int) $meta['tmdb_id']) {
+        unset($item['vote_average'], $item['vote_count']);
+    }
+    if (function_exists('tmdb_copy_runtime')) {
+        $item = tmdb_copy_runtime($item, $meta);
+    }
+    if ($previousId !== (int) $meta['tmdb_id']
+        && (!function_exists('tmdb_minutes_value') || tmdb_minutes_value($meta['runtime'] ?? null) === null)) {
+        unset($item['runtime']);
+    }
     if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
         $item['media_type'] = $meta['media_type'];
     }
@@ -556,7 +570,7 @@ function library_clear_match(array $item): array
     $item['match_source'] = 'none';
     $item['poster_path'] = null;
     $item['tmdb_candidates'] = [];
-    unset($item['overview']);
+    unset($item['overview'], $item['vote_average'], $item['vote_count'], $item['runtime']);
     $item['genres'] = [];
     if (!library_has_custom_title($item)) {
         $item['display_title'] = (string) ($item['title'] ?? 'Untitled');

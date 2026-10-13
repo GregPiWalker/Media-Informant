@@ -19,6 +19,7 @@ $poster = null;
 $manual = false;
 $itemId = '';
 $sourceAbsent = false;
+$ratingLabel = '';
 $editing = !empty($editing);
 $error = (string) ($error ?? '');
 
@@ -64,6 +65,9 @@ if ($found) {
             }
         }
     }
+    if (function_exists('tmdb_rating_text')) {
+        $ratingLabel = tmdb_rating_text($meta, $item);
+    }
 }
 
 $kind = $found ? library_item_kind($item) : 'movie';
@@ -84,6 +88,14 @@ if ($found) {
     }
 }
 $isEpisode = $kind === 'show' && ($seasonNum !== null || $episodeNum !== null || $episodeTitle !== '');
+$runtimeLabel = '';
+if (function_exists('tmdb_runtime_text')) {
+    if ($isEpisode && is_array($item)) {
+        $runtimeLabel = tmdb_runtime_label($item);
+    } else {
+        $runtimeLabel = tmdb_runtime_text(is_array($item) ? $item : null, is_array($meta ?? null) ? $meta : null);
+    }
+}
 $showHeading = $display;
 if ($isEpisode) {
     $showHeading .= ' - ' . ($year ? (string) $year : 'Year unknown');
@@ -253,6 +265,12 @@ render_header(['section' => 'video']);
       <h1><?= h($display) ?></h1>
       <?php endif; ?>
       <p class="detail-year"><?= $year ? h((string) $year) : 'Year unknown' ?></p>
+      <?php endif; ?>
+      <?php if ($ratingLabel !== ''): ?>
+      <p class="detail-rating"><?= $isEpisode ? 'Show rating ' : '' ?><?= h($ratingLabel) ?></p>
+      <?php endif; ?>
+      <?php if ($runtimeLabel !== ''): ?>
+      <p class="detail-runtime"><?= h($runtimeLabel) ?></p>
       <?php endif; ?>
       <?php if (library_item_hidden($item)): ?>
       <p class="hint">This file is hidden from the catalog.</p>

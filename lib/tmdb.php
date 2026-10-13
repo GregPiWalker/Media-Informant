@@ -208,6 +208,7 @@ function tmdb_map_result(array $row, string $defaultMedia = 'movie'): ?array
         'media_type' => $media === 'tv' ? 'tv' : 'movie',
         'popularity' => isset($row['popularity']) ? (float) $row['popularity'] : 0.0,
         'vote_count' => (int) ($row['vote_count'] ?? 0),
+        'vote_average' => isset($row['vote_average']) && is_numeric($row['vote_average']) ? (float) $row['vote_average'] : null,
     ];
 }
 
@@ -812,7 +813,7 @@ function tmdb_details_from_data(array $data, string $mediaType): ?array
         ? (string) ($data['name'] ?? $data['original_name'] ?? $data['title'] ?? '')
         : (string) ($data['title'] ?? $data['original_title'] ?? $data['name'] ?? '');
 
-    return [
+    $details = [
         'tmdb_id' => (int) $data['id'],
         'title' => $title,
         'year' => $year,
@@ -823,6 +824,14 @@ function tmdb_details_from_data(array $data, string $mediaType): ?array
         'media_type' => $isTv ? 'tv' : 'movie',
         'seasons' => $isTv ? tmdb_season_rows($data['seasons'] ?? []) : [],
     ];
+    // vote_average is the 0–10 user score. Popularity is a ranking metric, not a rating.
+    if (isset($data['vote_average']) && is_numeric($data['vote_average'])) {
+        $details['vote_average'] = (float) $data['vote_average'];
+        $details['vote_count'] = max(0, (int) ($data['vote_count'] ?? 0));
+    }
+    // Movies use runtime. A series uses episode_run_time only when every listed length matches.
+    $details['runtime'] = tmdb_runtime_from_details($data, $isTv);
+    return $details;
 }
 
 /** @return list<array{id:int,season_number:int,name:string,episode_count:int}> */
@@ -882,6 +891,170 @@ function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
     return is_array($otherData) ? tmdb_details_from_data($otherData, $other) : null;
 }
 
+function tmdb_item_media_type(array $item): string
+{
+    $hint = (string) ($item['media_type'] ?? '');
+    if ($hint === 'tv' || $hint === 'movie') {
+        return $hint;
+    }
+    if (function_exists('library_item_kind') && library_item_kind($item) === 'show') {
+        return 'tv';
+    }
+    return 'movie';
+}
+
+function tmdb_has_rating(?array $meta): bool
+{
+    return is_array($meta)
+        && isset($meta['vote_average'])
+        && is_numeric($meta['vote_average']);
+}
+
+function tmdb_copy_rating(array $item, array $meta): array
+{
+    if (!tmdb_has_rating($meta)) {
+        return $item;
+    }
+    $item['vote_average'] = (float) $meta['vote_average'];
+    $item['vote_count'] = max(0, (int) ($meta['vote_count'] ?? 0));
+    return $item;
+}
+
+function tmdb_rating_label(array $source): string
+{
+    if (!tmdb_has_rating($source)) {
+        return '';
+    }
+    $count = max(0, (int) ($source['vote_count'] ?? 0));
+    if ($count < 1) {
+        return '';
+    }
+    $score = number_format((float) $source['vote_average'], 1, '.', '');
+    $votes = number_format($count, 0, '.', ',');
+    return $score . ' / 10 · ' . $votes . ' ' . ($count === 1 ? 'vote' : 'votes');
+}
+
+function tmdb_rating_text(?array $primary, ?array $fallback = null): string
+{
+    if (tmdb_has_rating($primary)) {
+        return tmdb_rating_label($primary);
+    }
+    if (is_array($fallback)) {
+        return tmdb_rating_label($fallback);
+    }
+    return '';
+}
+
+function tmdb_minutes_value($value): ?int
+{
+    if (!is_numeric($value)) {
+        return null;
+    }
+    $mins = (int) $value;
+    return $mins > 0 ? $mins : null;
+}
+
+function tmdb_has_runtime(?array $meta): bool
+{
+    return is_array($meta) && array_key_exists('runtime', $meta);
+}
+
+/** @param array<string, mixed> $data */
+function tmdb_runtime_from_details(array $data, bool $isTv): ?int
+{
+    if (!$isTv) {
+        return tmdb_minutes_value($data['runtime'] ?? null);
+    }
+    $times = [];
+    foreach (is_array($data['episode_run_time'] ?? null) ? $data['episode_run_time'] : [] as $mins) {
+        $value = tmdb_minutes_value($mins);
+        if ($value !== null) {
+            $times[$value] = true;
+        }
+    }
+    if (count($times) !== 1) {
+        return null;
+    }
+    return (int) array_key_first($times);
+}
+
+function tmdb_copy_runtime(array $item, array $meta): array
+{
+    $mins = tmdb_minutes_value($meta['runtime'] ?? null);
+    if ($mins === null) {
+        return $item;
+    }
+    $item['runtime'] = $mins;
+    return $item;
+}
+
+function tmdb_runtime_label(array $source): string
+{
+    $mins = tmdb_minutes_value($source['runtime'] ?? null);
+    if ($mins === null) {
+        return '';
+    }
+    if ($mins < 60) {
+        return $mins . ' min';
+    }
+    $hours = intdiv($mins, 60);
+    $rest = $mins % 60;
+    if ($rest === 0) {
+        return $hours . ' h';
+    }
+    return $hours . ' h ' . $rest . ' min';
+}
+
+function tmdb_runtime_text(?array $primary, ?array $fallback = null): string
+{
+    if (is_array($primary) && tmdb_minutes_value($primary['runtime'] ?? null) !== null) {
+        return tmdb_runtime_label($primary);
+    }
+    if (is_array($fallback)) {
+        return tmdb_runtime_label($fallback);
+    }
+    return '';
+}
+
+/**
+ * Store a missing user score or play time on the title cache. An existing
+ * cache file keeps its overview and other edits.
+ */
+function tmdb_ensure_title_details(int $tmdbId, string $mediaType = ''): ?array
+{
+    if ($tmdbId < 1 || !function_exists('cache_read_title')) {
+        return null;
+    }
+    $meta = cache_read_title($tmdbId);
+    $needsRating = !tmdb_has_rating($meta);
+    $needsRuntime = !tmdb_has_runtime($meta);
+    if ((!$needsRating && !$needsRuntime) || !tmdb_has_key()) {
+        return is_array($meta) ? $meta : null;
+    }
+    $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+    if (!is_array($fetched)) {
+        return is_array($meta) ? $meta : null;
+    }
+    if (!is_array($meta)) {
+        $meta = $fetched;
+    } else {
+        if ($needsRating && tmdb_has_rating($fetched)) {
+            $meta['vote_average'] = (float) $fetched['vote_average'];
+            $meta['vote_count'] = max(0, (int) ($fetched['vote_count'] ?? 0));
+        }
+        if ($needsRuntime && tmdb_has_runtime($fetched)) {
+            $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
+        }
+    }
+    cache_write_title($tmdbId, $meta);
+    return $meta;
+}
+
+function tmdb_ensure_title_rating(int $tmdbId, string $mediaType = ''): ?array
+{
+    return tmdb_ensure_title_details($tmdbId, $mediaType);
+}
+
 function tmdb_season_cache_path(int $seriesId, int $season): string
 {
     return CACHE_DIR . '/titles/tv-' . $seriesId . '-s' . $season . '.json';
@@ -895,7 +1068,7 @@ function tmdb_season_cache_payload(array $data): array
             continue;
         }
         $still = $row['still_path'] ?? null;
-        $episodes[] = [
+        $episodeRow = [
             'id' => (int) ($row['id'] ?? 0),
             'episode_number' => (int) ($row['episode_number'] ?? 0),
             'season_number' => (int) ($row['season_number'] ?? ($data['season_number'] ?? 0)),
@@ -903,6 +1076,10 @@ function tmdb_season_cache_payload(array $data): array
             'overview' => (string) ($row['overview'] ?? ''),
             'still_path' => is_string($still) && $still !== '' ? $still : null,
         ];
+        if (array_key_exists('runtime', $row)) {
+            $episodeRow['runtime'] = tmdb_minutes_value($row['runtime']);
+        }
+        $episodes[] = $episodeRow;
     }
     return [
         'id' => (int) ($data['id'] ?? 0),
@@ -910,6 +1087,20 @@ function tmdb_season_cache_payload(array $data): array
         'name' => (string) ($data['name'] ?? ''),
         'episodes' => $episodes,
     ];
+}
+
+function tmdb_season_payload_has_runtime(array $payload): bool
+{
+    $episodes = $payload['episodes'] ?? null;
+    if (!is_array($episodes)) {
+        return false;
+    }
+    foreach ($episodes as $row) {
+        if (is_array($row) && array_key_exists('runtime', $row)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function tmdb_remember_season(int $seriesId, int $season, array $data): void
@@ -933,7 +1124,8 @@ function tmdb_fetch_season(int $seriesId, int $season): ?array
     }
     if (function_exists('catalog_store_show_season_read')) {
         $fromShow = catalog_store_show_season_read($seriesId, $season);
-        if (is_array($fromShow) && is_array($fromShow['episodes'] ?? null) && $fromShow['episodes'] !== []) {
+        if (is_array($fromShow) && is_array($fromShow['episodes'] ?? null) && $fromShow['episodes'] !== []
+            && tmdb_season_payload_has_runtime($fromShow)) {
             tmdb_verbose_log(
                 'TMDB season cache hit series=' . $seriesId
                 . ' season=' . $season
@@ -946,7 +1138,8 @@ function tmdb_fetch_season(int $seriesId, int $season): ?array
     if (is_file($path)) {
         $raw = @file_get_contents($path);
         $cached = is_string($raw) ? json_decode($raw, true) : null;
-        if (is_array($cached) && isset($cached['episodes']) && is_array($cached['episodes'])) {
+        if (is_array($cached) && isset($cached['episodes']) && is_array($cached['episodes'])
+            && tmdb_season_payload_has_runtime($cached)) {
             tmdb_verbose_log(
                 'TMDB season cache hit series=' . $seriesId
                 . ' season=' . $season
@@ -1020,7 +1213,7 @@ function tmdb_episode_title_variants(string $raw): array
 }
 
 /**
- * @return array{episode_id:int,episode_title:string,overview:string,still_path:?string,season:int,episode:int}|null
+ * @return array{episode_id:int,episode_title:string,overview:string,still_path:?string,season:int,episode:int,runtime?:?int}|null
  */
 function tmdb_pick_season_episode(array $seasonData, ?int $episode, string $episodeTitle = ''): ?array
 {
@@ -1066,7 +1259,7 @@ function tmdb_pick_season_episode(array $seasonData, ?int $episode, string $epis
         return null;
     }
     $still = $hit['still_path'] ?? null;
-    return [
+    $picked = [
         'episode_id' => (int) $hit['id'],
         'episode_title' => trim((string) ($hit['name'] ?? '')),
         'overview' => trim((string) ($hit['overview'] ?? '')),
@@ -1074,6 +1267,10 @@ function tmdb_pick_season_episode(array $seasonData, ?int $episode, string $epis
         'season' => (int) ($hit['season_number'] ?? ($seasonData['season_number'] ?? 0)),
         'episode' => (int) ($hit['episode_number'] ?? 0),
     ];
+    if (array_key_exists('runtime', $hit)) {
+        $picked['runtime'] = tmdb_minutes_value($hit['runtime']);
+    }
+    return $picked;
 }
 
 /**
@@ -1124,10 +1321,76 @@ function tmdb_enrich_item_episode(array $item, int $seriesId): array
     }
     $item['season'] = $ep['season'];
     $item['episode'] = $ep['episode'];
+    if (array_key_exists('runtime', $ep)) {
+        $mins = tmdb_minutes_value($ep['runtime']);
+        if ($mins === null) {
+            unset($item['runtime']);
+        } else {
+            $item['runtime'] = $mins;
+        }
+    }
     tmdb_verbose_log(
         'TMDB episode hit s' . $ep['season'] . 'e' . $ep['episode']
         . ' "' . $ep['episode_title'] . '"'
     );
+    return $item;
+}
+
+function tmdb_item_episode_runtime(array $item): ?int
+{
+    if (!function_exists('library_item_kind') || library_item_kind($item) !== 'show') {
+        return null;
+    }
+    $seriesId = (int) ($item['tmdb_id'] ?? 0);
+    $season = isset($item['season']) && $item['season'] !== null && $item['season'] !== ''
+        ? (int) $item['season']
+        : null;
+    $episode = isset($item['episode']) && $item['episode'] !== null && $item['episode'] !== ''
+        ? (int) $item['episode']
+        : null;
+    $episodeTitle = trim((string) ($item['episode_title'] ?? ''));
+    if ($seriesId < 1 || $season === null || ($episode === null && $episodeTitle === '')) {
+        return null;
+    }
+    $seasonData = tmdb_fetch_season($seriesId, $season);
+    if ($seasonData === null) {
+        return null;
+    }
+    $ep = tmdb_pick_season_episode($seasonData, $episode, $episodeTitle);
+    if (!is_array($ep) || !array_key_exists('runtime', $ep)) {
+        return null;
+    }
+    return tmdb_minutes_value($ep['runtime']);
+}
+
+/**
+ * Persist a discovered play time onto one catalog file.
+ * Episodes keep their own episode runtime. Movies use the title runtime.
+ */
+function tmdb_remember_item_runtime(string $id, array $item, ?array $meta): array
+{
+    if (tmdb_minutes_value($item['runtime'] ?? null) !== null) {
+        return $item;
+    }
+    $mins = tmdb_item_episode_runtime($item);
+    $isShow = function_exists('library_item_kind') && library_item_kind($item) === 'show';
+    if ($mins === null && !$isShow && is_array($meta)) {
+        $mins = tmdb_minutes_value($meta['runtime'] ?? null);
+    }
+    if ($mins === null || $id === '' || !function_exists('cache_update_item')) {
+        if ($mins !== null) {
+            $item['runtime'] = $mins;
+        }
+        return $item;
+    }
+    $saved = cache_update_item($id, static function (array $row) use ($mins): array {
+        $row['runtime'] = $mins;
+        return $row;
+    });
+    if (is_array($saved)) {
+        return $saved;
+    }
+    $item['runtime'] = $mins;
     return $item;
 }
 

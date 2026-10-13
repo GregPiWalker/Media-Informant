@@ -319,6 +319,13 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     } elseif (!empty($row['tmdb_media_type'])) {
         $item['media_type'] = (string) $row['tmdb_media_type'];
     }
+    if (isset($extras['vote_average']) && is_numeric($extras['vote_average'])) {
+        $item['vote_average'] = (float) $extras['vote_average'];
+        $item['vote_count'] = max(0, (int) ($extras['vote_count'] ?? 0));
+    }
+    if (isset($extras['runtime']) && is_numeric($extras['runtime']) && (int) $extras['runtime'] > 0) {
+        $item['runtime'] = (int) $extras['runtime'];
+    }
     return $item;
 }
 
@@ -456,6 +463,13 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
         'overview' => (string) ($item['overview'] ?? ''),
         'media_type' => (string) ($item['media_type'] ?? ''),
     ];
+    if (isset($item['vote_average']) && is_numeric($item['vote_average'])) {
+        $extras['vote_average'] = (float) $item['vote_average'];
+        $extras['vote_count'] = max(0, (int) ($item['vote_count'] ?? 0));
+    }
+    if (isset($item['runtime']) && is_numeric($item['runtime']) && (int) $item['runtime'] > 0) {
+        $extras['runtime'] = (int) $item['runtime'];
+    }
     catalog_store_write_item($pdo, [
         'id' => $fileId,
         'type_id' => $typeId,

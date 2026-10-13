@@ -44,14 +44,26 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     } elseif ($action === 'choose') {
         $tmdbId = (int) ($_POST['tmdb_id'] ?? 0);
         $meta = $tmdbId > 0 ? cache_read_title($tmdbId) : null;
-        if ($tmdbId > 0 && ($meta === null || trim((string) ($meta['overview'] ?? '')) === '')) {
+        $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
+        $missingRating = !tmdb_has_rating($meta);
+        $missingRuntime = !tmdb_has_runtime($meta);
+        if ($tmdbId > 0 && ($missingOverview || $missingRating || $missingRuntime)) {
             $postedType = (string) ($_POST['media_type'] ?? '');
             $mediaType = $postedType === 'tv' || $postedType === 'movie'
                 ? $postedType
                 : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
             $fetched = tmdb_fetch_details($tmdbId, $mediaType);
             if ($fetched !== null) {
-                $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
+                if ($missingOverview) {
+                    $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
+                } else {
+                    if ($missingRating) {
+                        $meta = tmdb_copy_rating($meta, $fetched);
+                    }
+                    if ($missingRuntime && tmdb_has_runtime($fetched)) {
+                        $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
+                    }
+                }
                 cache_write_title($tmdbId, $meta);
             }
         }

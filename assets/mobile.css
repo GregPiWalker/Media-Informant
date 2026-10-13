@@ -1218,7 +1218,9 @@ button.col-option,
   margin-bottom: 0.85rem;
 }
 
-.detail-year {
+.detail-year,
+.detail-rating,
+.detail-runtime {
   margin-top: 0.3rem;
   color: var(--dim-fg);
   font-size: 1rem;

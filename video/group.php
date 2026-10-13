@@ -5,6 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/catalog.php';
+require dirname(__DIR__) . '/lib/tmdb.php';
 
 cache_init();
 
@@ -155,7 +156,10 @@ $meta = null;
 if ($group !== null && $group->head->id !== '') {
     $headItem = catalog_store_find('video', $group->head->id);
     if (is_array($headItem) && !empty($headItem['tmdb_id'])) {
-        $meta = cache_read_title((int) $headItem['tmdb_id']);
+        $meta = tmdb_ensure_title_details((int) $headItem['tmdb_id'], tmdb_item_media_type($headItem));
+    }
+    if (is_array($headItem) && str_starts_with((string) $group->id, 'parts::')) {
+        $headItem = tmdb_remember_item_runtime((string) ($headItem['id'] ?? ''), $headItem, is_array($meta) ? $meta : null);
     }
 }
 

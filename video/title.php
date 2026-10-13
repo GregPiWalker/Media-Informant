@@ -5,6 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/folders.php';
+require dirname(__DIR__) . '/lib/tmdb.php';
 
 cache_init();
 
@@ -220,7 +221,8 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
 
 $meta = null;
 if ($item !== null && !empty($item['tmdb_id'])) {
-    $meta = cache_read_title((int) $item['tmdb_id']);
+    $meta = tmdb_ensure_title_details((int) $item['tmdb_id'], tmdb_item_media_type($item));
+    $item = tmdb_remember_item_runtime($id, $item, is_array($meta) ? $meta : null);
 }
 
 require app_view('detail');

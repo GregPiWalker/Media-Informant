@@ -1036,7 +1036,7 @@ function scan_part_bundle_key(array $item): string
 
 function scan_part_bundle_from_item(array $item): array
 {
-    return [
+    $bundle = [
         'tmdb_id' => (int) ($item['tmdb_id'] ?? 0),
         'title' => (string) ($item['display_title'] ?? $item['title'] ?? ''),
         'year' => $item['year'] ?? null,
@@ -1052,6 +1052,14 @@ function scan_part_bundle_from_item(array $item): array
         'miss' => false,
         'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
     ];
+    if (isset($item['vote_average']) && is_numeric($item['vote_average'])) {
+        $bundle['vote_average'] = (float) $item['vote_average'];
+        $bundle['vote_count'] = max(0, (int) ($item['vote_count'] ?? 0));
+    }
+    if (isset($item['runtime']) && is_numeric($item['runtime']) && (int) $item['runtime'] > 0) {
+        $bundle['runtime'] = (int) $item['runtime'];
+    }
+    return $bundle;
 }
 
 function scan_part_apply_bundle(array $item, array $bundle): array
@@ -1074,6 +1082,12 @@ function scan_part_apply_bundle(array $item, array $bundle): array
     $item['poster_path'] = $bundle['poster_path'] ?? null;
     $item['genres'] = function_exists('cache_string_list') ? cache_string_list($bundle['genres'] ?? []) : ($bundle['genres'] ?? []);
     $item['overview'] = (string) ($bundle['overview'] ?? '');
+    if (function_exists('tmdb_copy_rating')) {
+        $item = tmdb_copy_rating($item, $bundle);
+    }
+    if (function_exists('tmdb_copy_runtime')) {
+        $item = tmdb_copy_runtime($item, $bundle);
+    }
     if (!empty($bundle['episode_title'])) {
         $item['episode_title'] = (string) $bundle['episode_title'];
     }
@@ -1177,6 +1191,12 @@ function scan_tv_apply_show(array &$job, array $item, array $cached): array
         $fromShow = trim((string) ($showMeta['overview'] ?? ''));
         if ($fromShow !== '') {
             $item['overview'] = $fromShow;
+        }
+        if (function_exists('tmdb_copy_rating')) {
+            $item = tmdb_copy_rating($item, $showMeta);
+        }
+        if (function_exists('tmdb_copy_runtime')) {
+            $item = tmdb_copy_runtime($item, $showMeta);
         }
     }
     $item['match_source'] = (string) ($item['match_source'] ?? 'direct');
@@ -1658,6 +1678,13 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         if (array_key_exists('overview', $prev) && is_string($prev['overview'])) {
             $item['overview'] = $prev['overview'];
         }
+        if (isset($prev['vote_average']) && is_numeric($prev['vote_average'])) {
+            $item['vote_average'] = (float) $prev['vote_average'];
+            $item['vote_count'] = max(0, (int) ($prev['vote_count'] ?? 0));
+        }
+        if (isset($prev['runtime']) && is_numeric($prev['runtime']) && (int) $prev['runtime'] > 0) {
+            $item['runtime'] = (int) $prev['runtime'];
+        }
         if (!empty($prev['genres']) && is_array($prev['genres'])) {
             $item['genres'] = cache_string_list($prev['genres']);
         }
@@ -1730,6 +1757,12 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $fromMeta = trim((string) ($meta['overview'] ?? ''));
             if ($fromMeta !== '') {
                 $item['overview'] = $fromMeta;
+            }
+            if (function_exists('tmdb_copy_rating')) {
+                $item = tmdb_copy_rating($item, $meta);
+            }
+            if (function_exists('tmdb_copy_runtime')) {
+                $item = tmdb_copy_runtime($item, $meta);
             }
             $item['match_source'] = (($source['match_source'] ?? '') === 'grok') ? 'grok' : 'direct';
             if (function_exists('tmdb_enrich_item_episode')) {
@@ -1918,6 +1951,19 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 }
                 $item['genres'] = cache_string_list($meta['genres'] ?? []);
                 $item['overview'] = trim((string) ($meta['overview'] ?? ''));
+                $previousId = is_array($prev ?? null) ? (int) ($prev['tmdb_id'] ?? 0) : 0;
+                if (function_exists('tmdb_has_rating') && tmdb_has_rating($meta)) {
+                    $item = tmdb_copy_rating($item, $meta);
+                } elseif ($previousId !== (int) ($meta['tmdb_id'] ?? 0)) {
+                    unset($item['vote_average'], $item['vote_count']);
+                }
+                if (function_exists('tmdb_copy_runtime')) {
+                    $item = tmdb_copy_runtime($item, $meta);
+                }
+                if ($previousId !== (int) ($meta['tmdb_id'] ?? 0)
+                    && (!function_exists('tmdb_minutes_value') || tmdb_minutes_value($meta['runtime'] ?? null) === null)) {
+                    unset($item['runtime']);
+                }
                 if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
                     $item['media_type'] = $meta['media_type'];
                 }
@@ -2525,17 +2571,25 @@ function library_sync_video_catalog(): array
                 $meta = cache_read_title($tmdbId);
                 $item['tmdb_id'] = $tmdbId;
                 $item['status'] = 'matched';
-                $item['poster_path'] = $meta['poster_path'] ?? $source['poster_path'] ?? null;
-                $item = library_set_auto_title($item, (string) ($meta['title'] ?? $source['display_title'] ?? $title));
-                if (!empty($meta['year'])) {
+                $item['poster_path'] = (is_array($meta) ? ($meta['poster_path'] ?? null) : null) ?? ($source['poster_path'] ?? null);
+                $item = library_set_auto_title($item, (string) ((is_array($meta) ? ($meta['title'] ?? null) : null) ?? $source['display_title'] ?? $title));
+                if (is_array($meta) && !empty($meta['year'])) {
                     $item['year'] = (int) $meta['year'];
                 } elseif (!empty($source['year'])) {
                     $item['year'] = (int) $source['year'];
                 }
-                $item['genres'] = cache_string_list(($meta['genres'] ?? null) ?: ($source['genres'] ?? []));
-                $fromMeta = trim((string) ($meta['overview'] ?? ''));
-                if ($fromMeta !== '') {
-                    $item['overview'] = $fromMeta;
+                $item['genres'] = cache_string_list((is_array($meta) ? ($meta['genres'] ?? null) : null) ?: ($source['genres'] ?? []));
+                if (is_array($meta)) {
+                    $fromMeta = trim((string) ($meta['overview'] ?? ''));
+                    if ($fromMeta !== '') {
+                        $item['overview'] = $fromMeta;
+                    }
+                    if (function_exists('tmdb_copy_rating')) {
+                        $item = tmdb_copy_rating($item, $meta);
+                    }
+                    if (function_exists('tmdb_copy_runtime')) {
+                        $item = tmdb_copy_runtime($item, $meta);
+                    }
                 }
                 $item['match_source'] = 'direct';
             }

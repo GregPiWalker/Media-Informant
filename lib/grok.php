@@ -720,7 +720,10 @@ function grok_choose_season(string $showTitle, string $folder, ?int $parsedSeaso
 function grok_apply_choice(array $item, int $tmdbId): array
 {
     $meta = cache_read_title($tmdbId);
-    if ($meta === null || trim((string) ($meta['overview'] ?? '')) === '') {
+    $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
+    $missingRating = !tmdb_has_rating($meta);
+    $missingRuntime = !tmdb_has_runtime($meta);
+    if ($missingOverview || $missingRating || $missingRuntime) {
         $mediaType = (string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie';
         foreach (grok_compact_candidates($item['tmdb_candidates'] ?? []) as $cand) {
             if ((int) ($cand['id'] ?? 0) === $tmdbId) {
@@ -733,7 +736,16 @@ function grok_apply_choice(array $item, int $tmdbId): array
         }
         $fetched = tmdb_fetch_details($tmdbId, $mediaType);
         if ($fetched !== null) {
-            $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
+            if ($missingOverview) {
+                $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
+            } else {
+                if ($missingRating) {
+                    $meta = tmdb_copy_rating($meta, $fetched);
+                }
+                if ($missingRuntime && tmdb_has_runtime($fetched)) {
+                    $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
+                }
+            }
             cache_write_title($tmdbId, $meta);
         }
         usleep(TMDB_REQUEST_SLEEP_US);

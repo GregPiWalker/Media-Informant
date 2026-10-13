@@ -26,6 +26,8 @@ $genres = $found ? $group->genres() : [];
 $cast = [];
 $poster = $found ? $head->poster : null;
 $sourceAbsent = $found && $head->sourceAbsent;
+$ratingLabel = '';
+$runtimeLabel = '';
 $clusters = $found ? $group->episodeClusters() : [];
 $epCount = $clusters !== [] ? count($clusters) : ($found ? count($group->members) : 0);
 $fileCount = $found ? count($group->members) : 0;
@@ -64,6 +66,21 @@ if ($found) {
     $headItem = $head->id !== '' ? catalog_store_find('video', $head->id) : null;
     if (is_array($headItem) && $overview === '' && !empty($headItem['overview'])) {
         $overview = (string) $headItem['overview'];
+    }
+    if (function_exists('tmdb_rating_text')) {
+        $ratingLabel = tmdb_rating_text(is_array($meta) ? $meta : null, is_array($headItem) ? $headItem : null);
+    }
+    if (function_exists('tmdb_runtime_text')) {
+        if ($partEpisode) {
+            $runtimeLabel = tmdb_runtime_text(is_array($headItem) ? $headItem : null, null);
+        } elseif ($partMovie) {
+            $runtimeLabel = tmdb_runtime_text(is_array($meta) ? $meta : null, is_array($headItem) ? $headItem : null);
+        } elseif (is_array($meta)) {
+            $typical = tmdb_runtime_label($meta);
+            if ($typical !== '') {
+                $runtimeLabel = $typical . ' per episode';
+            }
+        }
     }
 }
 
@@ -183,6 +200,12 @@ render_header(['section' => 'video']);
         <?php endif; ?>
         <?php endif; ?>
       </p>
+      <?php endif; ?>
+      <?php if ($ratingLabel !== ''): ?>
+      <p class="detail-rating"><?= $partEpisode ? 'Show rating ' : '' ?><?= h($ratingLabel) ?></p>
+      <?php endif; ?>
+      <?php if ($runtimeLabel !== ''): ?>
+      <p class="detail-runtime"><?= h($runtimeLabel) ?></p>
       <?php endif; ?>
       <p class="hint"><?= (int) $matched ?> of <?= (int) $fileCount ?> matched.</p>
     </header>
