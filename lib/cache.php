@@ -533,6 +533,10 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
         $item['year'] = (int) $meta['year'];
     }
     $item['genres'] = cache_string_list($meta['genres'] ?? []);
+    $item['overview'] = trim((string) ($meta['overview'] ?? ''));
+    if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
+        $item['media_type'] = $meta['media_type'];
+    }
     if (!library_has_user_kind($item)) {
         $item['kind'] = library_kind_from_genres($item['genres'], library_item_kind($item));
     }

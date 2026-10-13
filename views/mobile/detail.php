@@ -49,8 +49,8 @@ if ($found) {
         if (!empty($meta['year'])) {
             $year = (int) $meta['year'];
         }
-        if ($overview === '' && !array_key_exists('overview', $item)) {
-            $overview = (string) ($meta['overview'] ?? '');
+        if (trim($overview) === '' && trim((string) ($meta['overview'] ?? '')) !== '') {
+            $overview = (string) $meta['overview'];
         }
         if ($genres === []) {
             $genres = cache_string_list($meta['genres'] ?? []);

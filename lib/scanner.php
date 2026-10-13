@@ -1172,6 +1172,13 @@ function scan_tv_apply_show(array &$job, array $item, array $cached): array
         $item['year'] = (int) $cached['year'];
     }
     $item['genres'] = cache_string_list($cached['genres'] ?? []);
+    $showMeta = function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+    if (is_array($showMeta)) {
+        $fromShow = trim((string) ($showMeta['overview'] ?? ''));
+        if ($fromShow !== '') {
+            $item['overview'] = $fromShow;
+        }
+    }
     $item['match_source'] = (string) ($item['match_source'] ?? 'direct');
     if ($item['match_source'] === 'none' || $item['match_source'] === '') {
         $item['match_source'] = 'direct';
@@ -1720,6 +1727,10 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 $item['year'] = (int) $meta['year'];
             }
             $item['genres'] = cache_string_list($meta['genres'] ?? $source['genres'] ?? []);
+            $fromMeta = trim((string) ($meta['overview'] ?? ''));
+            if ($fromMeta !== '') {
+                $item['overview'] = $fromMeta;
+            }
             $item['match_source'] = (($source['match_source'] ?? '') === 'grok') ? 'grok' : 'direct';
             if (function_exists('tmdb_enrich_item_episode')) {
                 $item = tmdb_enrich_item_episode($item, $tmdbId);
@@ -1906,6 +1917,10 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                     $item['year'] = (int) $meta['year'];
                 }
                 $item['genres'] = cache_string_list($meta['genres'] ?? []);
+                $item['overview'] = trim((string) ($meta['overview'] ?? ''));
+                if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
+                    $item['media_type'] = $meta['media_type'];
+                }
                 $item['match_source'] = 'tmdb';
                 if (function_exists('tmdb_enrich_item_episode')) {
                     $item = tmdb_enrich_item_episode($item, (int) $meta['tmdb_id']);
@@ -2518,6 +2533,10 @@ function library_sync_video_catalog(): array
                     $item['year'] = (int) $source['year'];
                 }
                 $item['genres'] = cache_string_list(($meta['genres'] ?? null) ?: ($source['genres'] ?? []));
+                $fromMeta = trim((string) ($meta['overview'] ?? ''));
+                if ($fromMeta !== '') {
+                    $item['overview'] = $fromMeta;
+                }
                 $item['match_source'] = 'direct';
             }
 

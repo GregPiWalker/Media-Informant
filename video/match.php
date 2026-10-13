@@ -44,13 +44,14 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     } elseif ($action === 'choose') {
         $tmdbId = (int) ($_POST['tmdb_id'] ?? 0);
         $meta = $tmdbId > 0 ? cache_read_title($tmdbId) : null;
-        if ($meta === null && $tmdbId > 0) {
+        if ($tmdbId > 0 && ($meta === null || trim((string) ($meta['overview'] ?? '')) === '')) {
             $postedType = (string) ($_POST['media_type'] ?? '');
             $mediaType = $postedType === 'tv' || $postedType === 'movie'
                 ? $postedType
                 : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
-            $meta = tmdb_fetch_details($tmdbId, $mediaType);
-            if ($meta !== null) {
+            $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+            if ($fetched !== null) {
+                $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
                 cache_write_title($tmdbId, $meta);
             }
         }

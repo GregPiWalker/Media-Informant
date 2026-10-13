@@ -720,7 +720,7 @@ function grok_choose_season(string $showTitle, string $folder, ?int $parsedSeaso
 function grok_apply_choice(array $item, int $tmdbId): array
 {
     $meta = cache_read_title($tmdbId);
-    if ($meta === null) {
+    if ($meta === null || trim((string) ($meta['overview'] ?? '')) === '') {
         $mediaType = (string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie';
         foreach (grok_compact_candidates($item['tmdb_candidates'] ?? []) as $cand) {
             if ((int) ($cand['id'] ?? 0) === $tmdbId) {
@@ -731,8 +731,9 @@ function grok_apply_choice(array $item, int $tmdbId): array
                 break;
             }
         }
-        $meta = tmdb_fetch_details($tmdbId, $mediaType);
-        if ($meta !== null) {
+        $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+        if ($fetched !== null) {
+            $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
             cache_write_title($tmdbId, $meta);
         }
         usleep(TMDB_REQUEST_SLEEP_US);
