@@ -332,7 +332,7 @@ render_header(['section' => 'video']);
         <a class="group-ep-row" href="<?= h(app_href('video/' . $href)) ?>">
           <?= catalog_record_thumb_html($first, 'sm', $label) ?>
           <span class="group-ep-text">
-            <span class="group-ep-title"><?= h($label) ?></span>
+            <span class="group-ep-title"><?= catalog_episode_num_html($first->listEpisodeNumber(), $group->kind === 'show') ?><span><?= h($label) ?></span></span>
             <span class="group-ep-meta"><?= h(implode(' · ', $metaBits)) ?></span>
           </span>
         </a>
@@ -360,7 +360,7 @@ render_header(['section' => 'video']);
         <a class="group-ep-row" href="<?= h(app_href('video/' . $href)) ?>">
           <?= catalog_record_thumb_html($part, 'sm', $label) ?>
           <span class="group-ep-text">
-            <span class="group-ep-title"><?= h($label) ?></span>
+            <span class="group-ep-title"><?= catalog_episode_num_html($part->listEpisodeNumber(), $group->kind === 'show') ?><span><?= h($label) ?></span></span>
             <span class="group-ep-meta"><?= h(implode(' · ', $metaBits)) ?></span>
           </span>
         </a>

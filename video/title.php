@@ -219,6 +219,10 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     }
 }
 
+if ($item !== null) {
+    $item = library_heal_filename_year($id, $item);
+}
+
 $meta = null;
 if ($item !== null && !empty($item['tmdb_id'])) {
     $meta = tmdb_ensure_title_details((int) $item['tmdb_id'], tmdb_item_media_type($item));

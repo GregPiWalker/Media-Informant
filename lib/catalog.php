@@ -257,7 +257,19 @@ final class CatalogRecord
         public string $matchSource = 'none',
         public bool $grouped = false,
         public bool $sourceAbsent = false,
+        public ?int $displayEpisode = null,
     ) {
+    }
+
+    public function listEpisodeNumber(): ?int
+    {
+        if ($this->displayEpisode !== null && $this->displayEpisode > 0) {
+            return $this->displayEpisode;
+        }
+        if ($this->episode !== null && $this->episode > 0) {
+            return $this->episode;
+        }
+        return null;
     }
 
     public static function fromVideo(array $item): self
@@ -317,14 +329,44 @@ final class CatalogRecord
             }
         }
         $groupKey = $grouped ? ($kind . ':' . lower($seriesTitle)) : $id;
-        if ($partLabel === '' && $episodeTitle !== '') {
-            $fn = pathinfo((string) ($item['filename'] ?? ''), PATHINFO_FILENAME);
-            if ($fn !== '' && lower($fn) !== lower($episodeTitle)) {
+        $listEpisode = $episode;
+        $listTitle = trim($episodeTitle);
+        if ($grouped && $kind === 'show') {
+            if (function_exists('episode_display_identity')) {
+                $identity = episode_display_identity($item);
+                if ($listEpisode === null && isset($identity['episode']) && $identity['episode'] !== null) {
+                    $listEpisode = (int) $identity['episode'];
+                }
+                $identityTitle = trim((string) ($identity['title'] ?? ''));
+                if ($listTitle === '' || strcasecmp($listTitle, $seriesTitle) === 0) {
+                    $listTitle = $identityTitle;
+                }
+            }
+            $listTitle = catalog_strip_episode_index($listTitle, $listEpisode);
+            if ($listTitle !== '' && strcasecmp($listTitle, $seriesTitle) === 0) {
+                $listTitle = '';
+            }
+            if ($listTitle === '' && $filename !== '') {
+                $fromFile = catalog_strip_episode_index(pathinfo($filename, PATHINFO_FILENAME), $listEpisode);
+                if ($fromFile !== '' && strcasecmp($fromFile, $seriesTitle) !== 0) {
+                    $listTitle = $fromFile;
+                }
+            }
+        }
+        if ($partLabel === '' && $episodeTitle !== '' && $filename !== '') {
+            $fn = pathinfo($filename, PATHINFO_FILENAME);
+            $probe = $listEpisode;
+            $fnCompare = $grouped && $kind === 'show'
+                ? catalog_strip_episode_index($fn, $probe)
+                : $fn;
+            if ($fn !== '' && lower($fnCompare) !== '' && lower($fnCompare) !== lower($episodeTitle) && lower($fnCompare) !== lower($listTitle)) {
                 $partLabel = $fn;
             }
         }
         $episodeLabel = '';
-        if ($grouped) {
+        if ($grouped && $kind === 'show') {
+            $episodeLabel = $listTitle;
+        } elseif ($grouped) {
             $epName = trim($episodeTitle);
             if ($epName !== '' && strcasecmp($epName, $seriesTitle) === 0) {
                 $epName = '';
@@ -338,9 +380,14 @@ final class CatalogRecord
                 $episodeLabel = $fn !== '' ? pathinfo($fn, PATHINFO_FILENAME) : $title;
             }
         }
-        $episodeGroupKey = $grouped
-            ? sprintf('%02d|%s', $season ?? 0, lower($episodeTitle !== '' ? $episodeTitle : ($episode !== null ? (string) $episode : $id)))
-            : $id;
+        if ($grouped && $kind === 'show') {
+            $keyName = $listTitle !== '' ? $listTitle : trim($episodeTitle);
+            $episodeGroupKey = sprintf('%02d|%s', $season ?? 0, lower($keyName !== '' ? $keyName : ($episode !== null ? (string) $episode : $id)));
+        } else {
+            $episodeGroupKey = $grouped
+                ? sprintf('%02d|%s', $season ?? 0, lower($episodeTitle !== '' ? $episodeTitle : ($episode !== null ? (string) $episode : $id)))
+                : $id;
+        }
         $cellTitle = $grouped ? $episodeLabel : $title;
         $category = (string) ($item['category'] ?? '');
         if ($category === '' && function_exists('settings_category_for_root')) {
@@ -351,7 +398,7 @@ final class CatalogRecord
             $id,
             'title.php?id=' . $id,
             $title,
-            lower($seriesTitle . ' ' . $title . ' ' . $episodeLabel . ' ' . $episodeTitle . ' ' . $partLabel . ' ' . $yearLabel . ' ' . $genreLabel . ' ' . $matchLabel . ' ' . (string) ($item['filename'] ?? '')),
+            lower($seriesTitle . ' ' . $title . ' ' . $episodeLabel . ' ' . ($listEpisode ?? '') . ' ' . $episodeTitle . ' ' . $partLabel . ' ' . $yearLabel . ' ' . $genreLabel . ' ' . $matchLabel . ' ' . (string) ($item['filename'] ?? '')),
             poster_url($posterPath),
             [
                 'title' => $cellTitle,
@@ -381,6 +428,7 @@ final class CatalogRecord
             $matchSource,
             $grouped,
             function_exists('source_is_absent_for_item') && source_is_absent_for_item($item),
+            $grouped && $kind === 'show' ? $listEpisode : null,
         );
     }
 
@@ -586,12 +634,25 @@ final class CatalogGroup
                 return catalog_part_number($a->partLabel) <=> catalog_part_number($b->partLabel);
             });
             $first = $parts[0];
+            $label = $first->episodeLabel;
+            if ($label === '' && $first->listEpisodeNumber() === null) {
+                $label = $first->title;
+            }
             $out[] = [
                 'id' => $this->id . ':ep:' . rawurlencode($key),
-                'label' => $first->episodeLabel !== '' ? $first->episodeLabel : $first->title,
+                'label' => $label,
                 'parts' => $parts,
             ];
         }
+        usort($out, static function (array $a, array $b): int {
+            $ra = $a['parts'][0];
+            $rb = $b['parts'][0];
+            $sa = $ra->season ?? 999;
+            $sb = $rb->season ?? 999;
+            $ea = $ra->listEpisodeNumber() ?? 100000;
+            $eb = $rb->listEpisodeNumber() ?? 100000;
+            return [$sa, $ea, lower($a['label']), $ra->id] <=> [$sb, $eb, lower($b['label']), $rb->id];
+        });
         return $out;
     }
 
@@ -666,6 +727,45 @@ function catalog_record_thumb_html(CatalogRecord $record, string $size, string $
         return '<span class="' . $class . '"><img src="' . h($record->poster) . '" alt="" loading="lazy" decoding="async"></span>';
     }
     return '<span class="' . $class . ' poster-fallback" aria-hidden="true"><span>' . h(initial($initial)) . '</span></span>';
+}
+
+/**
+ * Drop a leading episode index from a list title.
+ * "11_Colonial Day", "11 - Colonial Day", "11 Colonial Day", and "03 Title"
+ * become the name only. The number is returned through $episode when it was empty.
+ */
+function catalog_strip_episode_index(string $title, ?int &$episode): string
+{
+    $title = trim($title);
+    if ($title === '') {
+        return '';
+    }
+    $normalized = str_replace(['_', '.'], ' ', $title);
+    $normalized = preg_replace('/\s*-\s*/', ' ', $normalized) ?? $normalized;
+    $normalized = trim((string) (preg_replace('/\s+/', ' ', $normalized) ?? $normalized));
+    if (!preg_match('/^(\d{1,3})(?:\s+(.*))?$/', $normalized, $m)) {
+        return $title;
+    }
+    $n = (int) $m[1];
+    if ($n < 1 || $n > 200) {
+        return $title;
+    }
+    if ($episode !== null && $episode !== $n) {
+        return $title;
+    }
+    if ($episode === null) {
+        $episode = $n;
+    }
+    return trim((string) ($m[2] ?? ''));
+}
+
+function catalog_episode_num_html(?int $episode, bool $reserve = true): string
+{
+    $text = ($episode !== null && $episode > 0) ? (string) $episode : '';
+    if ($text === '' && !$reserve) {
+        return '';
+    }
+    return '<span class="ep-num">' . h($text) . '</span>';
 }
 
 function catalog_part_number(string $label): int

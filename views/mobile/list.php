@@ -305,6 +305,7 @@ $view = $prefs->view;
               <td data-col="poster"><?= catalog_thumb_button($first, 'sm', $cluster['label'], count($parts) . ' parts') ?></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
+                  <?= catalog_episode_num_html($first->listEpisodeNumber()) ?>
                   <button type="button" class="expand-btn" data-expand="<?= h($cluster['id']) ?>" aria-expanded="false" aria-label="Show parts">
                     <span class="expand-caret" aria-hidden="true"></span>
                   </button>
@@ -339,7 +340,7 @@ $view = $prefs->view;
                 <?= catalog_thumb_button($first, 'sm', $cluster['label']) ?>
               </td>
               <td data-col="title">
-                <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . $epHref)) ?>"><?= h($cluster['label']) ?></a>
+                <a class="catalog-row-link" href="<?= h(app_href('video/' . $epHref)) ?>"><?= catalog_episode_num_html($first->listEpisodeNumber()) ?><span class="catalog-row-title"><?= h($cluster['label']) ?></span></a>
               </td>
               <td data-col="year"><?= h($first->cells['year']) ?></td>
               <td data-col="status"><?= h($first->cells['status']) ?></td>

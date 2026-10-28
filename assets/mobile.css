@@ -903,6 +903,23 @@ button.col-option,
   font-weight: 650;
 }
 
+.ep-num {
+  flex: 0 0 2.4rem;
+  width: 2.4rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  color: var(--dim-fg);
+}
+
+.catalog-episode .catalog-row-link {
+  gap: 0.55rem;
+}
+
+.catalog-episode .catalog-group-cell {
+  gap: 0.35rem;
+}
+
 .catalog-thumb {
   display: block;
   overflow: hidden;
@@ -1485,7 +1502,15 @@ button.col-option,
 }
 
 .group-ep-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
   font-weight: 650;
+  min-width: 0;
+}
+
+.group-ep-title > span:last-child {
+  min-width: 0;
 }
 
 .group-ep-meta {

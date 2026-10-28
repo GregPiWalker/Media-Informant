@@ -152,6 +152,47 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
     }
 }
 
+if ($group !== null) {
+    $pending = [];
+    foreach ($group->members as $member) {
+        if ($member->id !== '' && $member->status !== 'matched') {
+            $pending[$member->id] = true;
+        }
+    }
+    if ($pending !== []) {
+        $rows = [];
+        foreach ($library['items'] as $libItem) {
+            if (!is_array($libItem)) {
+                continue;
+            }
+            $libId = (string) ($libItem['id'] ?? '');
+            if ($libId !== '' && isset($pending[$libId])) {
+                $rows[$libId] = $libItem;
+                if (count($rows) === count($pending)) {
+                    break;
+                }
+            }
+        }
+        foreach ($group->members as $index => $member) {
+            if (!isset($rows[$member->id])) {
+                continue;
+            }
+            $before = $rows[$member->id];
+            $healed = library_heal_filename_year($member->id, $before);
+            $beforeYear = isset($before['year']) && is_numeric($before['year']) ? (int) $before['year'] : null;
+            $afterYear = isset($healed['year']) && is_numeric($healed['year']) ? (int) $healed['year'] : null;
+            if ($beforeYear === $afterYear) {
+                continue;
+            }
+            $fresh = CatalogRecord::fromVideo($healed);
+            $group->members[$index] = $fresh;
+            if ($group->head->id === $member->id) {
+                $group->head = $fresh;
+            }
+        }
+    }
+}
+
 $meta = null;
 if ($group !== null && $group->head->id !== '') {
     $headItem = catalog_store_find('video', $group->head->id);

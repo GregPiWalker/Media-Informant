@@ -520,6 +520,7 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
         $item = library_set_auto_title($item, (string) ($item['title'] ?? 'Untitled'));
         $item['genres'] = [];
         unset($item['vote_average'], $item['vote_count'], $item['runtime']);
+        $item['year'] = library_filename_year($item);
         return $item;
     }
     $previousId = (int) ($item['tmdb_id'] ?? 0);
@@ -563,6 +564,31 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
     return $item;
 }
 
+function library_filename_year(array $item): ?int
+{
+    if (!function_exists('scan_parse_path')) {
+        require_once __DIR__ . '/folders.php';
+    }
+    $path = str_replace('\\', '/', (string) ($item['path'] ?? ''));
+    if ($path === '') {
+        $path = (string) ($item['filename'] ?? '');
+    }
+    if ($path === '' || !function_exists('scan_parse_path')) {
+        return null;
+    }
+    $parsed = scan_parse_path(
+        (string) ($item['root'] ?? ''),
+        $path,
+        (string) ($item['category'] ?? '')
+    );
+    $year = $parsed['year'] ?? null;
+    if (!is_numeric($year)) {
+        return null;
+    }
+    $year = (int) $year;
+    return $year >= 1870 && $year <= 2100 ? $year : null;
+}
+
 function library_clear_match(array $item): array
 {
     $item['tmdb_id'] = null;
@@ -572,9 +598,43 @@ function library_clear_match(array $item): array
     $item['tmdb_candidates'] = [];
     unset($item['overview'], $item['vote_average'], $item['vote_count'], $item['runtime']);
     $item['genres'] = [];
+    $item['year'] = library_filename_year($item);
     if (!library_has_custom_title($item)) {
         $item['display_title'] = (string) ($item['title'] ?? 'Untitled');
         unset($item['title_source']);
     }
+    return $item;
+}
+
+/**
+ * An item cleared before the year was restored stays unidentified, so Clear Match
+ * is no longer offered. Opening it again writes the filename year when it differs.
+ */
+function library_heal_filename_year(string $id, array $item): array
+{
+    if ($id === '' || !empty($item['tmdb_id']) || library_item_status($item) === 'matched') {
+        return $item;
+    }
+    $parsed = library_filename_year($item);
+    $stored = isset($item['year']) && is_numeric($item['year']) ? (int) $item['year'] : null;
+    if ($stored === $parsed) {
+        return $item;
+    }
+    $updated = cache_update_item($id, static function (array $row): ?array {
+        if (!empty($row['tmdb_id']) || library_item_status($row) === 'matched') {
+            return null;
+        }
+        $fresh = library_filename_year($row);
+        $current = isset($row['year']) && is_numeric($row['year']) ? (int) $row['year'] : null;
+        if ($current === $fresh) {
+            return null;
+        }
+        $row['year'] = $fresh;
+        return $row;
+    });
+    if (is_array($updated)) {
+        return $updated;
+    }
+    $item['year'] = $parsed;
     return $item;
 }
