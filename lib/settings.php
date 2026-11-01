@@ -54,6 +54,7 @@ function settings_defaults(): array
         'tmdb_language' => TMDB_LANGUAGE,
         'xai_api_key' => XAI_API_KEY,
         'show_hidden' => false,
+        'catalog_mode' => 'both',
     ];
 }
 
@@ -312,7 +313,57 @@ function settings_normalize(array $data): array
         'tmdb_language' => $lang,
         'xai_api_key' => trim((string) ($data['xai_api_key'] ?? $defaults['xai_api_key'])),
         'show_hidden' => settings_bool($data['show_hidden'] ?? $defaults['show_hidden']),
+        'catalog_mode' => settings_catalog_mode_value($data['catalog_mode'] ?? $defaults['catalog_mode']),
     ];
+}
+
+function settings_catalog_mode_value(mixed $value): string
+{
+    $mode = strtolower(trim((string) $value));
+    return $mode === 'music' || $mode === 'video' ? $mode : 'both';
+}
+
+function settings_catalog_mode(): string
+{
+    return settings_catalog_mode_value(settings_get()['catalog_mode'] ?? 'both');
+}
+
+function settings_catalog_enabled(string $catalog): bool
+{
+    $mode = settings_catalog_mode();
+    if ($mode === 'both') {
+        return $catalog === 'music' || $catalog === 'video';
+    }
+    return $mode === $catalog;
+}
+
+/**
+ * A library page for the catalog that is switched off sends the browser to
+ * the one that is on. Scan and log endpoints stay available.
+ */
+function settings_enforce_catalog(): void
+{
+    if (PHP_SAPI === 'cli' || settings_catalog_mode() === 'both') {
+        return;
+    }
+    $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    $base = basename($script);
+    $pages = ['index.php', 'scan.php', 'group.php', 'title.php', 'match.php', 'resolve.php'];
+    if (!in_array($base, $pages, true)) {
+        return;
+    }
+    $mode = settings_catalog_mode();
+    $blocked = '';
+    if ($mode === 'video' && str_contains($script, '/music/')) {
+        $blocked = 'video/index.php';
+    } elseif ($mode === 'music' && str_contains($script, '/video/')) {
+        $blocked = 'music/index.php';
+    }
+    if ($blocked === '' || headers_sent()) {
+        return;
+    }
+    header('Location: ' . app_href($blocked), true, 302);
+    exit;
 }
 
 function settings_bool(mixed $value): bool

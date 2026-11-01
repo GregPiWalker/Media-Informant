@@ -2,8 +2,8 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/lib/config.php';
-require dirname(__DIR__) . '/lib/cache.php';
-require dirname(__DIR__) . '/lib/settings.php';
+require_once dirname(__DIR__) . '/lib/cache.php';
+require_once dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/scanner.php';
 
 cache_init();
@@ -30,6 +30,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         'tmdb_language' => $_POST['tmdb_language'] ?? TMDB_LANGUAGE,
         'xai_api_key' => $_POST['xai_api_key'] ?? '',
         'show_hidden' => isset($_POST['show_hidden']),
+        'catalog_mode' => $_POST['catalog_mode'] ?? ($current['catalog_mode'] ?? 'both'),
     ];
     if (!is_array($payload['video_root_categories'])) {
         $payload['video_root_categories'] = [];

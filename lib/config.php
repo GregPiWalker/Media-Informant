@@ -69,6 +69,8 @@ define('MIGRATE_KEY', '');
 require_once __DIR__ . '/view.php';
 require_once __DIR__ . '/log.php';
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/settings.php';
+settings_enforce_catalog();
 define('VIDEO_EXTENSIONS', ['mkv', 'mp4', 'avi', 'm4v', 'mov', 'wmv', 'ts', 'm2ts']);
 define('AUDIO_EXTENSIONS', ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wma', 'wav', 'aiff']);
 
@@ -210,7 +212,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=58">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=59">
 </head>
 <body>
 <?php
@@ -220,6 +222,9 @@ function render_header(array $opts = []): void
 {
     $showSearch = !empty($opts['search']);
     $showBranches = array_key_exists('branches', $opts) ? !empty($opts['branches']) : true;
+    if ($showBranches && function_exists('settings_catalog_mode') && settings_catalog_mode() !== 'both') {
+        $showBranches = false;
+    }
     $section = (string) ($opts['section'] ?? 'home');
     $logoLightSm = app_href('images/' . rawurlencode('informant logo - light theme_160.png'));
     $logoDarkSm = app_href('images/' . rawurlencode('informant logo - dark theme_160.png'));

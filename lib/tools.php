@@ -64,8 +64,12 @@ function tools_sources(): array
             ];
         }
     };
-    $add('v', settings_video_roots(), 'video');
-    $add('m', settings_music_roots(), 'music');
+    if (!function_exists('settings_catalog_enabled') || settings_catalog_enabled('video')) {
+        $add('v', settings_video_roots(), 'video');
+    }
+    if (!function_exists('settings_catalog_enabled') || settings_catalog_enabled('music')) {
+        $add('m', settings_music_roots(), 'music');
+    }
     return $out;
 }
 

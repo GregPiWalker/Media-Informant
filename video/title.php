@@ -2,8 +2,8 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/lib/config.php';
-require dirname(__DIR__) . '/lib/cache.php';
-require dirname(__DIR__) . '/lib/settings.php';
+require_once dirname(__DIR__) . '/lib/cache.php';
+require_once dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/folders.php';
 require dirname(__DIR__) . '/lib/tmdb.php';
 

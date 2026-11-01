@@ -204,6 +204,17 @@ if ($configTab !== 'music' && $configTab !== 'general') {
 
     <section class="form-section">
       <h2>Catalog</h2>
+      <p class="hint">Choose which libraries are shown. Both keeps the Video and Music tabs. Music or Video hides that tab bar and shows only the selected library.</p>
+      <?php $catalogMode = function_exists('settings_catalog_mode_value') ? settings_catalog_mode_value($settings['catalog_mode'] ?? 'both') : 'both'; ?>
+      <div class="catalog-mode-slider" role="radiogroup" aria-label="Libraries">
+        <span class="catalog-mode-thumb" aria-hidden="true"></span>
+        <?php foreach (['music' => 'Music', 'video' => 'Video', 'both' => 'Both'] as $modeValue => $modeLabel): ?>
+        <label class="catalog-mode-opt">
+          <input type="radio" name="catalog_mode" value="<?= h($modeValue) ?>"<?= $catalogMode === $modeValue ? ' checked' : '' ?>>
+          <span><?= h($modeLabel) ?></span>
+        </label>
+        <?php endforeach; ?>
+      </div>
       <p class="hint">Hidden files stay in the library and keep their match data. They are omitted from all catalogs until you turn this on.</p>
       <label class="grok-toggle">
         <input type="checkbox" name="show_hidden" value="1"<?= !empty($settings['show_hidden']) ? ' checked' : '' ?>>
