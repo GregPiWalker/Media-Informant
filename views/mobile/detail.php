@@ -78,6 +78,12 @@ if ($found) {
     if (isset($item['season']) && $item['season'] !== '' && $item['season'] !== null) {
         $seasonNum = (int) $item['season'];
     }
+    if (function_exists('season_number_from_path')) {
+        $folderSeason = season_number_from_path((string) ($item['path'] ?? ''));
+        if ($folderSeason !== null) {
+            $seasonNum = $folderSeason;
+        }
+    }
     if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
         $episodeNum = (int) $item['episode'];
     }
@@ -101,7 +107,9 @@ if ($isEpisode) {
     $showHeading .= ' - ' . ($year ? (string) $year : 'Year unknown');
 }
 $episodeCodeBits = [];
-if ($seasonNum !== null) {
+if ($seasonNum === 0) {
+    $episodeCodeBits[] = 'Special Features';
+} elseif ($seasonNum !== null) {
     $episodeCodeBits[] = 'Season ' . $seasonNum;
 }
 if ($episodeNum !== null) {

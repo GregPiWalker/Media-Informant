@@ -1166,6 +1166,23 @@ function scan_part_backfill(array &$job, string $key, array $source): void
     }
 }
 
+function scan_cached_title(array $item, array $source, int $tmdbId): ?array
+{
+    if ($tmdbId < 1) {
+        return null;
+    }
+    $mediaType = function_exists('cache_title_media_for_match')
+        ? cache_title_media_for_match($item, $source)
+        : (((string) ($item['kind'] ?? '') === 'show' || (string) ($source['kind'] ?? '') === 'show') ? 'tv' : 'movie');
+    if (function_exists('tmdb_load_typed_title')) {
+        return tmdb_load_typed_title($tmdbId, $mediaType, false);
+    }
+    if (function_exists('cache_read_title_for')) {
+        return cache_read_title_for($tmdbId, $mediaType);
+    }
+    return function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+}
+
 function scan_tv_apply_show(array &$job, array $item, array $cached): array
 {
     $tmdbId = (int) ($cached['tmdb_id'] ?? 0);
@@ -1186,7 +1203,10 @@ function scan_tv_apply_show(array &$job, array $item, array $cached): array
         $item['year'] = (int) $cached['year'];
     }
     $item['genres'] = cache_string_list($cached['genres'] ?? []);
-    $showMeta = function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+    $item['media_type'] = 'tv';
+    $showMeta = function_exists('tmdb_load_typed_title')
+        ? tmdb_load_typed_title($tmdbId, 'tv', false)
+        : (function_exists('cache_read_title_for') ? cache_read_title_for($tmdbId, 'tv') : (function_exists('cache_read_title') ? cache_read_title($tmdbId) : null));
     if (is_array($showMeta)) {
         $fromShow = trim((string) ($showMeta['overview'] ?? ''));
         if ($fromShow !== '') {
@@ -1255,9 +1275,11 @@ function scan_tv_backfill_show(array &$job, string $folder, ?int $tmdbId): void
         return;
     }
     if ($tmdbId !== null && $tmdbId > 0) {
-        $meta = function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+        $meta = function_exists('tmdb_load_typed_title')
+            ? tmdb_load_typed_title($tmdbId, 'tv', true)
+            : (function_exists('cache_read_title_for') ? cache_read_title_for($tmdbId, 'tv') : (function_exists('cache_read_title') ? cache_read_title($tmdbId) : null));
         if (!is_array($meta)) {
-            $meta = ['tmdb_id' => $tmdbId, 'title' => '', 'year' => null, 'poster_path' => null, 'genres' => []];
+            $meta = ['tmdb_id' => $tmdbId, 'title' => '', 'year' => null, 'poster_path' => null, 'genres' => [], 'media_type' => 'tv'];
         }
         scan_tv_store_show($job, $folder, $meta);
         $job['tv_shows'][$folder]['via'] = 'grok';
@@ -1733,7 +1755,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
 
     if ($source && !empty($source['tmdb_id'])) {
         $tmdbId = (int) $source['tmdb_id'];
-        $meta = cache_read_title($tmdbId);
+        $meta = scan_cached_title($item, $source, $tmdbId);
         if ($meta === null && ($source['status'] ?? '') === 'matched') {
             $meta = [
                 'tmdb_id' => $tmdbId,
@@ -1763,6 +1785,9 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             }
             if (function_exists('tmdb_copy_runtime')) {
                 $item = tmdb_copy_runtime($item, $meta);
+            }
+            if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
+                $item['media_type'] = $meta['media_type'];
             }
             $item['match_source'] = (($source['match_source'] ?? '') === 'grok') ? 'grok' : 'direct';
             if (function_exists('tmdb_enrich_item_episode')) {
@@ -1932,12 +1957,52 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
 
         if (count($usable) === 1) {
             $tmdbId = (int) $usable[0]['id'];
-            $meta = cache_read_title($tmdbId);
+            $mediaType = (string) ($usable[0]['media_type'] ?? '');
+            if ($mediaType !== 'tv' && $mediaType !== 'movie') {
+                $mediaType = (($item['kind'] ?? '') === 'show') ? 'tv' : 'movie';
+            }
+            $meta = function_exists('cache_read_title_for')
+                ? cache_read_title_for($tmdbId, $mediaType)
+                : cache_read_title($tmdbId);
+            $cached = is_array($meta) ? $meta : (function_exists('cache_read_title') ? cache_read_title($tmdbId) : null);
+            $expected = [
+                'media_type' => $mediaType,
+                'title' => (string) ($usable[0]['title'] ?? ''),
+                'year' => $usable[0]['year'] ?? null,
+            ];
+            $cacheReason = 'hit';
+            if (!is_array($meta)) {
+                $cacheReason = (is_array($cached) && function_exists('cache_title_blocked') && cache_title_blocked($tmdbId, $mediaType))
+                    ? 'other-type'
+                    : 'miss';
+            } elseif (function_exists('cache_title_conflicts') && cache_title_conflicts($meta, $expected)) {
+                $cacheReason = 'disagrees';
+                $meta = null;
+            }
+            if (function_exists('app_log')) {
+                $cacheMedia = is_array($cached) ? (cache_title_kind($cached) !== '' ? cache_title_kind($cached) : 'none') : 'absent';
+                $cacheYear = is_array($cached) && isset($cached['year']) && is_numeric($cached['year']) ? (string) (int) $cached['year'] : '-';
+                $hitYear = isset($expected['year']) && is_numeric($expected['year']) ? (string) (int) $expected['year'] : '-';
+                app_log(
+                    'tmdb',
+                    'TMDB item ' . $itemNo . ' cache ' . $tmdbId
+                    . ' media=' . $cacheMedia
+                    . ' title="' . (string) (is_array($cached) ? ($cached['title'] ?? '') : '') . '"'
+                    . ' year=' . $cacheYear
+                    . '; hit ' . $mediaType
+                    . ' "' . (string) $expected['title'] . '" ' . $hitYear
+                    . '; ' . $cacheReason . '.'
+                );
+            }
             if ($meta === null) {
-                $mediaType = (string) ($usable[0]['media_type'] ?? (($item['kind'] ?? '') === 'show' ? 'tv' : 'movie'));
-                $meta = tmdb_fetch_details($tmdbId, $mediaType);
-                if ($meta !== null) {
-                    cache_write_title($tmdbId, $meta);
+                $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+                if (is_array($fetched) && (string) ($fetched['media_type'] ?? '') === $mediaType) {
+                    $meta = $fetched;
+                    if (function_exists('cache_write_title_for')) {
+                        cache_write_title_for($tmdbId, $meta, $mediaType);
+                    } else {
+                        cache_write_title($tmdbId, $meta);
+                    }
                 }
                 usleep(TMDB_REQUEST_SLEEP_US);
             }
@@ -1966,6 +2031,17 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 }
                 if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
                     $item['media_type'] = $meta['media_type'];
+                }
+                if (function_exists('app_log')) {
+                    $storedYear = isset($item['year']) && is_numeric($item['year']) ? (string) (int) $item['year'] : '-';
+                    app_log(
+                        'tmdb',
+                        'TMDB item ' . $itemNo . ' stored ' . (int) $meta['tmdb_id']
+                        . ' "' . (string) ($meta['title'] ?? '') . '"'
+                        . ' year=' . $storedYear
+                        . ' media=' . (string) ($item['media_type'] ?? '')
+                        . ' poster=' . (string) ($meta['poster_path'] ?? '')
+                    );
                 }
                 $item['match_source'] = 'tmdb';
                 if (function_exists('tmdb_enrich_item_episode')) {
@@ -2568,7 +2644,7 @@ function library_sync_video_catalog(): array
             $source = $knownMatches[$matchKey] ?? null;
             if ($source && !empty($source['tmdb_id'])) {
                 $tmdbId = (int) $source['tmdb_id'];
-                $meta = cache_read_title($tmdbId);
+                $meta = scan_cached_title($item, $source, $tmdbId);
                 $item['tmdb_id'] = $tmdbId;
                 $item['status'] = 'matched';
                 $item['poster_path'] = (is_array($meta) ? ($meta['poster_path'] ?? null) : null) ?? ($source['poster_path'] ?? null);
@@ -2589,6 +2665,9 @@ function library_sync_video_catalog(): array
                     }
                     if (function_exists('tmdb_copy_runtime')) {
                         $item = tmdb_copy_runtime($item, $meta);
+                    }
+                    if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
+                        $item['media_type'] = $meta['media_type'];
                     }
                 }
                 $item['match_source'] = 'direct';

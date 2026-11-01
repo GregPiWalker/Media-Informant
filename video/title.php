@@ -206,10 +206,17 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     } else {
         $tmdbId = (int) ($updated['tmdb_id'] ?? 0);
         if ($tmdbId > 0) {
-            $titleMeta = cache_read_title($tmdbId) ?? ['tmdb_id' => $tmdbId];
+            $mediaType = tmdb_item_media_type($updated);
+            $titleMeta = (function_exists('cache_read_title_for')
+                ? cache_read_title_for($tmdbId, $mediaType)
+                : cache_read_title($tmdbId)) ?? ['tmdb_id' => $tmdbId, 'media_type' => $mediaType];
             $titleMeta['overview'] = $overview;
             $titleMeta['genres'] = $genres;
-            cache_write_title($tmdbId, $titleMeta);
+            if (function_exists('cache_write_title_for')) {
+                cache_write_title_for($tmdbId, $titleMeta, $mediaType);
+            } else {
+                cache_write_title($tmdbId, $titleMeta);
+            }
         }
         if (function_exists('app_log')) {
             app_log('title', 'Saved edits for “' . $displayTitle . '”.', ['id' => $id, 'genres' => count($genres)]);

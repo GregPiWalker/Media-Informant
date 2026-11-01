@@ -5,6 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require dirname(__DIR__) . '/lib/cache.php';
 require dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/catalog.php';
+require dirname(__DIR__) . '/lib/parser.php';
 
 cache_init();
 $dbError = function_exists('db_last_error') ? db_last_error() : '';

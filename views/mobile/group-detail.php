@@ -67,6 +67,16 @@ if ($found) {
     if (is_array($headItem) && $overview === '' && !empty($headItem['overview'])) {
         $overview = (string) $headItem['overview'];
     }
+    $metaType = is_array($meta) ? (string) ($meta['media_type'] ?? '') : '';
+    $itemType = is_array($headItem) ? (string) ($headItem['media_type'] ?? '') : '';
+    if (!$partEpisode && !$partMovie && $group->kind === 'show' && $metaType === 'tv' && $itemType !== 'tv') {
+        if (!empty($meta['year'])) {
+            $year = (string) (int) $meta['year'];
+        }
+        if (!empty($meta['poster_path']) && is_string($meta['poster_path'])) {
+            $poster = poster_url($meta['poster_path']);
+        }
+    }
     if (function_exists('tmdb_rating_text')) {
         $ratingLabel = tmdb_rating_text(is_array($meta) ? $meta : null, is_array($headItem) ? $headItem : null);
     }
@@ -99,6 +109,7 @@ if ($found) {
     }
 }
 $partCount = $found ? count($group->members) : 0;
+$seasonSummary = ($found && !$partMovie && !$partEpisode) ? catalog_season_structure_summary($group) : null;
 $showHeading = $display;
 if ($partEpisode) {
     $showHeading .= ' - ' . ($year ? (string) $year : 'Year unknown');
@@ -193,6 +204,14 @@ render_header(['section' => 'video']);
         · <?= h($kindLabel) ?>
         <?php if ($partMovie): ?>
         · <?= (int) $partCount ?> <?= $partCount === 1 ? 'part' : 'parts' ?>
+        <?php elseif (is_array($seasonSummary)): ?>
+        · <?= h($seasonSummary['label']) ?>
+        <?php if ($seasonSummary['episodes'] !== null): ?>
+        · <?= (int) $seasonSummary['episodes'] ?> <?= $seasonSummary['episodes'] === 1 ? 'episode' : 'episodes' ?>
+        <?php endif; ?>
+        <?php if ($seasonSummary['episodes'] === null || (int) $seasonSummary['files'] !== (int) $seasonSummary['episodes']): ?>
+        · <?= (int) $seasonSummary['files'] ?> <?= $seasonSummary['files'] === 1 ? 'file' : 'files' ?>
+        <?php endif; ?>
         <?php else: ?>
         · <?= (int) $epCount ?> <?= $epCount === 1 ? 'episode' : 'episodes' ?>
         <?php if ($fileCount !== $epCount): ?>
@@ -326,7 +345,7 @@ render_header(['section' => 'video']);
                 $metaBits[] = $first->cells['status'];
                 if ($season !== null && $season !== $lastSeason) {
                     $lastSeason = $season;
-                    echo '<h3 class="group-ep-season">Season ' . (int) $season . '</h3>';
+                    echo '<h3 class="group-ep-season">' . h(catalog_season_label($season)) . '</h3>';
                 }
                 ?>
         <a class="group-ep-row" href="<?= h(app_href('video/' . $href)) ?>">
@@ -342,7 +361,7 @@ render_header(['section' => 'video']);
             if ($season !== null && $season !== $lastSeason):
                 $lastSeason = $season;
                 ?>
-        <h3 class="group-ep-season">Season <?= (int) $season ?></h3>
+        <h3 class="group-ep-season"><?= h(catalog_season_label($season)) ?></h3>
             <?php endif; ?>
             <?php foreach ($parts as $part):
                 $label = (string) $cluster['label'];

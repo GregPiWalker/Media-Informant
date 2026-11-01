@@ -305,7 +305,7 @@ function search_query_is_season_folder(string $name): bool
     if (function_exists('season_folder_number') && season_folder_number($name) !== null) {
         return true;
     }
-    return (bool) preg_match('/^(?:(?:seasons?|series)\s*\.?\s*\d{1,2}|specials|s\s*\.?\s*\d{1,2})$/i', $name);
+    return (bool) preg_match('/^(?:(?:seasons?|series)[\s._-]*\d{1,2}|specials|s[\s._-]*\d{1,2})$/i', $name);
 }
 
 function search_query_is_episode_code(string $s): bool

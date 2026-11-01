@@ -861,7 +861,9 @@ function tmdb_show_seasons(int $seriesId): array
     if ($seriesId < 1) {
         return [];
     }
-    $meta = function_exists('cache_read_title') ? cache_read_title($seriesId) : null;
+    $meta = function_exists('cache_read_title_for')
+        ? cache_read_title_for($seriesId, 'tv')
+        : (function_exists('cache_read_title') ? cache_read_title($seriesId) : null);
     if (is_array($meta) && !empty($meta['seasons']) && is_array($meta['seasons'])) {
         return tmdb_season_rows($meta['seasons']);
     }
@@ -870,9 +872,46 @@ function tmdb_show_seasons(int $seriesId): array
     $seasons = tmdb_season_rows(is_array($data) ? ($data['seasons'] ?? []) : []);
     if ($seasons !== [] && is_array($meta)) {
         $meta['seasons'] = $seasons;
-        cache_write_title($seriesId, $meta);
+        if (function_exists('cache_write_title_for')) {
+            cache_write_title_for($seriesId, $meta, 'tv');
+        } else {
+            cache_write_title($seriesId, $meta);
+        }
     }
     return $seasons;
+}
+
+/**
+ * Read the title cache for this media type. On a miss, fetch only when asked
+ * or when the legacy file is the other type. Never reuse or overwrite that file.
+ */
+function tmdb_load_typed_title(int $tmdbId, string $mediaType, bool $fetchIfMissing = false): ?array
+{
+    $mediaType = $mediaType === 'tv' ? 'tv' : 'movie';
+    if ($tmdbId < 1) {
+        return null;
+    }
+    if (!function_exists('cache_read_title_for')) {
+        return function_exists('cache_read_title') ? cache_read_title($tmdbId) : null;
+    }
+    $meta = cache_read_title_for($tmdbId, $mediaType);
+    if (is_array($meta)) {
+        return $meta;
+    }
+    $blocked = function_exists('cache_title_blocked') && cache_title_blocked($tmdbId, $mediaType);
+    if ((!$fetchIfMissing && !$blocked) || !tmdb_has_key()) {
+        return null;
+    }
+    if ($blocked && function_exists('app_log')) {
+        app_log('tmdb', 'Title cache ' . $tmdbId . ' is a different media type; requesting ' . $mediaType . ' ' . $tmdbId . '.');
+    }
+    $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+    usleep(TMDB_REQUEST_SLEEP_US);
+    if (!is_array($fetched) || (string) ($fetched['media_type'] ?? '') !== $mediaType) {
+        return null;
+    }
+    cache_write_title_for($tmdbId, $fetched, $mediaType);
+    return $fetched;
 }
 
 function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
@@ -893,12 +932,13 @@ function tmdb_fetch_details(int $tmdbId, string $mediaType = ''): ?array
 
 function tmdb_item_media_type(array $item): string
 {
+    // A show can carry media_type movie when this TMDB number was first cached as a film.
+    if (function_exists('library_item_kind') && library_item_kind($item) === 'show') {
+        return 'tv';
+    }
     $hint = (string) ($item['media_type'] ?? '');
     if ($hint === 'tv' || $hint === 'movie') {
         return $hint;
-    }
-    if (function_exists('library_item_kind') && library_item_kind($item) === 'show') {
-        return 'tv';
     }
     return 'movie';
 }
@@ -1025,17 +1065,24 @@ function tmdb_ensure_title_details(int $tmdbId, string $mediaType = ''): ?array
     if ($tmdbId < 1 || !function_exists('cache_read_title')) {
         return null;
     }
-    $meta = cache_read_title($tmdbId);
+    $want = $mediaType === 'tv' || $mediaType === 'movie' ? $mediaType : '';
+    $meta = $want !== '' && function_exists('cache_read_title_for')
+        ? cache_read_title_for($tmdbId, $want)
+        : cache_read_title($tmdbId);
     $needsRating = !tmdb_has_rating($meta);
     $needsRuntime = !tmdb_has_runtime($meta);
     if ((!$needsRating && !$needsRuntime) || !tmdb_has_key()) {
         return is_array($meta) ? $meta : null;
     }
-    $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+    $fetched = tmdb_fetch_details($tmdbId, $want !== '' ? $want : $mediaType);
     if (!is_array($fetched)) {
         return is_array($meta) ? $meta : null;
     }
-    if (!is_array($meta)) {
+    $got = (string) ($fetched['media_type'] ?? '');
+    if ($want !== '' && $got !== '' && $got !== $want) {
+        return is_array($meta) ? $meta : null;
+    }
+    if (!is_array($meta) || (function_exists('cache_title_conflicts') && cache_title_conflicts($meta, $fetched))) {
         $meta = $fetched;
     } else {
         if ($needsRating && tmdb_has_rating($fetched)) {
@@ -1046,7 +1093,12 @@ function tmdb_ensure_title_details(int $tmdbId, string $mediaType = ''): ?array
             $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
         }
     }
-    cache_write_title($tmdbId, $meta);
+    $storeAs = $want !== '' ? $want : ($got === 'tv' || $got === 'movie' ? $got : 'movie');
+    if (function_exists('cache_write_title_for')) {
+        cache_write_title_for($tmdbId, $meta, $storeAs);
+    } else {
+        cache_write_title($tmdbId, $meta);
+    }
     return $meta;
 }
 

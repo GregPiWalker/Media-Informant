@@ -84,13 +84,13 @@ final class ParseContext
             }
             $seg = new PathSegment($part);
             $ctx->segments[] = $seg;
-            if ($seg->isFacet) {
-                $ctx->facets[] = $seg;
-                continue;
-            }
             if ($seg->isSeason) {
                 $ctx->seasonFolder = $seg;
                 $seenSeason = true;
+                continue;
+            }
+            if ($seg->isFacet) {
+                $ctx->facets[] = $seg;
                 continue;
             }
             if (is_generic_folder($part)) {
@@ -216,7 +216,7 @@ function parse_show_result(ParseContext $ctx): ?ParseResult
     }
     $episodeTitle = '';
     $epFolder = $ctx->episodeFolder();
-    if ($epFolder !== null) {
+    if ($epFolder !== null && season_folder_number($epFolder->raw) === null) {
         $epTokens = parse_name($epFolder->raw);
         $episodeTitle = $epTokens['title'] !== '' ? $epTokens['title'] : $epFolder->raw;
     }
@@ -230,7 +230,11 @@ function parse_show_result(ParseContext $ctx): ?ParseResult
             $part = $cleaned;
         }
     }
-    $season = $file['season'] ?? ($ctx->seasonFolder->seasonNumber ?? $showTokens['season']);
+    // A Series or Season directory is the season. A 1x01-style code in the
+    // filename is only the episode when that directory is present.
+    $season = $ctx->seasonFolder !== null
+        ? $ctx->seasonFolder->seasonNumber
+        : ($file['season'] ?? $showTokens['season']);
     $episode = $file['episode'] ?? $showTokens['episode'];
     if ($episode === null) {
         $hint = parse_leading_episode($episodeSource);
@@ -388,7 +392,7 @@ final class FileEpisodeStrategy implements MediaParseStrategy
         return new ParseResult(
             $title,
             $file['year'],
-            $file['season'] ?? ($ctx->seasonFolder->seasonNumber ?? null),
+            $ctx->seasonFolder !== null ? $ctx->seasonFolder->seasonNumber : $file['season'],
             $file['episode'],
             'show',
             $ctx->facetMap(),
@@ -410,6 +414,9 @@ function episode_display_identity(array $item): array
 {
     $show = trim((string) ($item['title'] ?? ''));
     $storedTitle = trim((string) ($item['episode_title'] ?? ''));
+    if ($storedTitle !== '' && season_folder_number($storedTitle) !== null) {
+        $storedTitle = '';
+    }
     $storedEpisode = null;
     if (isset($item['episode']) && $item['episode'] !== '' && $item['episode'] !== null) {
         $storedEpisode = (int) $item['episode'];
@@ -686,7 +693,7 @@ final class FilenameFallbackStrategy implements MediaParseStrategy
         return new ParseResult(
             $title,
             $file['year'],
-            $file['season'] ?? ($ctx->seasonFolder->seasonNumber ?? null),
+            $ctx->seasonFolder !== null ? $ctx->seasonFolder->seasonNumber : $file['season'],
             $file['episode'],
             $kind,
             $ctx->facetMap(),
@@ -806,16 +813,47 @@ function season_folder_number(string $name): ?int
     if ($name === '') {
         return null;
     }
+    $name = preg_replace('/\s*[\(\[](?:19|20)\d{2}[\)\]]\s*$/', '', $name) ?? $name;
+    $name = trim($name);
     if (strcasecmp($name, 'specials') === 0) {
         return 0;
     }
-    if (preg_match('/^(?:seasons?|series)\s*\.?\s*(\d{1,2})$/i', $name, $m)) {
+    $normalized = str_replace(['.', '_', '-'], ' ', $name);
+    $normalized = trim((string) (preg_replace('/\s+/', ' ', $normalized) ?? $normalized));
+    if (preg_match('/^(?:seasons?|series)\s+(\d{1,2})$/i', $normalized, $m)) {
         return (int) $m[1];
     }
-    if (preg_match('/^s(?:eason)?\s*\.?\s*(\d{1,2})$/i', $name, $m)) {
+    if (preg_match('/^(?:seasons?|series)(\d{1,2})$/i', $normalized, $m)) {
         return (int) $m[1];
+    }
+    if (preg_match('/^s(?:eason)?\s*(\d{1,2})$/i', $normalized, $m)) {
+        return (int) $m[1];
+    }
+    // "Christmas Special" or "Special Features": the word special, and no season index.
+    $withoutYears = preg_replace('/\b(?:19|20)\d{2}\b/', ' ', $normalized) ?? $normalized;
+    if (preg_match('/\bspecials?\b/i', $withoutYears) && !preg_match('/\b\d{1,2}\b/', $withoutYears)) {
+        return 0;
     }
     return null;
+}
+
+/** Season number from the nearest Series, Season, or special directory in a relative path. */
+function season_number_from_path(string $path): ?int
+{
+    $path = str_replace('\\', '/', $path);
+    $parts = explode('/', $path);
+    array_pop($parts);
+    $found = null;
+    foreach ($parts as $part) {
+        if ($part === '' || $part === '.') {
+            continue;
+        }
+        $n = season_folder_number($part);
+        if ($n !== null) {
+            $found = $n;
+        }
+    }
+    return $found;
 }
 
 function strip_extension(string $filename): string

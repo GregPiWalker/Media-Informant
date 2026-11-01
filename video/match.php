@@ -43,17 +43,19 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         }
     } elseif ($action === 'choose') {
         $tmdbId = (int) ($_POST['tmdb_id'] ?? 0);
-        $meta = $tmdbId > 0 ? cache_read_title($tmdbId) : null;
+        $postedType = (string) ($_POST['media_type'] ?? '');
+        $mediaType = $postedType === 'tv' || $postedType === 'movie'
+            ? $postedType
+            : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
+        $meta = $tmdbId > 0
+            ? (function_exists('cache_read_title_for') ? cache_read_title_for($tmdbId, $mediaType) : cache_read_title($tmdbId))
+            : null;
         $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
         $missingRating = !tmdb_has_rating($meta);
         $missingRuntime = !tmdb_has_runtime($meta);
         if ($tmdbId > 0 && ($missingOverview || $missingRating || $missingRuntime)) {
-            $postedType = (string) ($_POST['media_type'] ?? '');
-            $mediaType = $postedType === 'tv' || $postedType === 'movie'
-                ? $postedType
-                : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
             $fetched = tmdb_fetch_details($tmdbId, $mediaType);
-            if ($fetched !== null) {
+            if (is_array($fetched) && (string) ($fetched['media_type'] ?? '') === $mediaType) {
                 if ($missingOverview) {
                     $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
                 } else {
@@ -64,7 +66,11 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                         $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
                     }
                 }
-                cache_write_title($tmdbId, $meta);
+                if (function_exists('cache_write_title_for')) {
+                    cache_write_title_for($tmdbId, $meta, $mediaType);
+                } else {
+                    cache_write_title($tmdbId, $meta);
+                }
             }
         }
         if ($meta === null) {

@@ -25,7 +25,7 @@ function catalog_source_attr(CatalogRecord $record): string
     return $record->sourceAbsent ? ' data-source-absent="1"' : '';
 }
 
-function catalog_thumb_button(CatalogRecord $record, string $size, string $label, string $extra = ''): string
+function catalog_thumb_button(CatalogRecord $record, string $size, string $label, string $extra = '', string $buttonClass = ''): string
 {
     $bits = [];
     if ($extra !== '') {
@@ -42,7 +42,8 @@ function catalog_thumb_button(CatalogRecord $record, string $size, string $label
         $bits[] = $genres;
     }
     $caption = implode(' · ', $bits);
-    return '<button type="button" class="poster-expand" data-poster-open'
+    $class = 'poster-expand' . ($buttonClass !== '' ? ' ' . $buttonClass : '');
+    return '<button type="button" class="' . $class . '" data-poster-open'
         . ' data-poster-src="' . h((string) ($record->poster ?? '')) . '"'
         . ' data-poster-title="' . h($label) . '"'
         . ' data-poster-caption="' . h($caption) . '"'
@@ -241,9 +242,12 @@ $view = $prefs->view;
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->title;
                 ?>
             <tr class="catalog-part" hidden data-nest="1" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
-              <td data-col="poster"><?= catalog_thumb_button($record, 'sm', $partName) ?></td>
+              <td data-col="poster"></td>
               <td data-col="title">
-                <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>"><?= h($partName) ?></a>
+                <div class="catalog-group-cell">
+                  <?= catalog_thumb_button($record, 'sm', $partName, '', 'catalog-inline-poster') ?>
+                  <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>"><?= h($partName) ?></a>
+                </div>
               </td>
               <td data-col="year"><?= h($record->cells['year']) ?></td>
               <td data-col="status"><?= h($record->cells['status']) ?></td>
@@ -277,6 +281,10 @@ $view = $prefs->view;
                         $seasonSearch[] = $seasonPart->search;
                     }
                 }
+                // These clusters are the Series/Season folders, so there is no separate season row.
+                $directFolders = CatalogGroup::clustersAreSeasonFolders($seasonClusters);
+                $clusterParent = $directFolders ? $group->id : $seasonGroup['id'];
+                if (!$directFolders):
                 ?>
             <tr class="catalog-season" hidden data-nest="1" data-group="<?= h($seasonGroup['id']) ?>" data-parent="<?= h($group->id) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h(implode(' ', $seasonSearch)) ?>"<?= catalog_source_attr($head) ?>>
               <td data-col="poster"></td>
@@ -291,6 +299,7 @@ $view = $prefs->view;
               <td data-col="status"></td>
               <td data-col="genres"></td>
             </tr>
+            <?php endif; ?>
             <?php foreach ($seasonClusters as $cluster):
                 $parts = $cluster['parts'];
                 $first = $parts[0];
@@ -299,12 +308,33 @@ $view = $prefs->view;
                 $epHref = $namedParts
                     ? catalog_episode_parts_href($group->id, $first->episodeGroupKey)
                     : catalog_file_href_from_group($first, $group->id);
+                $clusterSearch = $first->search;
+                if ($directFolders) {
+                    $clusterBits = [];
+                    foreach ($parts as $record) {
+                        $clusterBits[] = $record->search;
+                    }
+                    $clusterSearch = implode(' ', $clusterBits);
+                }
                 ?>
-            <?php if ($multi): ?>
-            <tr class="catalog-episode" hidden data-nest="2" data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
-              <td data-col="poster"><?= catalog_thumb_button($first, 'sm', $cluster['label'], count($parts) . ' parts') ?></td>
+            <?php if ($multi):
+                // A Series/Season folder row is a nest-1 header, like Season. Its parts sit one step deeper.
+                // A real multi-part episode stays nest 2 so its parts can sit at nest 3.
+                $rowNest = $directFolders ? 1 : 2;
+                $partNest = $directFolders ? 2 : 3;
+                ?>
+            <tr class="catalog-episode" hidden data-nest="<?= (int) $rowNest ?>" data-group="<?= h($cluster['id']) ?>" data-parent="<?= h($clusterParent) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($clusterSearch) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
+              <td data-col="poster"></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
+                  <?= catalog_thumb_button($first, 'sm', $cluster['label'], count($parts) . ' parts', 'catalog-inline-poster') ?>
+                  <?php if ($directFolders): ?>
+                  <button type="button" class="expand-btn catalog-tree-btn" data-expand="<?= h($cluster['id']) ?>" aria-expanded="false" aria-label="Show parts">
+                    <span class="expand-caret" aria-hidden="true"></span>
+                    <span class="catalog-row-title"><?= h($cluster['label']) ?></span>
+                    <span class="episode-count"><?= count($parts) ?> parts</span>
+                  </button>
+                  <?php else: ?>
                   <?= catalog_episode_num_html($first->listEpisodeNumber()) ?>
                   <button type="button" class="expand-btn" data-expand="<?= h($cluster['id']) ?>" aria-expanded="false" aria-label="Show parts">
                     <span class="expand-caret" aria-hidden="true"></span>
@@ -313,6 +343,7 @@ $view = $prefs->view;
                     <span class="catalog-row-title"><?= h($cluster['label']) ?></span>
                     <span class="episode-count"><?= count($parts) ?> parts</span>
                   </a>
+                  <?php endif; ?>
                 </div>
               </td>
               <td data-col="year"><?= h($first->cells['year']) ?></td>
@@ -322,25 +353,34 @@ $view = $prefs->view;
             <?php foreach ($parts as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->episodeLabel;
                 ?>
-            <tr class="catalog-part" hidden data-nest="3" data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
-              <td data-col="poster">
-                <?= catalog_thumb_button($record, 'sm', $partName) ?>
-              </td>
+            <tr class="catalog-part" hidden data-nest="<?= (int) $partNest ?>" data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+              <td data-col="poster"></td>
               <td data-col="title">
-                <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . ($namedParts ? $epHref : catalog_file_href_from_group($record, $group->id)))) ?>"><?= h($partName) ?></a>
+                <div class="catalog-group-cell">
+                  <?= catalog_thumb_button($record, 'sm', $partName, '', 'catalog-inline-poster') ?>
+                  <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . ($namedParts ? $epHref : catalog_file_href_from_group($record, $group->id)))) ?>"><?= h($partName) ?></a>
+                </div>
               </td>
               <td data-col="year"><?= h($record->cells['year']) ?></td>
               <td data-col="status"><?= h($record->cells['status']) ?></td>
               <td data-col="genres"><?= h($record->cells['genres']) ?></td>
             </tr>
             <?php endforeach; ?>
-            <?php else: ?>
-            <tr class="catalog-episode" hidden data-nest="2" data-card data-parent="<?= h($seasonGroup['id']) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($first->search) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
-              <td data-col="poster">
-                <?= catalog_thumb_button($first, 'sm', $cluster['label']) ?>
-              </td>
+            <?php else:
+                $rowNest = $directFolders ? 1 : 2;
+                ?>
+            <tr class="catalog-episode" hidden data-nest="<?= (int) $rowNest ?>" data-card data-parent="<?= h($clusterParent) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($clusterSearch) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
+              <td data-col="poster"></td>
               <td data-col="title">
-                <a class="catalog-row-link" href="<?= h(app_href('video/' . $epHref)) ?>"><?= catalog_episode_num_html($first->listEpisodeNumber()) ?><span class="catalog-row-title"><?= h($cluster['label']) ?></span></a>
+                <div class="catalog-group-cell">
+                  <?= catalog_thumb_button($first, 'sm', $cluster['label'], '', 'catalog-inline-poster') ?>
+                  <a class="catalog-row-link" href="<?= h(app_href('video/' . $epHref)) ?>">
+                    <?php if (!$directFolders): ?>
+                    <?= catalog_episode_num_html($first->listEpisodeNumber()) ?>
+                    <?php endif; ?>
+                    <span class="catalog-row-title"><?= h($cluster['label']) ?></span>
+                  </a>
+                </div>
               </td>
               <td data-col="year"><?= h($first->cells['year']) ?></td>
               <td data-col="status"><?= h($first->cells['status']) ?></td>

@@ -126,11 +126,18 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
         $headItem = $group->head->id !== '' ? catalog_store_find('video', $group->head->id) : null;
         if (!$partEpisodeSave && is_array($headItem) && !empty($headItem['tmdb_id'])) {
             $tmdbId = (int) $headItem['tmdb_id'];
-            $titleMeta = cache_read_title($tmdbId) ?? ['tmdb_id' => $tmdbId];
+            $mediaType = tmdb_item_media_type($headItem);
+            $titleMeta = (function_exists('cache_read_title_for')
+                ? cache_read_title_for($tmdbId, $mediaType)
+                : cache_read_title($tmdbId)) ?? ['tmdb_id' => $tmdbId, 'media_type' => $mediaType];
             $titleMeta['overview'] = $overview;
             $titleMeta['genres'] = $genres;
             $titleMeta['title'] = $displayTitle;
-            cache_write_title($tmdbId, $titleMeta);
+            if (function_exists('cache_write_title_for')) {
+                cache_write_title_for($tmdbId, $titleMeta, $mediaType);
+            } else {
+                cache_write_title($tmdbId, $titleMeta);
+            }
         }
         if (function_exists('app_log')) {
             app_log('title', 'Saved group edits for “' . $displayTitle . '” (' . $n . ' files).', [

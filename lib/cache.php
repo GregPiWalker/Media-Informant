@@ -117,6 +117,114 @@ function cache_write_title(int $tmdbId, array $title): bool
     return cache_write_atomic(cache_title_path($tmdbId), $title);
 }
 
+function cache_title_kind(?array $title): string
+{
+    if (!is_array($title)) {
+        return '';
+    }
+    $kind = (string) ($title['media_type'] ?? '');
+    return $kind === 'tv' || $kind === 'movie' ? $kind : '';
+}
+
+function cache_title_typed_path(int $tmdbId, string $mediaType): string
+{
+    $mediaType = $mediaType === 'tv' ? 'tv' : 'movie';
+    return CACHE_DIR . '/titles/' . $mediaType . '-' . $tmdbId . '.json';
+}
+
+/**
+ * Movie and TV ids are separate TMDB namespaces. titles/{id}.json is shared,
+ * so it is used only when its media_type matches. A conflicting file is left
+ * alone and the other type is stored as titles/{tv|movie}-{id}.json.
+ */
+function cache_read_title_for(int $tmdbId, string $mediaType): ?array
+{
+    if ($tmdbId < 1) {
+        return null;
+    }
+    $mediaType = $mediaType === 'tv' ? 'tv' : 'movie';
+    $typed = cache_read_json(cache_title_typed_path($tmdbId, $mediaType));
+    if (is_array($typed)) {
+        $typedKind = cache_title_kind($typed);
+        if ($typedKind === '' || $typedKind === $mediaType) {
+            return $typed;
+        }
+    }
+    $legacy = cache_read_title($tmdbId);
+    if (!is_array($legacy)) {
+        return null;
+    }
+    $kind = cache_title_kind($legacy);
+    if ($kind === '' || $kind === $mediaType) {
+        return $legacy;
+    }
+    return null;
+}
+
+function cache_title_conflicts(?array $existing, array $incoming): bool
+{
+    if (!is_array($existing)) {
+        return false;
+    }
+    $oldKind = cache_title_kind($existing);
+    $newKind = cache_title_kind($incoming);
+    if ($oldKind !== '' && $newKind !== '' && $oldKind !== $newKind) {
+        return true;
+    }
+    $oldTitle = lower(trim((string) ($existing['title'] ?? '')));
+    $newTitle = lower(trim((string) ($incoming['title'] ?? '')));
+    if ($oldTitle !== '' && $newTitle !== '' && $oldTitle !== $newTitle) {
+        return true;
+    }
+    $oldYear = isset($existing['year']) && is_numeric($existing['year']) ? (int) $existing['year'] : 0;
+    $newYear = isset($incoming['year']) && is_numeric($incoming['year']) ? (int) $incoming['year'] : 0;
+    return $oldYear > 0 && $newYear > 0 && $oldYear !== $newYear;
+}
+
+function cache_title_blocked(int $tmdbId, string $mediaType): bool
+{
+    if ($tmdbId < 1) {
+        return false;
+    }
+    $mediaType = $mediaType === 'tv' ? 'tv' : 'movie';
+    if (is_array(cache_read_title_for($tmdbId, $mediaType))) {
+        return false;
+    }
+    $legacy = cache_read_title($tmdbId);
+    $kind = cache_title_kind($legacy);
+    return $kind !== '' && $kind !== $mediaType;
+}
+
+function cache_write_title_for(int $tmdbId, array $title, string $mediaType): bool
+{
+    if ($tmdbId < 1) {
+        return false;
+    }
+    $mediaType = $mediaType === 'tv' ? 'tv' : 'movie';
+    $title['tmdb_id'] = $tmdbId;
+    $title['media_type'] = $mediaType;
+    $legacy = cache_read_title($tmdbId);
+    if (is_array($legacy) && cache_title_conflicts($legacy, $title)) {
+        return cache_write_atomic(cache_title_typed_path($tmdbId, $mediaType), $title);
+    }
+    return cache_write_title($tmdbId, $title);
+}
+
+function cache_title_media_for_match(array $item, ?array $source = null): string
+{
+    if (library_item_kind($item) === 'show') {
+        return 'tv';
+    }
+    if (is_array($source) && library_item_kind($source) === 'show') {
+        return 'tv';
+    }
+    $hint = is_array($source) ? (string) ($source['media_type'] ?? '') : '';
+    if ($hint !== 'tv' && $hint !== 'movie') {
+        $hint = (string) ($item['media_type'] ?? '');
+    }
+    return $hint === 'tv' || $hint === 'movie' ? $hint : 'movie';
+}
+
 function cache_delete_title(int $tmdbId): void
 {
     if ($tmdbId < 1) {
@@ -182,7 +290,8 @@ function cache_prune_orphan_titles(array $items): int
         return 0;
     }
     foreach ($names as $name) {
-        if (!preg_match('/^(\d+)\.json$/', $name, $m)) {
+        if (preg_match('/^(?:tv|movie)-(\d+)\.json$/', $name, $m) !== 1
+            && preg_match('/^(\d+)\.json$/', $name, $m) !== 1) {
             continue;
         }
         $id = (int) $m[1];
@@ -598,6 +707,7 @@ function library_clear_match(array $item): array
     $item['tmdb_candidates'] = [];
     unset($item['overview'], $item['vote_average'], $item['vote_count'], $item['runtime']);
     $item['genres'] = [];
+    unset($item['media_type']);
     $item['year'] = library_filename_year($item);
     if (!library_has_custom_title($item)) {
         $item['display_title'] = (string) ($item['title'] ?? 'Untitled');

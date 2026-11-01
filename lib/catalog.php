@@ -292,6 +292,12 @@ final class CatalogRecord
         $season = isset($item['season']) && $item['season'] !== null && $item['season'] !== ''
             ? (int) $item['season']
             : null;
+        if (function_exists('season_number_from_path')) {
+            $folderSeason = season_number_from_path((string) ($item['path'] ?? ''));
+            if ($folderSeason !== null) {
+                $season = $folderSeason;
+            }
+        }
         $episode = isset($item['episode']) && $item['episode'] !== null && $item['episode'] !== ''
             ? (int) $item['episode']
             : null;
@@ -647,8 +653,8 @@ final class CatalogGroup
         usort($out, static function (array $a, array $b): int {
             $ra = $a['parts'][0];
             $rb = $b['parts'][0];
-            $sa = $ra->season ?? 999;
-            $sb = $rb->season ?? 999;
+            $sa = catalog_season_sort($ra->season);
+            $sb = catalog_season_sort($rb->season);
             $ea = $ra->listEpisodeNumber() ?? 100000;
             $eb = $rb->listEpisodeNumber() ?? 100000;
             return [$sa, $ea, lower($a['label']), $ra->id] <=> [$sb, $eb, lower($b['label']), $rb->id];
@@ -674,12 +680,12 @@ final class CatalogGroup
         usort($order, static function (string $a, string $b) use ($buckets): int {
             $sa = $buckets[$a]['season'];
             $sb = $buckets[$b]['season'];
-            return ($sa ?? 999) <=> ($sb ?? 999);
+            return catalog_season_sort($sa) <=> catalog_season_sort($sb);
         });
         $out = [];
         foreach ($order as $key) {
             $season = $buckets[$key]['season'];
-            $label = $season === null ? 'Episodes' : ($season === 0 ? 'Specials' : ('Season ' . $season));
+            $label = catalog_season_label($season);
             $out[] = [
                 'id' => $this->id . ':s:' . $key,
                 'label' => $label,
@@ -688,6 +694,30 @@ final class CatalogGroup
             ];
         }
         return $out;
+    }
+
+    /**
+     * Every cluster label is a Series or Season folder name, such as "Series 1".
+     *
+     * @param list<array{label?: string}> $clusters
+     */
+    public static function clustersAreSeasonFolders(array $clusters): bool
+    {
+        if ($clusters === []) {
+            return false;
+        }
+        if (!function_exists('season_folder_number')) {
+            require_once __DIR__ . '/parser.php';
+        }
+        foreach ($clusters as $cluster) {
+            $label = trim((string) ($cluster['label'] ?? ''));
+            $number = $label === '' ? null : season_folder_number($label);
+            // Season 0 is the Special Features group. Only a numbered Series/Season folder replaces that row.
+            if ($number === null || $number < 1) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public function search(): string
@@ -757,6 +787,91 @@ function catalog_strip_episode_index(string $title, ?int &$episode): string
         $episode = $n;
     }
     return trim((string) ($m[2] ?? ''));
+}
+
+function catalog_season_label(?int $season): string
+{
+    if ($season === null) {
+        return 'Episodes';
+    }
+    if ($season === 0) {
+        return 'Special Features';
+    }
+    return 'Season ' . $season;
+}
+
+/** Numbered seasons first, then specials, then episodes with no season. */
+function catalog_season_sort(?int $season): int
+{
+    if ($season === null) {
+        return 10000;
+    }
+    if ($season < 1) {
+        return 9000 + $season;
+    }
+    return $season;
+}
+
+/**
+ * Season line for a show detail summary.
+ * Folder-style shows omit the episode count: "4 seasons with special features".
+ * Shows with real episodes keep that count: "14 seasons · 138 episodes".
+ *
+ * @return array{label: string, files: int, episodes: ?int}|null
+ */
+function catalog_season_structure_summary(CatalogGroup $group): ?array
+{
+    if (!$group->isSeries() || $group->isPartMovie() || str_starts_with($group->id, 'parts::')) {
+        return null;
+    }
+    $numbered = 0;
+    $hasSpecials = false;
+    $files = 0;
+    $seasonClusters = 0;
+    $folderSeasons = 0;
+    foreach ($group->seasonGroups() as $seasonGroup) {
+        $season = $seasonGroup['season'];
+        if ($season === null) {
+            continue;
+        }
+        $clusters = $seasonGroup['clusters'];
+        $count = 0;
+        foreach ($clusters as $cluster) {
+            $count += count($cluster['parts']);
+        }
+        if ($count < 1) {
+            continue;
+        }
+        $seasonClusters += count($clusters);
+        if ((int) $season < 1) {
+            $hasSpecials = true;
+            $files += $count;
+            continue;
+        }
+        $numbered++;
+        $files += $count;
+        if (CatalogGroup::clustersAreSeasonFolders($clusters)) {
+            $folderSeasons++;
+        }
+    }
+    if ($numbered < 1 || $files < 1) {
+        return null;
+    }
+    $label = $numbered === 1 ? '1 season' : ((string) $numbered . ' seasons');
+    if ($hasSpecials) {
+        $label .= ' with special features';
+    }
+    // A Series/Season folder is one cluster of many files. That cluster is not an episode.
+    $oneClusterPerGroup = $seasonClusters <= ($numbered + ($hasSpecials ? 1 : 0));
+    $folderStyle = $folderSeasons === $numbered || ($oneClusterPerGroup && $files > $seasonClusters);
+    if ($folderStyle) {
+        return ['label' => $label, 'files' => $files, 'episodes' => null];
+    }
+    return [
+        'label' => $label,
+        'files' => count($group->members),
+        'episodes' => count($group->episodeClusters()),
+    ];
 }
 
 function catalog_episode_num_html(?int $episode, bool $reserve = true): string

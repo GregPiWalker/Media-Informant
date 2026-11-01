@@ -719,23 +719,27 @@ function grok_choose_season(string $showTitle, string $folder, ?int $parsedSeaso
 
 function grok_apply_choice(array $item, int $tmdbId): array
 {
-    $meta = cache_read_title($tmdbId);
+    $mediaType = function_exists('cache_title_media_for_match')
+        ? cache_title_media_for_match($item)
+        : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
+    foreach (grok_compact_candidates($item['tmdb_candidates'] ?? []) as $cand) {
+        if ((int) ($cand['id'] ?? 0) === $tmdbId) {
+            $hint = (string) ($cand['media_type'] ?? '');
+            if ($hint === 'tv' || $hint === 'movie') {
+                $mediaType = $hint;
+            }
+            break;
+        }
+    }
+    $meta = function_exists('cache_read_title_for')
+        ? cache_read_title_for($tmdbId, $mediaType)
+        : cache_read_title($tmdbId);
     $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
     $missingRating = !tmdb_has_rating($meta);
     $missingRuntime = !tmdb_has_runtime($meta);
     if ($missingOverview || $missingRating || $missingRuntime) {
-        $mediaType = (string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie';
-        foreach (grok_compact_candidates($item['tmdb_candidates'] ?? []) as $cand) {
-            if ((int) ($cand['id'] ?? 0) === $tmdbId) {
-                $hint = (string) ($cand['media_type'] ?? '');
-                if ($hint === 'tv' || $hint === 'movie') {
-                    $mediaType = $hint;
-                }
-                break;
-            }
-        }
         $fetched = tmdb_fetch_details($tmdbId, $mediaType);
-        if ($fetched !== null) {
+        if (is_array($fetched) && (string) ($fetched['media_type'] ?? '') === $mediaType) {
             if ($missingOverview) {
                 $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
             } else {
@@ -746,7 +750,11 @@ function grok_apply_choice(array $item, int $tmdbId): array
                     $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
                 }
             }
-            cache_write_title($tmdbId, $meta);
+            if (function_exists('cache_write_title_for')) {
+                cache_write_title_for($tmdbId, $meta, $mediaType);
+            } else {
+                cache_write_title($tmdbId, $meta);
+            }
         }
         usleep(TMDB_REQUEST_SLEEP_US);
     }
