@@ -832,6 +832,131 @@
       });
     }
 
+    var catalogToolbar = catalog.querySelector('.catalog-toolbar');
+    var catalogHeader = document.querySelector('.site-header');
+    if (catalogToolbar && catalogHeader) {
+      var barHide = 0;
+      var barLastY = window.scrollY || window.pageYOffset || 0;
+      var barMode = 'down';
+      var barAnchor = barLastY;
+      var barHideAtTurn = 0;
+      var barArmed = false;
+      var barDownSinceUp = 0;
+      var barTick = false;
+      var barHome = 0;
+      if (barLastY < 0) barLastY = 0;
+
+      function barReadHome() {
+        var docked = catalogToolbar.classList.contains('is-scroll-dock');
+        catalogToolbar.classList.remove('is-scroll-dock');
+        barHome = catalogToolbar.offsetTop;
+        if (docked) catalogToolbar.classList.add('is-scroll-dock');
+      }
+
+      function barHeaderBottom() {
+        return catalogHeader.getBoundingClientRect().bottom;
+      }
+
+      function barScrolledInto(y, headerBottom) {
+        return y - (barHome - headerBottom);
+      }
+
+      function barPaint(y) {
+        var headerBottom = barHeaderBottom();
+        var full = catalogToolbar.offsetHeight;
+        if (full < 1) return;
+        if (barHide < 0) barHide = 0;
+        if (barHide > full) barHide = full;
+        var into = barScrolledInto(y, headerBottom);
+        var shown = full - barHide;
+        catalogToolbar.style.setProperty('--catalog-toolbar-stick', (headerBottom - barHide) + 'px');
+        catalogToolbar.classList.add('is-scroll-dock');
+        catalogToolbar.classList.toggle('is-overlay', shown > 0.5 && into > full);
+        if (barHide >= full - 0.5) catalogToolbar.setAttribute('aria-hidden', 'true');
+        else catalogToolbar.removeAttribute('aria-hidden');
+      }
+
+      function barUpdate() {
+        var y = window.scrollY || window.pageYOffset || 0;
+        if (y < 0) y = 0;
+        var delta = y - barLastY;
+        barLastY = y;
+        var headerBottom = barHeaderBottom();
+        var full = catalogToolbar.offsetHeight;
+        var into = barScrolledInto(y, headerBottom);
+        var offset = window.innerHeight || 0;
+
+        if (full < 1 || y <= 0 || into <= 0) {
+          barHide = 0;
+          barArmed = false;
+          barMode = 'down';
+          barAnchor = y;
+          barHideAtTurn = 0;
+          barDownSinceUp = 0;
+          barPaint(y);
+          return;
+        }
+
+        if (delta > 0) {
+          if (barMode === 'up') {
+            barDownSinceUp += delta;
+            if (barDownSinceUp < 24) {
+              barPaint(y);
+              return;
+            }
+            delta = barDownSinceUp;
+            barDownSinceUp = 0;
+          }
+          barMode = 'down';
+          barHide = Math.min(full, barHide + delta);
+          barAnchor = y;
+          barHideAtTurn = barHide;
+          if (barHide >= full - 0.5 && into >= full - 0.5) barArmed = true;
+          closeSortPanel();
+        } else if (delta < 0) {
+          barDownSinceUp = 0;
+          if (barMode !== 'up') {
+            barMode = 'up';
+            barAnchor = y - delta;
+            barHideAtTurn = barHide;
+          }
+          if (!barArmed || into < full) {
+            barHide = Math.max(0, barHide + delta);
+            if (barHide >= full - 0.5 && into >= full - 0.5) barArmed = true;
+            else barArmed = false;
+          } else {
+            var climbed = barAnchor - y;
+            if (climbed > offset) {
+              barHide = Math.max(0, barHideAtTurn - (climbed - offset));
+              if (barHide <= 0) barArmed = false;
+            } else {
+              barHide = barHideAtTurn;
+            }
+          }
+        }
+        barPaint(y);
+      }
+
+      function barOnScroll() {
+        if (barTick) return;
+        barTick = true;
+        window.requestAnimationFrame(function () {
+          barTick = false;
+          barUpdate();
+        });
+      }
+
+      barReadHome();
+      barPaint(barLastY);
+      window.addEventListener('scroll', barOnScroll, { passive: true });
+      window.addEventListener('resize', function () {
+        var yNow = window.scrollY || window.pageYOffset || 0;
+        if (yNow < 2) barReadHome();
+        barHide = Math.min(barHide, catalogToolbar.offsetHeight);
+        barPaint(yNow);
+      });
+    }
+
     if (colPanel && listHead) {
       listHead.addEventListener('contextmenu', function (event) {
         event.preventDefault();

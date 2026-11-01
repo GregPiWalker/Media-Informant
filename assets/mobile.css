@@ -515,6 +515,17 @@ html[data-theme="dark"] .brand-logo-dark {
   padding: 0.85rem 1rem 0.35rem;
 }
 
+.catalog-toolbar.is-scroll-dock {
+  position: sticky;
+  top: var(--catalog-toolbar-stick, 0px);
+  z-index: 15;
+  background: var(--window-bg);
+}
+
+.catalog-toolbar.is-scroll-dock.is-overlay {
+  box-shadow: 0 1px 0 var(--border);
+}
+
 .view-switch {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -1081,7 +1092,8 @@ button.col-option,
 
 .poster-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18.5rem), 18.5rem));
+  justify-content: start;
   gap: 0.7rem;
   padding: 0.75rem 0.85rem 0;
 }
@@ -2127,7 +2139,7 @@ html[data-theme-pref="dark"] .theme-icon {
 
 @media (min-width: 768px) {
   .poster-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 20rem));
     gap: 1rem;
     padding: 1rem 1.2rem 0;
   }

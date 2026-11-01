@@ -4,7 +4,40 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/lib/config.php';
 require_once dirname(__DIR__) . '/lib/cache.php';
 require_once dirname(__DIR__) . '/lib/settings.php';
+require_once dirname(__DIR__) . '/lib/parser.php';
 require dirname(__DIR__) . '/lib/tmdb.php';
+
+/**
+ * True when the stored title still appears in the filename. Dots, underscores,
+ * and hyphens count as spaces so "The Matrix" matches The.Matrix.1999.mkv.
+ */
+function match_filename_contains_title(string $filename, string $title): bool
+{
+    $title = trim($title);
+    if ($filename === '' || $title === '') {
+        return false;
+    }
+    $hay = lower(str_replace(['.', '_', '-'], ' ', strip_extension($filename)));
+    $hay = trim(preg_replace('/\s+/', ' ', $hay) ?? $hay);
+    $needle = lower(str_replace(['.', '_', '-'], ' ', $title));
+    $needle = trim(preg_replace('/\s+/', ' ', $needle) ?? $needle);
+    return $needle !== '' && str_contains($hay, $needle);
+}
+
+/** Year written in the filename itself, not a year copied from an old match. */
+function match_filename_year(string $filename): ?int
+{
+    if ($filename === '') {
+        return null;
+    }
+    $parsed = parse_name(strip_extension($filename));
+    $year = $parsed['year'] ?? null;
+    if (!is_numeric($year)) {
+        return null;
+    }
+    $year = (int) $year;
+    return $year >= 1870 && $year <= 2100 ? $year : null;
+}
 
 cache_init();
 
@@ -95,18 +128,26 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     }
 }
 
-$parsedTitle = is_array($item) ? (string) ($item['title'] ?? '') : '';
-$parsedYear = is_array($item) && isset($item['year']) ? (int) $item['year'] : null;
-if ($parsedYear !== null && $parsedYear < 1870) {
-    $parsedYear = null;
+$filename = '';
+if (is_array($item)) {
+    $filename = (string) ($item['filename'] ?? '');
+    if ($filename === '') {
+        $path = str_replace('\\', '/', (string) ($item['path'] ?? ''));
+        $filename = $path !== '' ? basename($path) : '';
+    }
 }
+$storedTitle = is_array($item) ? trim((string) ($item['title'] ?? '')) : '';
+$fileParsed = $filename !== '' ? parse_name(strip_extension($filename)) : ['title' => '', 'year' => null];
+$parsedTitle = trim((string) ($fileParsed['title'] ?? ''));
+$parsedYear = match_filename_year($filename);
+$titleInFile = match_filename_contains_title($filename, $storedTitle);
 
 $browse = (string) ($_GET['browse'] ?? '') === 'popular';
-$q = isset($_GET['q']) ? trim((string) $_GET['q']) : ($browse ? '' : $parsedTitle);
+$q = isset($_GET['q']) ? trim((string) $_GET['q']) : (($browse || !$titleInFile) ? '' : $storedTitle);
 $yearRaw = isset($_GET['year']) ? trim((string) $_GET['year']) : '';
 $isShow = is_array($item) && (string) ($item['kind'] ?? '') === 'show';
 $searchMedia = $isShow ? 'tv' : 'movie';
-if ($yearRaw === '' && !isset($_GET['q']) && !isset($_GET['browse']) && $parsedYear !== null && !$isShow) {
+if ($yearRaw === '' && !isset($_GET['q']) && !isset($_GET['browse']) && $parsedYear !== null) {
     $yearRaw = (string) $parsedYear;
 }
 $year = $yearRaw !== '' && ctype_digit($yearRaw) ? (int) $yearRaw : null;

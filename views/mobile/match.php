@@ -53,7 +53,7 @@ if ($mode === 'popular') {
     <p>Pick the TMDB title for this file. Scan will keep a choice you make here.</p>
     <p class="file-path"><?= h($filePath !== '' ? $filePath : (string) ($item['filename'] ?? '')) ?></p>
     <?php if ($parsedTitle !== ''): ?>
-    <p class="hint">From the filename: <?= h($parsedTitle) ?><?= $item['year'] ?? null ? ' (' . h((string) $item['year']) . ')' : '' ?></p>
+    <p class="hint">From the filename: <?= h($parsedTitle) ?><?= $parsedYear !== null ? ' (' . h((string) $parsedYear) . ')' : '' ?></p>
     <?php endif; ?>
     <?php if ($status === 'matched'): ?>
     <p class="hint">Current: <?= h($display) ?> · <?= h(library_match_source_label(library_match_source($item))) ?></p>
@@ -80,8 +80,9 @@ if ($mode === 'popular') {
     <button type="submit" class="btn btn-accent">Search</button>
   </form>
   <p class="match-browse">
+    Supply an optional <strong>Year</strong> to improve search results.
     <a href="<?= h(app_href('video/match.php?id=' . rawurlencode($id) . '&browse=popular')) ?>">Browse popular titles</a>
-    when the filename doesn’t help.
+    when the title search fails.
   </p>
 
   <p class="catalog-meta">
