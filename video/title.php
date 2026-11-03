@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require_once dirname(__DIR__) . '/lib/cache.php';
 require_once dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/folders.php';
-require dirname(__DIR__) . '/lib/tmdb.php';
+require_once dirname(__DIR__) . '/lib/tmdb.php';
 
 cache_init();
 
@@ -40,6 +40,12 @@ if ($item !== null && !settings_item_in_roots($item, settings_video_roots(), $li
 
 $error = '';
 $editing = isset($_GET['edit']);
+$editDraft = null;
+
+if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $_POST === [] && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+    $error = 'That image is too large to upload.';
+    $editing = true;
+}
 
 if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'treat_individual' || (string) ($_POST['action'] ?? '') === 'treat_series')) {
     $grouped = (string) ($_POST['action'] ?? '') === 'treat_series';
@@ -169,32 +175,33 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     if (strlen($overview) > 8000) {
         $overview = substr($overview, 0, 8000);
     }
-    $genres = [];
-    $seen = [];
-    $rawGenres = $_POST['genres'] ?? [];
-    if (is_array($rawGenres)) {
-        foreach ($rawGenres as $genre) {
-            if (!is_string($genre)) {
-                continue;
-            }
-            $genre = trim($genre);
-            if ($genre === '' || strlen($genre) > 48) {
-                continue;
-            }
-            $key = lower($genre);
-            if (isset($seen[$key])) {
-                continue;
-            }
-            $seen[$key] = true;
-            $genres[] = $genre;
-        }
-    }
-    $updated = cache_update_item($id, static function (array $row) use ($displayTitle, $overview, $genres): array {
+    $genres = library_posted_genres($_POST['genres'] ?? []);
+    $yearParsed = library_posted_year($_POST['year'] ?? '');
+    $posterParsed = $yearParsed['error'] === ''
+        ? library_take_poster_upload($id, isset($_POST['remove_poster']))
+        : ['ok' => true, 'error' => '', 'apply' => false, 'poster_path' => null];
+    $postedYear = $yearParsed['year'];
+    $applyPoster = (bool) $posterParsed['apply'];
+    $posterPath = $posterParsed['poster_path'];
+    $editDraft = [
+        'title' => $displayTitle,
+        'overview' => $overview,
+        'genres' => $genres,
+        'year' => $yearParsed['error'] === '' ? $postedYear : trim((string) ($_POST['year'] ?? '')),
+    ];
+    if ($yearParsed['error'] !== '') {
+        $error = $yearParsed['error'];
+        $editing = true;
+    } elseif ($posterParsed['error'] !== '') {
+        $error = $posterParsed['error'];
+        $editing = true;
+    } else {
+    $updated = cache_update_item($id, static function (array $row) use ($displayTitle, $overview, $genres, $postedYear, $applyPoster, $posterPath): array {
         $row['display_title'] = $displayTitle;
         $row['title_source'] = 'user';
         $row['overview'] = $overview;
         $row['genres'] = $genres;
-        return $row;
+        return library_apply_edit_media($row, $postedYear, $applyPoster, is_string($posterPath) ? $posterPath : null);
     });
     if ($updated === null) {
         $error = 'Could not save. Check that cache/ is writable.';
@@ -203,6 +210,8 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
         $item['title_source'] = 'user';
         $item['overview'] = $overview;
         $item['genres'] = $genres;
+        $item['year'] = $postedYear;
+        $item['year_source'] = 'user';
     } else {
         $tmdbId = (int) ($updated['tmdb_id'] ?? 0);
         if ($tmdbId > 0) {
@@ -223,6 +232,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
         }
         header('Location: ' . title_self_url($id, $gkey), true, 303);
         exit;
+    }
     }
 }
 

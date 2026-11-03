@@ -35,7 +35,10 @@ if ($found) {
     $manual = $matchSource === 'manual';
     $itemId = (string) ($item['id'] ?? '');
     $sourceAbsent = function_exists('source_is_absent_for_item') && source_is_absent_for_item($item);
-    $poster = poster_url(isset($item['poster_path']) && is_string($item['poster_path']) ? $item['poster_path'] : null);
+    $itemPoster = isset($item['poster_path']) && is_string($item['poster_path']) ? $item['poster_path'] : null;
+    $userPoster = poster_is_local($itemPoster);
+    $posterCleared = !empty($item['poster_cleared']);
+    $poster = poster_url($itemPoster);
     if (array_key_exists('genres', $item) && is_array($item['genres'])) {
         $genres = cache_string_list($item['genres']);
     }
@@ -47,7 +50,7 @@ if ($found) {
         if ($display === '' && !empty($meta['title'])) {
             $display = (string) $meta['title'];
         }
-        if (!empty($meta['year'])) {
+        if (($item['year_source'] ?? '') !== 'user' && !empty($meta['year'])) {
             $year = (int) $meta['year'];
         }
         if (trim($overview) === '' && trim((string) ($meta['overview'] ?? '')) !== '') {
@@ -56,7 +59,9 @@ if ($found) {
         if ($genres === []) {
             $genres = cache_string_list($meta['genres'] ?? []);
         }
-        $poster = poster_url(isset($meta['poster_path']) && is_string($meta['poster_path']) ? $meta['poster_path'] : ($item['poster_path'] ?? null));
+        if (!$userPoster && !$posterCleared) {
+            $poster = poster_url(isset($meta['poster_path']) && is_string($meta['poster_path']) ? $meta['poster_path'] : ($item['poster_path'] ?? null));
+        }
         if (isset($meta['cast']) && is_array($meta['cast'])) {
             foreach ($meta['cast'] as $name) {
                 if (is_string($name) && $name !== '') {
@@ -67,6 +72,20 @@ if ($found) {
     }
     if (function_exists('tmdb_rating_text')) {
         $ratingLabel = tmdb_rating_text($meta, $item);
+    }
+    if ($editing && isset($editDraft) && is_array($editDraft)) {
+        if (isset($editDraft['title']) && is_string($editDraft['title']) && $editDraft['title'] !== '') {
+            $display = $editDraft['title'];
+        }
+        if (isset($editDraft['overview']) && is_string($editDraft['overview'])) {
+            $overview = $editDraft['overview'];
+        }
+        if (isset($editDraft['genres']) && is_array($editDraft['genres'])) {
+            $genres = $editDraft['genres'];
+        }
+        if (array_key_exists('year', $editDraft)) {
+            $year = $editDraft['year'];
+        }
     }
 }
 
@@ -116,17 +135,51 @@ if ($episodeNum !== null) {
     $episodeCodeBits[] = 'Episode ' . $episodeNum;
 }
 $episodeCode = implode(' - ', $episodeCodeBits);
+$lookupSource = $found ? (string) ($item['lookup_source'] ?? '') : '';
+$pathIsRiff = false;
+if ($found && function_exists('rifftrax_identify')) {
+    $namedRiff = rifftrax_identify(
+        (string) ($item['root'] ?? ''),
+        (string) ($item['path'] ?? ''),
+        (string) ($item['filename'] ?? '')
+    );
+    $pathIsRiff = !empty($namedRiff['match']);
+}
+$filmYear = null;
+if ($found && $lookupSource === 'RiffTrax' && isset($item['original_year']) && is_numeric($item['original_year'])) {
+    $originalYear = (int) $item['original_year'];
+    $shownYear = is_numeric($year) ? (int) $year : null;
+    if ($shownYear === null || $originalYear !== $shownYear) {
+        $filmYear = $originalYear;
+    }
+}
+$riffPage = ($found && $lookupSource === 'RiffTrax' && function_exists('rifftrax_page_url'))
+    ? rifftrax_page_url((string) ($item['detail_url'] ?? ''))
+    : '';
 $matchNote = '';
 $matchClass = 'hint';
 if ($found) {
     if ($status === 'unidentified') {
-        $matchNote = 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
+        $matchNote = $pathIsRiff
+            ? 'Not looked up yet. Scan unidentified titles to search RiffTrax, or match it from the menu.'
+            : 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
         $matchClass = 'unmatched-note';
     } elseif ($status !== 'matched') {
-        $matchNote = 'No confident TMDB match. Showing the title parsed from the folder or filename.';
+        $hasRiffCandidates = is_array($item['lookup_candidates'] ?? null) && $item['lookup_candidates'] !== [];
+        $hasTmdbCandidates = is_array($item['tmdb_candidates'] ?? null) && $item['tmdb_candidates'] !== [];
+        $unmatchedRiff = $lookupSource === 'RiffTrax' || $hasRiffCandidates || ($pathIsRiff && !$hasTmdbCandidates);
+        $matchNote = $unmatchedRiff
+            ? 'No confident RiffTrax match. Showing the title parsed from the folder or filename.'
+            : 'No confident TMDB match. Showing the title parsed from the folder or filename.';
         $matchClass = 'unmatched-note';
+    } elseif ($matchSource === 'rifftrax') {
+        $matchNote = 'Matched from RiffTrax.';
+    } elseif ($matchSource === 'manual' && $lookupSource === 'RiffTrax') {
+        $matchNote = 'Matched by you from RiffTrax.';
     } elseif ($matchSource === 'manual') {
         $matchNote = 'Matched by you. Scan will keep this title.';
+    } elseif ($matchSource === 'grok' && $lookupSource === 'RiffTrax') {
+        $matchNote = 'Matched by Grok from RiffTrax. Scan will keep this title.';
     } elseif ($matchSource === 'grok') {
         $matchNote = 'Matched by Grok. Scan will keep this title.';
     } elseif ($matchSource === 'direct') {
@@ -272,7 +325,7 @@ render_header(['section' => 'video']);
       <?php if (!$editing): ?>
       <h1><?= h($display) ?></h1>
       <?php endif; ?>
-      <p class="detail-year"><?= $year ? h((string) $year) : 'Year unknown' ?></p>
+      <p class="detail-year"><?= $year ? h((string) $year) : 'Year unknown' ?><?php if ($filmYear !== null): ?> · Film <?= h((string) $filmYear) ?><?php endif; ?></p>
       <?php endif; ?>
       <?php if ($ratingLabel !== ''): ?>
       <p class="detail-rating"><?= $isEpisode ? 'Show rating ' : '' ?><?= h($ratingLabel) ?></p>
@@ -286,7 +339,7 @@ render_header(['section' => 'video']);
     </header>
 
     <?php if ($editing): ?>
-    <form class="detail-edit" method="post" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>">
+    <form class="detail-edit" method="post" enctype="multipart/form-data" action="<?= h(app_href('video/title.php?' . $titleQs)) ?>">
       <input type="hidden" name="id" value="<?= h($itemId) ?>">
       <?php if ($gkey !== ''): ?><input type="hidden" name="gkey" value="<?= h($gkey) ?>"><?php endif; ?>
       <input type="hidden" name="action" value="save_data">
@@ -295,6 +348,23 @@ render_header(['section' => 'video']);
         <label class="visually-hidden" for="edit-title">Title</label>
         <input id="edit-title" type="text" name="display_title" class="title-input folder-input" value="<?= h($display) ?>" maxlength="200" required autocomplete="off" spellcheck="false">
         <p class="hint">This name is only for this file. Two files can share one TMDB match — for example Part 1 and Part 2 of the same movie.</p>
+      </section>
+      <section class="detail-section">
+        <h2>Year</h2>
+        <label class="visually-hidden" for="edit-year">Year</label>
+        <input id="edit-year" type="text" name="year" class="folder-input year-input" value="<?= h($year !== null && $year !== '' && $year !== '—' ? (string) $year : '') ?>" inputmode="numeric" maxlength="4" placeholder="Year" autocomplete="off" spellcheck="false">
+      </section>
+      <section class="detail-section">
+        <h2>Poster</h2>
+        <label class="visually-hidden" for="edit-poster">Poster image</label>
+        <input id="edit-poster" type="file" name="poster" class="poster-file" accept="image/jpeg,image/png,image/webp,image/gif">
+        <p class="hint">Choose a JPEG, PNG, WebP, or GIF to use as the poster. Leave this empty to keep the current image.</p>
+        <?php if ($poster): ?>
+        <label class="poster-remove">
+          <input type="checkbox" name="remove_poster" value="1">
+          Remove the current poster
+        </label>
+        <?php endif; ?>
       </section>
       <section class="detail-section detail-overview">
         <h2>Overview</h2>
@@ -317,6 +387,11 @@ render_header(['section' => 'video']);
           <input id="edit-genre" type="text" class="folder-input" data-genre-new maxlength="48" placeholder="Add a genre" autocomplete="off" autocapitalize="words" spellcheck="false">
           <button type="button" class="btn btn-ghost" data-add-genre>Add</button>
         </div>
+        <?php
+        $knownGenres = isset($library) && is_array($library) ? library_known_genres($library) : [];
+        $knownJson = json_encode($knownGenres, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
+        ?>
+        <script type="application/json" id="known-genres"><?= $knownJson !== false ? $knownJson : '[]' ?></script>
       </section>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-accent btn-block">Save</button>
@@ -327,7 +402,7 @@ render_header(['section' => 'video']);
     <section class="detail-section detail-overview">
       <h2>Overview</h2>
       <?php if ($overview !== ''): ?>
-      <p class="overview"><?= h($overview) ?></p>
+      <p class="overview"><?= h_paragraphs($overview) ?></p>
       <?php else: ?>
       <p class="overview is-empty"><?= $status === 'matched'
           ? 'No overview is cached for this title.'
@@ -365,6 +440,9 @@ render_header(['section' => 'video']);
     <p class="file-path<?= $sourceAbsent ? ' is-absent' : '' ?>"><?= h($path) ?></p>
     <?php if ($matchNote !== ''): ?>
     <p class="<?= h($matchClass) ?> detail-match"><?= h($matchNote) ?></p>
+    <?php endif; ?>
+    <?php if ($riffPage !== ''): ?>
+    <p class="hint detail-match"><a href="<?= h($riffPage) ?>" rel="noopener noreferrer">Open on RiffTrax</a></p>
     <?php endif; ?>
   </article>
   <?php endif; ?>

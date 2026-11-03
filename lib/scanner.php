@@ -893,7 +893,7 @@ function scan_lookup_message(int $found, int $pending, string $catalog = 'video'
     if ($pending <= 0) {
         return 'Refreshing ' . $noun . ' catalog…';
     }
-    return 'Looking up ' . $noun . ' titles on TMDB: found ' . $found . ' of ' . $pending . '.';
+    return 'Looking up ' . $noun . ' titles: found ' . $found . ' of ' . $pending . '.';
 }
 
 function scan_status_write(array $patch): void
@@ -946,7 +946,10 @@ function scan_index_library(array $library): array
                 $oldByPath[$item['path']] = $item;
             }
         }
-        if (($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) && !empty($item['title'])) {
+        $riffKnown = ($item['status'] ?? '') === 'matched'
+            && ($item['lookup_source'] ?? '') === 'RiffTrax'
+            && (string) ($item['lookup_id'] ?? '') !== '';
+        if ((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) || $riffKnown) && !empty($item['title'])) {
             $known[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
             if (!empty($item['display_title'])) {
                 $known[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
@@ -1051,10 +1054,17 @@ function scan_part_bundle_from_item(array $item): array
         'pending' => false,
         'miss' => false,
         'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
+        'lookup_source' => (string) ($item['lookup_source'] ?? ''),
+        'lookup_id' => (string) ($item['lookup_id'] ?? ''),
+        'detail_url' => (string) ($item['detail_url'] ?? ''),
+        'original_year' => isset($item['original_year']) && is_numeric($item['original_year']) ? (int) $item['original_year'] : null,
+        'lookup_candidates' => is_array($item['lookup_candidates'] ?? null) ? $item['lookup_candidates'] : [],
     ];
     if (isset($item['vote_average']) && is_numeric($item['vote_average'])) {
         $bundle['vote_average'] = (float) $item['vote_average'];
-        $bundle['vote_count'] = max(0, (int) ($item['vote_count'] ?? 0));
+        if (isset($item['vote_count']) && is_numeric($item['vote_count'])) {
+            $bundle['vote_count'] = max(0, (int) $item['vote_count']);
+        }
     }
     if (isset($item['runtime']) && is_numeric($item['runtime']) && (int) $item['runtime'] > 0) {
         $bundle['runtime'] = (int) $item['runtime'];
@@ -1070,20 +1080,37 @@ function scan_part_apply_bundle(array $item, array $bundle): array
         $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
         return $item;
     }
-    if (!empty($bundle['pending']) || (int) ($bundle['tmdb_id'] ?? 0) < 1) {
+    $riffBundle = ($bundle['lookup_source'] ?? '') === 'RiffTrax' && (string) ($bundle['lookup_id'] ?? '') !== '';
+    if (!empty($bundle['pending']) || ((int) ($bundle['tmdb_id'] ?? 0) < 1 && !$riffBundle)) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
+        if (is_array($bundle['lookup_candidates'] ?? null) && $bundle['lookup_candidates'] !== []) {
+            $item['lookup_candidates'] = $bundle['lookup_candidates'];
+            $item['lookup_source'] = 'RiffTrax';
+        }
         $item['part_bundle'] = scan_part_bundle_key($item);
         return $item;
     }
-    $item['tmdb_id'] = (int) $bundle['tmdb_id'];
+    if ($riffBundle) {
+        $item['tmdb_id'] = null;
+        $item['lookup_source'] = 'RiffTrax';
+        $item['lookup_id'] = (string) $bundle['lookup_id'];
+        $item['detail_url'] = (string) ($bundle['detail_url'] ?? '');
+        if (isset($bundle['original_year']) && is_numeric($bundle['original_year'])) {
+            $item['original_year'] = (int) $bundle['original_year'];
+        }
+    }
+    $item['tmdb_id'] = $riffBundle ? null : (int) $bundle['tmdb_id'];
     $item['status'] = 'matched';
     $item['poster_path'] = $bundle['poster_path'] ?? null;
     $item['genres'] = function_exists('cache_string_list') ? cache_string_list($bundle['genres'] ?? []) : ($bundle['genres'] ?? []);
     $item['overview'] = (string) ($bundle['overview'] ?? '');
-    if (function_exists('tmdb_copy_rating')) {
+    if (isset($bundle['vote_count']) && function_exists('tmdb_copy_rating')) {
         $item = tmdb_copy_rating($item, $bundle);
+    } elseif (isset($bundle['vote_average']) && is_numeric($bundle['vote_average'])) {
+        $item['vote_average'] = (float) $bundle['vote_average'];
+        unset($item['vote_count']);
     }
     if (function_exists('tmdb_copy_runtime')) {
         $item = tmdb_copy_runtime($item, $bundle);
@@ -1135,6 +1162,8 @@ function scan_part_remember(array &$job, array $item, bool $pending = false, boo
             'pending' => true,
             'miss' => false,
             'candidates' => is_array($item['tmdb_candidates'] ?? null) ? $item['tmdb_candidates'] : [],
+            'lookup_source' => (string) ($item['lookup_source'] ?? ''),
+            'lookup_candidates' => is_array($item['lookup_candidates'] ?? null) ? $item['lookup_candidates'] : [],
         ];
         $item['part_bundle'] = $key;
         return;
@@ -1156,7 +1185,7 @@ function scan_part_backfill(array &$job, string $key, array $source): void
         if (!is_array($row) || scan_part_bundle_key($row) !== $key) {
             continue;
         }
-        if (($row['status'] ?? '') === 'matched' && !empty($row['tmdb_id'])) {
+        if (($row['status'] ?? '') === 'matched' && (!empty($row['tmdb_id']) || (string) ($row['lookup_id'] ?? '') !== '')) {
             continue;
         }
         $job['items'][$i] = scan_part_apply_bundle($row, $bundle);
@@ -1632,13 +1661,103 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
     scan_job_write($job);
     scan_job_publish($job);
     if (function_exists('app_log')) {
-        app_log('scan', 'Queued ' . $pending . ' ' . $noun . ' TMDB look-up' . ($pending === 1 ? '' : 's') . '.', [
+        app_log('scan', 'Queued ' . $pending . ' ' . $noun . ' look-up' . ($pending === 1 ? '' : 's') . '.', [
             'files' => count($files),
             'pending' => $pending,
             'mode' => $mode,
         ]);
     }
     return scan_status_read();
+}
+
+/**
+ * Look up one file on RiffTrax.
+ * A direct slug hit is stored immediately. Catalog hits are queued for Grok
+ * choose when Grok assistance is configured and the scan toggle is on,
+ * including a single catalog hit. With Grok off, a confident catalog hit is
+ * still stored and several catalog hits stay unmatched.
+ * Returns null when RiffTrax has nothing, so the caller can try another source.
+ *
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param array<string, mixed> $knownMatches
+ */
+function scan_take_rifftrax(array &$job, array $item, int $itemNo, string $filename, string $key, array &$knownMatches): ?array
+{
+    if (!function_exists('lookup_rifftrax_resolve')) {
+        return null;
+    }
+    $title = trim((string) ($item['title'] ?? ''));
+    $resolved = lookup_rifftrax_resolve($title, [
+        'filename' => (string) ($item['filename'] ?? $filename),
+        'path' => (string) ($item['path'] ?? ''),
+        'official_only' => true,
+    ]);
+    $job['lookups'] = (int) ($job['lookups'] ?? 0) + 1;
+    $status = (string) ($resolved['status'] ?? 'miss');
+    $via = (string) ($resolved['via'] ?? 'none');
+    $candidates = is_array($resolved['candidates'] ?? null) ? $resolved['candidates'] : [];
+    if ($via === 'catalog' && $candidates !== [] && scan_grok_on()) {
+        $item['status'] = 'unmatched';
+        $item['match_source'] = 'none';
+        $item['lookup_source'] = 'RiffTrax';
+        $item['lookup_candidates'] = $candidates;
+        $item['tmdb_candidates'] = [];
+        $item['catalog_query'] = $title;
+        $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+        $item['part_bundle'] = scan_part_bundle_key($item);
+        scan_part_remember($job, $item, true);
+        scan_queue_grok($job, $item, 'choose');
+        if (function_exists('app_log')) {
+            app_log('rifftrax', 'RiffTrax item ' . $itemNo . ' catalog search queued for Grok. file=' . $filename);
+        }
+        return $item;
+    }
+    if ($status === 'matched' && ($resolved['metadata'] ?? null) instanceof VideoMetadata) {
+        $item = lookup_apply_metadata($item, $resolved['metadata'], 'rifftrax');
+        if (function_exists('app_log')) {
+            $storedYear = isset($item['year']) && is_numeric($item['year']) ? (string) (int) $item['year'] : '-';
+            app_log(
+                'rifftrax',
+                'RiffTrax item ' . $itemNo . ' stored ' . (string) ($item['lookup_id'] ?? '')
+                . ' "' . (string) ($item['display_title'] ?? $item['title'] ?? '') . '"'
+                . ' year=' . $storedYear
+                . ' file=' . $filename
+            );
+        }
+        $knownMatches[$key] = $item;
+        if (!empty($item['display_title'])) {
+            $knownMatches[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
+        }
+        scan_part_remember($job, $item);
+        $job['found'] = (int) ($job['found'] ?? 0) + 1;
+        return $item;
+    }
+    if ($status === 'ambiguous') {
+        $item['status'] = 'unmatched';
+        $item['match_source'] = 'none';
+        $item['lookup_source'] = 'RiffTrax';
+        $item['lookup_candidates'] = $candidates;
+        $item['tmdb_candidates'] = [];
+        $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+        $item['part_bundle'] = scan_part_bundle_key($item);
+        scan_part_remember($job, $item, true);
+        if ($via === 'catalog') {
+            if (function_exists('app_log')) {
+                app_log('rifftrax', 'RiffTrax item ' . $itemNo . ' catalog search left unmatched; Grok is off. file=' . $filename);
+            }
+            return $item;
+        }
+        scan_queue_grok($job, $item, 'choose');
+        if (function_exists('app_log')) {
+            app_log('rifftrax', 'RiffTrax item ' . $itemNo . ' has several matches; queued for Grok. file=' . $filename);
+        }
+        return $item;
+    }
+    if (function_exists('app_log')) {
+        app_log('rifftrax', 'RiffTrax item ' . $itemNo . ' no match for "' . $title . '" file=' . $filename);
+    }
+    return null;
 }
 
 function scan_job_process_file(array &$job, array $file, array $oldByPath, array &$knownMatches, bool $skipLookup): bool
@@ -1696,13 +1815,18 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         'match_source' => 'none',
         'genres' => [],
     ];
+    if (($parsed['lookup_source'] ?? '') === 'RiffTrax') {
+        $item['lookup_source'] = 'RiffTrax';
+    }
     if ($prev) {
         if (array_key_exists('overview', $prev) && is_string($prev['overview'])) {
             $item['overview'] = $prev['overview'];
         }
         if (isset($prev['vote_average']) && is_numeric($prev['vote_average'])) {
             $item['vote_average'] = (float) $prev['vote_average'];
-            $item['vote_count'] = max(0, (int) ($prev['vote_count'] ?? 0));
+            if (isset($prev['vote_count']) && is_numeric($prev['vote_count'])) {
+                $item['vote_count'] = max(0, (int) $prev['vote_count']);
+            }
         }
         if (isset($prev['runtime']) && is_numeric($prev['runtime']) && (int) $prev['runtime'] > 0) {
             $item['runtime'] = (int) $prev['runtime'];
@@ -1790,6 +1914,13 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 $item['media_type'] = $meta['media_type'];
             }
             $item['match_source'] = (($source['match_source'] ?? '') === 'grok') ? 'grok' : 'direct';
+            unset(
+                $item['lookup_source'],
+                $item['lookup_id'],
+                $item['detail_url'],
+                $item['original_year'],
+                $item['lookup_candidates']
+            );
             if (function_exists('tmdb_enrich_item_episode')) {
                 $item = tmdb_enrich_item_episode($item, $tmdbId);
             }
@@ -1823,7 +1954,21 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         }
     }
 
-    if ($skipLookup || !$needsLookup || !tmdb_has_key() || !function_exists('curl_init')) {
+    if ($source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
+        && function_exists('lookup_copy_rifftrax_item')) {
+        $item = lookup_copy_rifftrax_item($item, $source);
+        $knownMatches[$key] = $item;
+        scan_part_remember($job, $item);
+        $job['items'][] = $item;
+        $job['found'] = (int) $job['found'] + 1;
+        if (($item['match_source'] ?? '') === 'grok') {
+            $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+        }
+        return false;
+    }
+
+    $isRiff = ($item['lookup_source'] ?? '') === 'RiffTrax';
+    if ($skipLookup || !$needsLookup || !function_exists('curl_init') || (!$isRiff && !tmdb_has_key())) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         scan_tally_status($job, 'unidentified');
@@ -1842,7 +1987,11 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         tmdb_scan_item_begin($itemNo, $filename, $path);
     }
     if (function_exists('app_log')) {
-        app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
+        if ($isRiff) {
+            app_log('rifftrax', 'RiffTrax item ' . $itemNo . ': ' . $filename);
+        } else {
+            app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
+        }
     }
     $showFolder = '';
     if (function_exists('search_query_tv_folders') && (($item['kind'] ?? '') === 'show' || (function_exists('search_query_path_is_tv') && search_query_path_is_tv($path, tmdb_search_meta_from_item($item))))) {
@@ -1894,7 +2043,20 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 $lookupFile = $namedLookup['stem'] . ($ext !== '' ? ('.' . $ext) : '');
             }
         }
-        $payload = tmdb_search_first_results($title, $year, $lookupFile, tmdb_search_meta_from_item($item));
+        if ($isRiff) {
+            $taken = scan_take_rifftrax($job, $item, $itemNo, $filename, $key, $knownMatches);
+            if ($taken !== null) {
+                $job['items'][] = $taken;
+                return true;
+            }
+            unset($item['lookup_source']);
+        }
+        $tmdbService = function_exists('lookup_service') ? lookup_service('TMDB') : null;
+        if ($tmdbService instanceof TmdbVideoLookupService) {
+            $payload = $tmdbService->firstResults($title, $year, $lookupFile, tmdb_search_meta_from_item($item));
+        } else {
+            $payload = tmdb_search_first_results($title, $year, $lookupFile, tmdb_search_meta_from_item($item));
+        }
         $job['lookups'] = (int) $job['lookups'] + 1;
         $query = (string) ($payload['query'] ?? '');
         $tvSeries = $showFolder !== '' || ($payload['source'] ?? '') === 'tv';
@@ -1913,6 +2075,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 continue;
             }
             $cands[] = [
+                'source' => 'TMDB',
                 'id' => $cid,
                 'title' => (string) ($row['title'] ?? ''),
                 'year' => $row['year'] ?? null,
@@ -1926,6 +2089,18 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         $item['tmdb_candidates'] = $usable;
 
         if ($usable === []) {
+            if (!$isRiff && $showFolder === '' && function_exists('rifftrax_identify')) {
+                $hint = rifftrax_identify($root, $path, $filename);
+                if (!empty($hint['fallback'])) {
+                    $item['lookup_source'] = 'RiffTrax';
+                    $taken = scan_take_rifftrax($job, $item, $itemNo, $filename, $key, $knownMatches);
+                    if ($taken !== null) {
+                        $job['items'][] = $taken;
+                        return true;
+                    }
+                    unset($item['lookup_source']);
+                }
+            }
             $item['status'] = 'unmatched';
             $item['match_source'] = 'none';
             $job['unmatched'] = (int) $job['unmatched'] + 1;
@@ -2044,6 +2219,13 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                     );
                 }
                 $item['match_source'] = 'tmdb';
+                unset(
+                    $item['lookup_source'],
+                    $item['lookup_id'],
+                    $item['detail_url'],
+                    $item['original_year'],
+                    $item['lookup_candidates']
+                );
                 if (function_exists('tmdb_enrich_item_episode')) {
                     $item = tmdb_enrich_item_episode($item, (int) $meta['tmdb_id']);
                 }
@@ -2119,11 +2301,16 @@ function scan_job_finalize(array $job, bool $cancelled): array
     $old = cache_read_library();
     [$oldByPath, $known] = scan_index_library($old);
     foreach ($job['items'] as $item) {
-        if (is_array($item) && ($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) && !empty($item['title'])) {
-            $known[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
-            if (!empty($item['display_title'])) {
-                $known[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
-            }
+        if (!is_array($item) || ($item['status'] ?? '') !== 'matched' || empty($item['title'])) {
+            continue;
+        }
+        $riffJob = ($item['lookup_source'] ?? '') === 'RiffTrax' && (string) ($item['lookup_id'] ?? '') !== '';
+        if (empty($item['tmdb_id']) && !$riffJob) {
+            continue;
+        }
+        $known[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
+        if (!empty($item['display_title'])) {
+            $known[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
         }
     }
 
@@ -2579,7 +2766,10 @@ function library_sync_video_catalog(): array
         if ($root !== '' && $path !== '') {
             $oldByKey[$root . "\n" . $path] = $item;
         }
-        if (($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) && !empty($item['title'])) {
+        $riffKnown = ($item['status'] ?? '') === 'matched'
+            && ($item['lookup_source'] ?? '') === 'RiffTrax'
+            && (string) ($item['lookup_id'] ?? '') !== '';
+        if (((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id'])) || $riffKnown) && !empty($item['title'])) {
             $knownMatches[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
             if (!empty($item['display_title'])) {
                 $knownMatches[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
@@ -2671,6 +2861,9 @@ function library_sync_video_catalog(): array
                     }
                 }
                 $item['match_source'] = 'direct';
+            } elseif ($source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
+                && function_exists('lookup_copy_rifftrax_item')) {
+                $item = lookup_copy_rifftrax_item($item, $source);
             }
 
             $items[] = $item;

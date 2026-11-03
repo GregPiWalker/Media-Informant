@@ -5,7 +5,8 @@ require dirname(__DIR__) . '/lib/config.php';
 require_once dirname(__DIR__) . '/lib/cache.php';
 require_once dirname(__DIR__) . '/lib/settings.php';
 require_once dirname(__DIR__) . '/lib/parser.php';
-require dirname(__DIR__) . '/lib/tmdb.php';
+require_once dirname(__DIR__) . '/lib/tmdb.php';
+require_once dirname(__DIR__) . '/lib/lookup.php';
 
 /**
  * True when the stored title still appears in the filename. Dots, underscores,
@@ -59,7 +60,31 @@ $error = '';
 
 if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
-    if (!tmdb_has_key() && $action === 'choose') {
+    $postedSource = (string) ($_POST['lookup_source'] ?? 'TMDB');
+    if ($action === 'choose' && strcasecmp($postedSource, 'RiffTrax') === 0) {
+        $nid = trim((string) ($_POST['lookup_id'] ?? ''));
+        $service = function_exists('lookup_service') ? lookup_service('RiffTrax') : null;
+        $picked = ($service && function_exists('curl_init')) ? $service->fetch($nid) : null;
+        if (!$picked instanceof VideoMetadata) {
+            $error = 'Could not load that title from RiffTrax. Try another result.';
+        } else {
+            $updated = cache_update_item($id, static function (array $row) use ($picked): array {
+                return lookup_apply_metadata($row, $picked, 'manual');
+            });
+            if ($updated === null) {
+                $error = 'Could not update the catalog. Check cache/ permissions.';
+            } else {
+                if (function_exists('app_log')) {
+                    app_log('match', 'Manual RiffTrax match: ' . (string) $picked->title . '.', [
+                        'id' => $id,
+                        'lookup_id' => $picked->lookupId,
+                    ]);
+                }
+                header('Location: title.php?id=' . rawurlencode($id), true, 303);
+                exit;
+            }
+        }
+    } elseif (!tmdb_has_key() && $action === 'choose') {
         $error = 'Set a TMDB API key in Config before matching titles.';
     } elseif ($action === 'clear') {
         $updated = cache_update_item($id, static function (array $row): array {
@@ -142,8 +167,23 @@ $parsedTitle = trim((string) ($fileParsed['title'] ?? ''));
 $parsedYear = match_filename_year($filename);
 $titleInFile = match_filename_contains_title($filename, $storedTitle);
 
+$riffFile = ($item !== null && function_exists('rifftrax_identify'))
+    ? rifftrax_identify((string) ($item['root'] ?? ''), (string) ($item['path'] ?? ''), $filename)
+    : ['match' => false, 'title' => '', 'via' => '', 'fallback' => false];
+$sourceRaw = isset($_GET['source']) ? strtolower(trim((string) $_GET['source'])) : '';
+if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax') {
+    $sourceRaw = !empty($riffFile['match']) ? 'rifftrax' : 'tmdb';
+}
+$searchSource = $sourceRaw === 'rifftrax' ? 'RiffTrax' : 'TMDB';
+
 $browse = (string) ($_GET['browse'] ?? '') === 'popular';
+if ($browse) {
+    $searchSource = 'TMDB';
+}
 $q = isset($_GET['q']) ? trim((string) $_GET['q']) : (($browse || !$titleInFile) ? '' : $storedTitle);
+if ($searchSource === 'RiffTrax' && !isset($_GET['q']) && !empty($riffFile['title'])) {
+    $q = (string) $riffFile['title'];
+}
 $yearRaw = isset($_GET['year']) ? trim((string) $_GET['year']) : '';
 $isShow = is_array($item) && (string) ($item['kind'] ?? '') === 'show';
 $searchMedia = $isShow ? 'tv' : 'movie';
@@ -156,9 +196,68 @@ $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
 $mode = 'search';
 $payload = ['results' => [], 'page' => 1, 'total_pages' => 1];
 $relaxedYear = false;
+$grokNote = '';
 $hasKey = tmdb_has_key();
+$canSearch = $searchSource === 'RiffTrax' ? function_exists('curl_init') : $hasKey;
 
-if ($item !== null && $hasKey) {
+if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
+    $queryText = $q !== '' ? $q : (string) ($riffFile['title'] ?? '');
+    if ($queryText === '') {
+        $queryText = $parsedTitle;
+    }
+    $service = lookup_service('RiffTrax');
+    $hits = ($service && $queryText !== '') ? $service->search($queryText, null, 12, [
+        'filename' => $filename,
+        'path' => (string) ($item['path'] ?? ''),
+    ]) : [];
+    $rows = lookup_candidate_rows($hits);
+    $via = $service instanceof RiffTraxVideoLookupService ? $service->lastVia() : 'none';
+    if (function_exists('app_log')) {
+        app_log('rifftrax', 'RiffTrax search for "' . $queryText . '" via ' . $via
+            . ' returned ' . count($rows) . ' title(s). file=' . $filename);
+    }
+    if ($via === 'catalog' && $rows !== []) {
+        require_once dirname(__DIR__) . '/lib/grok.php';
+        $grokOn = function_exists('grok_live_enabled') && grok_live_enabled();
+        if (!$grokOn) {
+            if (function_exists('app_log')) {
+                app_log('grok', 'Grok is off, so ' . count($rows) . ' catalog title(s) for "' . $queryText . '" were not sent. file=' . $filename);
+            }
+        } else {
+            if (function_exists('app_log')) {
+                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' catalog title(s) for "' . $queryText . '". file=' . $filename);
+            }
+            $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $queryText) : null;
+            if (is_array($choice) && $service instanceof RiffTraxVideoLookupService) {
+                $picked = $service->fetch((string) $choice['id']);
+                if ($picked instanceof VideoMetadata) {
+                    $updated = cache_update_item($id, static function (array $row) use ($picked): array {
+                        return lookup_apply_metadata($row, $picked, 'grok');
+                    });
+                    if ($updated !== null) {
+                        if (function_exists('app_log')) {
+                            app_log('grok', 'Grok chose RiffTrax "' . $picked->title . '" for ' . $filename . '.', [
+                                'id' => $id,
+                                'lookup_id' => $picked->lookupId,
+                            ]);
+                        }
+                        header('Location: title.php?id=' . rawurlencode($id), true, 303);
+                        exit;
+                    }
+                    $error = 'Could not update the catalog. Check cache/ permissions.';
+                }
+            }
+            if ($error === '') {
+                $grokNote = 'Grok did not choose a title from these results.';
+            }
+        }
+    }
+    $payload = [
+        'results' => $rows,
+        'page' => 1,
+        'total_pages' => 1,
+    ];
+} elseif ($item !== null && $hasKey) {
     if ($q !== '') {
         $payload = tmdb_search_results($q, $year, $page, $searchMedia);
         $relaxedYear = !empty($payload['relaxed_year']);
@@ -172,5 +271,6 @@ $results = $payload['results'];
 $page = (int) ($payload['page'] ?? $page);
 $totalPages = (int) ($payload['total_pages'] ?? 1);
 $currentTmdb = is_array($item) && !empty($item['tmdb_id']) ? (int) $item['tmdb_id'] : 0;
+$currentLookup = is_array($item) ? (string) ($item['lookup_id'] ?? '') : '';
 
 require app_view('match');

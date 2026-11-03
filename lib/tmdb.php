@@ -965,11 +965,14 @@ function tmdb_rating_label(array $source): string
     if (!tmdb_has_rating($source)) {
         return '';
     }
-    $count = max(0, (int) ($source['vote_count'] ?? 0));
+    $score = number_format((float) $source['vote_average'], 1, '.', '');
+    if (!array_key_exists('vote_count', $source) || $source['vote_count'] === null || $source['vote_count'] === '') {
+        return $score . ' / 10';
+    }
+    $count = (int) $source['vote_count'];
     if ($count < 1) {
         return '';
     }
-    $score = number_format((float) $source['vote_average'], 1, '.', '');
     $votes = number_format($count, 0, '.', ',');
     return $score . ' / 10 · ' . $votes . ' ' . ($count === 1 ? 'vote' : 'votes');
 }

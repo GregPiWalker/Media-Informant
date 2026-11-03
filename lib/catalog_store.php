@@ -45,7 +45,7 @@ function catalog_db_match_source(?string $appSource): ?string
     if ($s === 'direct') {
         return 'tmdb';
     }
-    if ($s === 'grok' || $s === 'manual') {
+    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax') {
         return $s;
     }
     return null;
@@ -57,7 +57,7 @@ function catalog_app_match_source(?string $dbSource): string
     if ($s === 'tmdb' || $s === 'direct' || $s === 'auto') {
         return 'direct';
     }
-    if ($s === 'grok' || $s === 'manual') {
+    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax') {
         return $s;
     }
     return 'none';
@@ -314,6 +314,12 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     if (!empty($extras['title_source'])) {
         $item['title_source'] = (string) $extras['title_source'];
     }
+    if (($extras['year_source'] ?? '') === 'user') {
+        $item['year_source'] = 'user';
+    }
+    if (!empty($extras['poster_cleared'])) {
+        $item['poster_cleared'] = true;
+    }
     if (isset($extras['media_type']) && is_string($extras['media_type'])) {
         $item['media_type'] = $extras['media_type'];
     } elseif (!empty($row['tmdb_media_type'])) {
@@ -321,7 +327,24 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     }
     if (isset($extras['vote_average']) && is_numeric($extras['vote_average'])) {
         $item['vote_average'] = (float) $extras['vote_average'];
-        $item['vote_count'] = max(0, (int) ($extras['vote_count'] ?? 0));
+        if (isset($extras['vote_count']) && is_numeric($extras['vote_count'])) {
+            $item['vote_count'] = max(0, (int) $extras['vote_count']);
+        }
+    }
+    if (($extras['lookup_source'] ?? '') !== '') {
+        $item['lookup_source'] = (string) $extras['lookup_source'];
+    }
+    if ((string) ($extras['lookup_id'] ?? '') !== '') {
+        $item['lookup_id'] = (string) $extras['lookup_id'];
+    }
+    if ((string) ($extras['detail_url'] ?? '') !== '') {
+        $item['detail_url'] = (string) $extras['detail_url'];
+    }
+    if (isset($extras['original_year']) && is_numeric($extras['original_year'])) {
+        $item['original_year'] = (int) $extras['original_year'];
+    }
+    if (is_array($extras['lookup_candidates'] ?? null)) {
+        $item['lookup_candidates'] = $extras['lookup_candidates'];
     }
     if (isset($extras['runtime']) && is_numeric($extras['runtime']) && (int) $extras['runtime'] > 0) {
         $item['runtime'] = (int) $extras['runtime'];
@@ -383,8 +406,50 @@ function catalog_store_delete_missing(PDO $pdo, string $table, array $ids): void
     $pdo->exec('DROP TABLE IF EXISTS keep_ids');
 }
 
+function catalog_store_keep_user_media(PDO $pdo, array $item): array
+{
+    $fileId = (string) ($item['id'] ?? '');
+    if ($fileId === '' || !preg_match('/^[a-f0-9]{16}$/', $fileId)) {
+        return $item;
+    }
+    $stmt = $pdo->prepare('SELECT i.year AS item_year, i.poster_path, i.extras_json FROM items i INNER JOIN files f ON f.item_id = i.id WHERE f.id = ?');
+    $stmt->execute([$fileId]);
+    $prev = $stmt->fetch();
+    if (!is_array($prev)) {
+        return $item;
+    }
+    $prevExtras = catalog_json_decode(isset($prev['extras_json']) && is_string($prev['extras_json']) ? $prev['extras_json'] : null);
+    $yearSource = (string) ($item['year_source'] ?? '');
+    $status = function_exists('library_item_status') ? library_item_status($item) : (string) ($item['status'] ?? '');
+    if ($yearSource === 'file') {
+        unset($item['year_source']);
+    } elseif ($yearSource !== 'user' && $status !== 'matched' && ($prevExtras['year_source'] ?? '') === 'user') {
+        $prevYear = $prev['item_year'];
+        $item['year'] = $prevYear !== null && $prevYear !== '' ? (int) $prevYear : null;
+        $item['year_source'] = 'user';
+    }
+    $incomingPoster = isset($item['poster_path']) && is_string($item['poster_path']) ? $item['poster_path'] : '';
+    $dropPoster = ($item['poster_source'] ?? '') === 'file';
+    unset($item['poster_source']);
+    if ($incomingPoster !== '') {
+        unset($item['poster_cleared']);
+    } elseif ($dropPoster || !empty($item['poster_cleared']) || !empty($prevExtras['poster_cleared'])) {
+        $item['poster_path'] = null;
+        if (!empty($item['poster_cleared']) || !empty($prevExtras['poster_cleared'])) {
+            $item['poster_cleared'] = true;
+        }
+    } else {
+        $prevPoster = isset($prev['poster_path']) && is_string($prev['poster_path']) ? $prev['poster_path'] : null;
+        if (function_exists('poster_local_disk') && poster_local_disk($prevPoster) !== null) {
+            $item['poster_path'] = $prevPoster;
+        }
+    }
+    return $item;
+}
+
 function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $now, array &$keepFileIds, array &$keepItemIds): void
 {
+    $item = catalog_store_keep_user_media($pdo, $item);
     $fileId = (string) $item['id'];
     $root = (string) ($item['root'] ?? '');
     $rel = str_replace('\\', '/', (string) ($item['path'] ?? ''));
@@ -463,9 +528,43 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
         'overview' => (string) ($item['overview'] ?? ''),
         'media_type' => (string) ($item['media_type'] ?? ''),
     ];
+    if (($item['year_source'] ?? '') === 'user') {
+        $extras['year_source'] = 'user';
+    }
+    if (!empty($item['poster_cleared'])) {
+        $extras['poster_cleared'] = true;
+    }
     if (isset($item['vote_average']) && is_numeric($item['vote_average'])) {
         $extras['vote_average'] = (float) $item['vote_average'];
-        $extras['vote_count'] = max(0, (int) ($item['vote_count'] ?? 0));
+        if (isset($item['vote_count']) && is_numeric($item['vote_count'])) {
+            $extras['vote_count'] = max(0, (int) $item['vote_count']);
+        }
+    }
+    if ((string) ($item['lookup_source'] ?? '') !== '') {
+        $extras['lookup_source'] = (string) $item['lookup_source'];
+    }
+    if ((string) ($item['lookup_id'] ?? '') !== '') {
+        $extras['lookup_id'] = (string) $item['lookup_id'];
+    }
+    if ((string) ($item['detail_url'] ?? '') !== '') {
+        $extras['detail_url'] = (string) $item['detail_url'];
+    }
+    if (isset($item['original_year']) && is_numeric($item['original_year'])) {
+        $extras['original_year'] = (int) $item['original_year'];
+    }
+    if (is_array($item['lookup_candidates'] ?? null) && $item['lookup_candidates'] !== []) {
+        $kept = [];
+        foreach ($item['lookup_candidates'] as $cand) {
+            if (is_array($cand)) {
+                $kept[] = $cand;
+            }
+            if (count($kept) >= 6) {
+                break;
+            }
+        }
+        if ($kept !== []) {
+            $extras['lookup_candidates'] = $kept;
+        }
     }
     if (isset($item['runtime']) && is_numeric($item['runtime']) && (int) $item['runtime'] > 0) {
         $extras['runtime'] = (int) $item['runtime'];
@@ -518,6 +617,10 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
         $rank = 0;
         foreach ($cands as $cand) {
             if (!is_array($cand)) {
+                continue;
+            }
+            $candSource = (string) ($cand['source'] ?? 'TMDB');
+            if ($candSource !== '' && strcasecmp($candSource, 'TMDB') !== 0) {
                 continue;
             }
             $tid = (int) ($cand['id'] ?? $cand['tmdb_id'] ?? 0);

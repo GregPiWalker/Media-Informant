@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/cache.php';
 require_once __DIR__ . '/parser.php';
+require_once __DIR__ . '/lookup.php';
 
 function folder_cache_path(): string
 {
@@ -103,6 +104,20 @@ function scan_parse_path(string $root, string $path, string $category = ''): arr
     }
     $parsed['kind'] = $kind;
     $parsed['grouped'] = $grouped;
+    if (function_exists('rifftrax_identify')) {
+        $riff = rifftrax_identify($root, $path);
+        if (!empty($riff['match'])) {
+            $parsed['lookup_source'] = 'RiffTrax';
+            $parsed['rifftrax_via'] = (string) ($riff['via'] ?? '');
+            if (($riff['title'] ?? '') !== '') {
+                $parsed['title'] = (string) $riff['title'];
+            }
+            $parsed['kind'] = 'movie';
+            if (!function_exists('parse_named_part') || parse_named_part(basename(str_replace('\\', '/', $path))) === null) {
+                $parsed['grouped'] = false;
+            }
+        }
+    }
     return $parsed;
 }
 

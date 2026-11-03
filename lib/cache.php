@@ -508,7 +508,7 @@ function library_normalize_match_source(string $source): string
     if ($source === 'tmdb' || $source === 'auto') {
         return 'direct';
     }
-    if ($source === 'direct' || $source === 'grok' || $source === 'manual' || $source === 'none') {
+    if ($source === 'direct' || $source === 'grok' || $source === 'manual' || $source === 'rifftrax' || $source === 'none') {
         return $source;
     }
     return 'none';
@@ -533,6 +533,7 @@ function library_match_source_label(string $source): string
         'grok' => 'Grok',
         'direct' => 'Direct',
         'manual' => 'Manual',
+        'rifftrax' => 'RiffTrax',
         default => 'None',
     };
 }
@@ -628,7 +629,16 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
         $item['poster_path'] = null;
         $item = library_set_auto_title($item, (string) ($item['title'] ?? 'Untitled'));
         $item['genres'] = [];
-        unset($item['vote_average'], $item['vote_count'], $item['runtime']);
+        unset(
+            $item['vote_average'],
+            $item['vote_count'],
+            $item['runtime'],
+            $item['lookup_source'],
+            $item['lookup_id'],
+            $item['detail_url'],
+            $item['original_year'],
+            $item['lookup_candidates']
+        );
         $item['year'] = library_filename_year($item);
         return $item;
     }
@@ -640,9 +650,13 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
     $item['tmdb_id'] = (int) $meta['tmdb_id'];
     $item['status'] = 'matched';
     $item['poster_path'] = $meta['poster_path'] ?? null;
+    if (!empty($meta['poster_path'])) {
+        unset($item['poster_cleared']);
+    }
     $item = library_set_auto_title($item, (string) ($meta['title'] ?? $item['title'] ?? 'Untitled'));
     if (!empty($meta['year'])) {
         $item['year'] = (int) $meta['year'];
+        unset($item['year_source']);
     }
     $item['genres'] = cache_string_list($meta['genres'] ?? []);
     $item['overview'] = trim((string) ($meta['overview'] ?? ''));
@@ -661,6 +675,13 @@ function cache_apply_tmdb_match(array $item, ?array $meta, string $source = 'dir
     if (!empty($meta['media_type']) && is_string($meta['media_type'])) {
         $item['media_type'] = $meta['media_type'];
     }
+    unset(
+        $item['lookup_source'],
+        $item['lookup_id'],
+        $item['detail_url'],
+        $item['original_year'],
+        $item['lookup_candidates']
+    );
     if (!library_has_user_kind($item)) {
         $item['kind'] = library_kind_from_genres($item['genres'], library_item_kind($item));
     }
@@ -698,17 +719,243 @@ function library_filename_year(array $item): ?int
     return $year >= 1870 && $year <= 2100 ? $year : null;
 }
 
+/** @return list<string> */
+function library_posted_genres(mixed $raw): array
+{
+    $genres = [];
+    $seen = [];
+    if (!is_array($raw)) {
+        return $genres;
+    }
+    foreach ($raw as $genre) {
+        if (!is_string($genre)) {
+            continue;
+        }
+        $genre = trim($genre);
+        if ($genre === '' || strlen($genre) > 48) {
+            continue;
+        }
+        $key = lower($genre);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $genres[] = $genre;
+    }
+    return $genres;
+}
+
+/** @return array{year: ?int, error: string} */
+function library_posted_year(mixed $raw): array
+{
+    $text = trim((string) $raw);
+    if ($text === '') {
+        return ['year' => null, 'error' => ''];
+    }
+    if (!preg_match('/^\d{4}$/', $text)) {
+        return ['year' => null, 'error' => 'Enter a year from 1870 to 2100, or leave Year blank.'];
+    }
+    $year = (int) $text;
+    if ($year < 1870 || $year > 2100) {
+        return ['year' => null, 'error' => 'Enter a year from 1870 to 2100, or leave Year blank.'];
+    }
+    return ['year' => $year, 'error' => ''];
+}
+
+/** @return list<string> */
+function library_known_genres(array $library): array
+{
+    $seen = [];
+    $out = [];
+    $items = $library['items'] ?? [];
+    if (!is_array($items)) {
+        return [];
+    }
+    foreach ($items as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+        foreach (cache_string_list($item['genres'] ?? []) as $genre) {
+            $genre = trim($genre);
+            if ($genre === '' || strlen($genre) > 48) {
+                continue;
+            }
+            $key = lower($genre);
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $genre;
+        }
+    }
+    usort($out, static function (string $a, string $b): int {
+        return strcasecmp($a, $b);
+    });
+    return $out;
+}
+
+function library_delete_poster_owner(string $ownerId): void
+{
+    if (!preg_match('/^[a-f0-9]{16}$/', $ownerId)) {
+        return;
+    }
+    $dir = CACHE_DIR . '/posters';
+    foreach (['jpg', 'png', 'webp', 'gif'] as $ext) {
+        $path = $dir . '/' . $ownerId . '.' . $ext;
+        if (is_file($path)) {
+            @unlink($path);
+        }
+    }
+}
+
+/**
+ * @param array<string, mixed> $file
+ * @return array{ok: bool, error: string, apply: bool, poster_path: ?string}
+ */
+function library_store_poster_upload(string $ownerId, array $file): array
+{
+    $fail = static function (string $error): array {
+        return ['ok' => false, 'error' => $error, 'apply' => false, 'poster_path' => null];
+    };
+    if (!preg_match('/^[a-f0-9]{16}$/', $ownerId)) {
+        return $fail('Could not store the poster.');
+    }
+    $err = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+        return $fail('That image is too large to upload.');
+    }
+    if ($err !== UPLOAD_ERR_OK) {
+        return $fail('Could not read that image.');
+    }
+    $tmp = (string) ($file['tmp_name'] ?? '');
+    $size = (int) ($file['size'] ?? 0);
+    if ($tmp === '' || !is_uploaded_file($tmp) || $size < 1) {
+        return $fail('Could not read that image.');
+    }
+    if ($size > 8 * 1024 * 1024) {
+        return $fail('That image is too large to upload. The limit is 8 MB.');
+    }
+    $info = @getimagesize($tmp);
+    $mime = is_array($info) ? (string) ($info['mime'] ?? '') : '';
+    $ext = match ($mime) {
+        'image/jpeg' => 'jpg',
+        'image/png' => 'png',
+        'image/webp' => 'webp',
+        'image/gif' => 'gif',
+        default => '',
+    };
+    if ($ext === '') {
+        return $fail('Choose a JPEG, PNG, WebP, or GIF image.');
+    }
+    $width = (int) ($info[0] ?? 0);
+    $height = (int) ($info[1] ?? 0);
+    if ($width < 1 || $height < 1 || $width > 8000 || $height > 8000) {
+        return $fail('That image is too large to use as a poster.');
+    }
+    $dir = CACHE_DIR . '/posters';
+    if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
+        return $fail('Could not store the poster. Check that cache/ is writable.');
+    }
+    $dest = $dir . '/' . $ownerId . '.' . $ext;
+    if (!@move_uploaded_file($tmp, $dest)) {
+        return $fail('Could not store the poster. Check that cache/ is writable.');
+    }
+    foreach (['jpg', 'png', 'webp', 'gif'] as $other) {
+        if ($other === $ext) {
+            continue;
+        }
+        $old = $dir . '/' . $ownerId . '.' . $other;
+        if (is_file($old)) {
+            @unlink($old);
+        }
+    }
+    return ['ok' => true, 'error' => '', 'apply' => true, 'poster_path' => 'local:' . $ownerId . '.' . $ext];
+}
+
+/** @return array{ok: bool, error: string, apply: bool, poster_path: ?string} */
+function library_take_poster_upload(string $ownerId, bool $remove): array
+{
+    $file = $_FILES['poster'] ?? null;
+    $hasFile = false;
+    if (is_array($file)) {
+        $err = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        $size = (int) ($file['size'] ?? 0);
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE || ($err === UPLOAD_ERR_OK && $size > 0) || ($err !== UPLOAD_ERR_NO_FILE && $err !== UPLOAD_ERR_OK)) {
+            $hasFile = true;
+        }
+    }
+    if ($hasFile && is_array($file)) {
+        return library_store_poster_upload($ownerId, $file);
+    }
+    if (!$remove) {
+        return ['ok' => true, 'error' => '', 'apply' => false, 'poster_path' => null];
+    }
+    if (!preg_match('/^[a-f0-9]{16}$/', $ownerId)) {
+        return ['ok' => false, 'error' => 'Could not remove the poster.', 'apply' => false, 'poster_path' => null];
+    }
+    return ['ok' => true, 'error' => '', 'apply' => true, 'poster_path' => null];
+}
+
+function library_clear_owned_poster(array $item): array
+{
+    $poster = isset($item['poster_path']) && is_string($item['poster_path']) ? $item['poster_path'] : '';
+    $id = (string) ($item['id'] ?? '');
+    if ($poster !== '' && function_exists('poster_is_local') && poster_is_local($poster) && str_starts_with(substr($poster, 6), $id . '.')) {
+        library_delete_poster_owner($id);
+    }
+    $item['poster_path'] = null;
+    $item['poster_source'] = 'file';
+    return $item;
+}
+
+function library_apply_edit_media(array $row, ?int $year, bool $applyPoster, ?string $posterPath): array
+{
+    $row['year'] = $year;
+    $row['year_source'] = 'user';
+    if (!$applyPoster) {
+        return $row;
+    }
+    if ($posterPath === null || $posterPath === '') {
+        $row = library_clear_owned_poster($row);
+        $row['poster_cleared'] = true;
+        return $row;
+    }
+    $rowId = (string) ($row['id'] ?? '');
+    $old = isset($row['poster_path']) && is_string($row['poster_path']) ? $row['poster_path'] : '';
+    if ($old !== '' && $old !== $posterPath && function_exists('poster_is_local') && poster_is_local($old) && str_starts_with(substr($old, 6), $rowId . '.')) {
+        $disk = poster_local_disk($old);
+        if ($disk !== null) {
+            @unlink($disk);
+        }
+    }
+    $row['poster_path'] = $posterPath;
+    unset($row['poster_cleared'], $row['poster_source']);
+    return $row;
+}
+
 function library_clear_match(array $item): array
 {
     $item['tmdb_id'] = null;
     $item['status'] = 'unidentified';
     $item['match_source'] = 'none';
-    $item['poster_path'] = null;
+    $item = library_clear_owned_poster($item);
     $item['tmdb_candidates'] = [];
-    unset($item['overview'], $item['vote_average'], $item['vote_count'], $item['runtime']);
+    unset(
+        $item['overview'],
+        $item['vote_average'],
+        $item['vote_count'],
+        $item['runtime'],
+        $item['poster_cleared'],
+        $item['lookup_source'],
+        $item['lookup_id'],
+        $item['detail_url'],
+        $item['original_year'],
+        $item['lookup_candidates']
+    );
     $item['genres'] = [];
     unset($item['media_type']);
     $item['year'] = library_filename_year($item);
+    $item['year_source'] = 'file';
     if (!library_has_custom_title($item)) {
         $item['display_title'] = (string) ($item['title'] ?? 'Untitled');
         unset($item['title_source']);
@@ -722,7 +969,7 @@ function library_clear_match(array $item): array
  */
 function library_heal_filename_year(string $id, array $item): array
 {
-    if ($id === '' || !empty($item['tmdb_id']) || library_item_status($item) === 'matched') {
+    if ($id === '' || ($item['year_source'] ?? '') === 'user' || !empty($item['tmdb_id']) || library_item_status($item) === 'matched') {
         return $item;
     }
     $parsed = library_filename_year($item);
@@ -731,7 +978,7 @@ function library_heal_filename_year(string $id, array $item): array
         return $item;
     }
     $updated = cache_update_item($id, static function (array $row): ?array {
-        if (!empty($row['tmdb_id']) || library_item_status($row) === 'matched') {
+        if (($row['year_source'] ?? '') === 'user' || !empty($row['tmdb_id']) || library_item_status($row) === 'matched') {
             return null;
         }
         $fresh = library_filename_year($row);

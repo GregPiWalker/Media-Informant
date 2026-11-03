@@ -258,6 +258,8 @@ final class CatalogRecord
         public bool $grouped = false,
         public bool $sourceAbsent = false,
         public ?int $displayEpisode = null,
+        public string $sourceFolder = '',
+        public string $sourceFolderKey = '',
     ) {
     }
 
@@ -399,6 +401,18 @@ final class CatalogRecord
         if ($category === '' && function_exists('settings_category_for_root')) {
             $category = settings_category_for_root((string) ($item['root'] ?? ''));
         }
+        $sourceFolder = '';
+        $sourceFolderKey = '';
+        if ($kind === 'movie') {
+            $sourceFolder = catalog_movie_folder(
+                (string) ($item['root'] ?? ''),
+                (string) ($item['path'] ?? ''),
+                (string) ($item['filename'] ?? '')
+            );
+            if ($sourceFolder !== '') {
+                $sourceFolderKey = lower((string) ($item['root'] ?? '')) . "\n" . lower($sourceFolder);
+            }
+        }
 
         return new self(
             $id,
@@ -435,6 +449,8 @@ final class CatalogRecord
             $grouped,
             function_exists('source_is_absent_for_item') && source_is_absent_for_item($item),
             $grouped && $kind === 'show' ? $listEpisode : null,
+            $sourceFolder,
+            $sourceFolderKey,
         );
     }
 
@@ -543,6 +559,38 @@ function catalog_poster_bucket(CatalogGroup $group, string $sort): string
         $title = $group->isSeries() ? $head->seriesTitle : $head->title;
     }
     return catalog_title_bucket($title);
+}
+
+/**
+ * Folder name for a movie that should sit under a List-view parent.
+ * The first directory under the video root wins, so RiffTrax/Cool as Ice.mp4
+ * and RiffTrax/Shorts/Something.mp4 both use "RiffTrax". A file stored in the
+ * root itself has no folder, except a "RiffTrax - Title" filename, which
+ * still joins the RiffTrax parent.
+ */
+function catalog_movie_folder(string $root, string $path, string $filename = ''): string
+{
+    $rel = str_replace('\\', '/', $path);
+    $rootNorm = rtrim(str_replace('\\', '/', $root), '/');
+    if ($rootNorm !== '' && str_starts_with(strtolower($rel), strtolower($rootNorm) . '/')) {
+        $rel = substr($rel, strlen($rootNorm) + 1);
+    }
+    $rel = ltrim($rel, '/');
+    $segments = [];
+    foreach (explode('/', $rel) as $segment) {
+        if ($segment !== '' && $segment !== '.') {
+            $segments[] = $segment;
+        }
+    }
+    if (count($segments) >= 2) {
+        return $segments[0];
+    }
+    $base = $filename !== '' ? basename(str_replace('\\', '/', $filename)) : ($segments[0] ?? '');
+    $stem = pathinfo($base, PATHINFO_FILENAME);
+    if (preg_match('/^rifftrax\s+-\s+/i', $stem) === 1) {
+        return 'RiffTrax';
+    }
+    return '';
 }
 
 /** @return array<string, string> */
@@ -1003,6 +1051,153 @@ function catalog_sort_groups(array $groups, CatalogPreferences $prefs): array
         return $cmp * $dir;
     });
     return $groups;
+}
+
+/**
+ * List rows with a parent for movies that share a folder under a video root.
+ * A TV show stays its own group. Poster and Genre views do not use this.
+ *
+ * @param list<CatalogGroup> $groups
+ * @return list<array<string, mixed>>
+ */
+function catalog_list_entries(array $groups, CatalogPreferences $prefs): array
+{
+    $loose = [];
+    $buckets = [];
+    foreach ($groups as $group) {
+        $key = catalog_group_folder_key($group);
+        if ($key === '') {
+            $loose[] = $group;
+            continue;
+        }
+        if (!isset($buckets[$key])) {
+            $buckets[$key] = [
+                'label' => catalog_group_folder_label($group),
+                'groups' => [],
+            ];
+        }
+        $buckets[$key]['groups'][] = $group;
+    }
+    $entries = [];
+    foreach ($loose as $group) {
+        $entries[] = [
+            'type' => 'group',
+            'group' => $group,
+            'sortKeys' => $group->head->sortKeys,
+        ];
+    }
+    foreach ($buckets as $key => $bucket) {
+        $members = $bucket['groups'];
+        usort($members, static function (CatalogGroup $a, CatalogGroup $b): int {
+            return strnatcasecmp(catalog_group_list_title($a), catalog_group_list_title($b));
+        });
+        $entries[] = catalog_folder_entry($key, (string) $bucket['label'], $members);
+    }
+    $col = $prefs->sort;
+    $dir = $prefs->dir === 'desc' ? -1 : 1;
+    usort($entries, static function (array $a, array $b) use ($col, $dir): int {
+        $sa = (string) ($a['sortKeys'][$col] ?? $a['sortKeys']['title'] ?? '');
+        $sb = (string) ($b['sortKeys'][$col] ?? $b['sortKeys']['title'] ?? '');
+        $cmp = strnatcasecmp($sa, $sb);
+        if ($cmp === 0) {
+            $cmp = strnatcasecmp((string) ($a['sortKeys']['title'] ?? ''), (string) ($b['sortKeys']['title'] ?? ''));
+        }
+        return $cmp * $dir;
+    });
+    return $entries;
+}
+
+function catalog_group_list_title(CatalogGroup $group): string
+{
+    if ($group->isPartMovie() || $group->isSeries()) {
+        $title = $group->head->seriesTitle;
+        if ($title !== '') {
+            return $title;
+        }
+    }
+    return $group->head->title;
+}
+
+/**
+ * Movies in one root folder share a key. A show, or a part set split across
+ * folders, stays out of the folder parent.
+ */
+function catalog_group_folder_key(CatalogGroup $group): string
+{
+    if ($group->kind === 'show' || ($group->isSeries() && !$group->isPartMovie())) {
+        return '';
+    }
+    $key = '';
+    foreach ($group->members as $member) {
+        if ($member->kind !== 'movie' || $member->sourceFolderKey === '') {
+            return '';
+        }
+        if ($key === '') {
+            $key = $member->sourceFolderKey;
+            continue;
+        }
+        if ($key !== $member->sourceFolderKey) {
+            return '';
+        }
+    }
+    return $key;
+}
+
+function catalog_group_folder_label(CatalogGroup $group): string
+{
+    foreach ($group->members as $member) {
+        if ($member->sourceFolder !== '') {
+            return $member->sourceFolder;
+        }
+    }
+    return '';
+}
+
+/**
+ * @param list<CatalogGroup> $members
+ * @return array<string, mixed>
+ */
+function catalog_folder_entry(string $key, string $label, array $members): array
+{
+    $search = [lower($label)];
+    $year = '0000';
+    $status = '';
+    $genres = '';
+    $category = '';
+    foreach ($members as $group) {
+        $search[] = $group->search();
+        $head = $group->head;
+        $memberYear = (string) ($head->sortKeys['year'] ?? '');
+        if ($memberYear !== '' && $memberYear !== '0000' && ($year === '0000' || $memberYear < $year)) {
+            $year = $memberYear;
+        }
+        $memberStatus = (string) ($head->sortKeys['status'] ?? '');
+        if ($status === '' || ($memberStatus !== '' && $memberStatus < $status)) {
+            $status = $memberStatus;
+        }
+        $memberGenres = (string) ($head->sortKeys['genres'] ?? '');
+        if ($genres === '' || ($memberGenres !== '' && $memberGenres < $genres)) {
+            $genres = $memberGenres;
+        }
+        if ($category === '' && $head->category !== '') {
+            $category = $head->category;
+        }
+    }
+    return [
+        'type' => 'folder',
+        'id' => 'folder:' . substr(hash('sha256', $key), 0, 16),
+        'label' => $label,
+        'groups' => $members,
+        'count' => count($members),
+        'search' => implode(' ', $search),
+        'category' => $category,
+        'sortKeys' => [
+            'title' => lower($label),
+            'year' => $year,
+            'status' => $status,
+            'genres' => $genres,
+        ],
+    ];
 }
 
 /** @param list<CatalogRecord> $records */

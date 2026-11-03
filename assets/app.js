@@ -164,6 +164,210 @@
     return row;
   }
 
+  var knownGenres = [];
+  var knownNode = document.getElementById('known-genres');
+  if (knownNode) {
+    try {
+      var parsedGenres = JSON.parse(knownNode.textContent || '[]');
+      if (parsedGenres && parsedGenres.length) knownGenres = parsedGenres;
+    } catch (err) {}
+  }
+
+  var genreNew = document.querySelector('[data-genre-new]');
+  var genrePopup = null;
+  var genreActive = 0;
+
+  function hideGenreSuggest() {
+    if (!genrePopup) return;
+    genrePopup.hidden = true;
+    genrePopup.innerHTML = '';
+    if (genreNew) {
+      genreNew.setAttribute('aria-expanded', 'false');
+      genreNew.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function genreCaretBox(input) {
+    var style = window.getComputedStyle(input);
+    var mirror = document.createElement('span');
+    mirror.style.position = 'absolute';
+    mirror.style.left = '-9999px';
+    mirror.style.top = '0';
+    mirror.style.whiteSpace = 'pre';
+    mirror.style.font = style.font;
+    mirror.style.letterSpacing = style.letterSpacing;
+    var index = input.selectionStart;
+    if (index == null || index < 0) index = input.value.length;
+    mirror.textContent = input.value.slice(0, index);
+    document.body.appendChild(mirror);
+    var width = mirror.getBoundingClientRect().width;
+    document.body.removeChild(mirror);
+    var rect = input.getBoundingClientRect();
+    var padLeft = parseFloat(style.paddingLeft) || 0;
+    var borderLeft = parseFloat(style.borderLeftWidth) || 0;
+    var fontSize = parseFloat(style.fontSize) || 16;
+    return {
+      x: rect.left + borderLeft + padLeft + width - (input.scrollLeft || 0),
+      y: rect.top + (rect.height / 2) + (fontSize * 0.55)
+    };
+  }
+
+  function placeGenreSuggest() {
+    if (!genrePopup || !genreNew || genrePopup.hidden) return;
+    var box = genreCaretBox(genreNew);
+    genrePopup.style.left = '0px';
+    genrePopup.style.top = '0px';
+    var width = genrePopup.offsetWidth;
+    var height = genrePopup.offsetHeight;
+    var x = box.x;
+    var maxLeft = window.innerWidth - width - 8;
+    if (x > maxLeft) x = maxLeft;
+    if (x < 8) x = 8;
+    var y = box.y + 2;
+    if (y + height > window.innerHeight - 8) y = Math.max(8, box.y - height - 6);
+    genrePopup.style.left = x + 'px';
+    genrePopup.style.top = y + 'px';
+  }
+
+  function setGenreActive(index) {
+    if (!genrePopup) return;
+    var buttons = genrePopup.querySelectorAll('button');
+    if (!buttons.length) return;
+    if (index < 0) index = buttons.length - 1;
+    if (index >= buttons.length) index = 0;
+    genreActive = index;
+    for (var i = 0; i < buttons.length; i++) {
+      var on = i === index;
+      buttons[i].classList.toggle('is-active', on);
+      if (on) {
+        buttons[i].setAttribute('aria-selected', 'true');
+        if (genreNew) genreNew.setAttribute('aria-activedescendant', buttons[i].id);
+      } else {
+        buttons[i].removeAttribute('aria-selected');
+      }
+    }
+  }
+
+  function genreMatches(prefix) {
+    var typed = prefix.trim().toLowerCase();
+    if (!typed) return [];
+    var used = {};
+    var list = document.querySelector('[data-genre-list]');
+    if (list) {
+      list.querySelectorAll('input[name="genres[]"]').forEach(function (input) {
+        used[(input.value || '').toLowerCase()] = true;
+      });
+    }
+    var out = [];
+    for (var i = 0; i < knownGenres.length; i++) {
+      var name = knownGenres[i];
+      if (typeof name !== 'string') continue;
+      var low = name.toLowerCase();
+      if (used[low] || low === typed || low.indexOf(typed) !== 0) continue;
+      out.push(name);
+    }
+    out.sort(function (a, b) {
+      if (a.length !== b.length) return a.length - b.length;
+      var al = a.toLowerCase();
+      var bl = b.toLowerCase();
+      if (al < bl) return -1;
+      if (al > bl) return 1;
+      return 0;
+    });
+    return out.slice(0, 6);
+  }
+
+  function refreshGenreSuggest() {
+    if (!genreNew || !genrePopup) return;
+    var matches = genreMatches(genreNew.value);
+    genrePopup.innerHTML = '';
+    if (!matches.length) {
+      hideGenreSuggest();
+      return;
+    }
+    matches.forEach(function (name, index) {
+      var option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'genre-suggest-item';
+      option.id = 'genre-suggest-' + index;
+      option.setAttribute('role', 'option');
+      option.setAttribute('data-genre-suggest', name);
+      option.textContent = name;
+      option.addEventListener('mousedown', function (event) {
+        event.preventDefault();
+        acceptGenreSuggest(name);
+      });
+      genrePopup.appendChild(option);
+    });
+    genrePopup.hidden = false;
+    genreNew.setAttribute('aria-expanded', 'true');
+    genreActive = 0;
+    setGenreActive(0);
+    placeGenreSuggest();
+  }
+
+  function acceptGenreSuggest(name) {
+    if (!genreNew) return;
+    genreNew.value = name;
+    hideGenreSuggest();
+    addGenreFromInput();
+  }
+
+  if (genreNew) {
+    genrePopup = document.createElement('div');
+    genrePopup.className = 'genre-suggest';
+    genrePopup.id = 'genre-suggest';
+    genrePopup.hidden = true;
+    genrePopup.setAttribute('role', 'listbox');
+    document.body.appendChild(genrePopup);
+    genreNew.setAttribute('role', 'combobox');
+    genreNew.setAttribute('aria-autocomplete', 'list');
+    genreNew.setAttribute('aria-controls', 'genre-suggest');
+    genreNew.setAttribute('aria-expanded', 'false');
+    genreNew.addEventListener('input', refreshGenreSuggest);
+    genreNew.addEventListener('click', function () {
+      if (genrePopup && !genrePopup.hidden) placeGenreSuggest();
+    });
+    genreNew.addEventListener('keydown', function (event) {
+      var open = genrePopup && !genrePopup.hidden;
+      if (event.key === 'ArrowDown') {
+        if (!open) refreshGenreSuggest();
+        if (genrePopup && !genrePopup.hidden) {
+          event.preventDefault();
+          if (open) setGenreActive(genreActive + 1);
+        }
+        return;
+      }
+      if (event.key === 'ArrowUp' && open) {
+        event.preventDefault();
+        setGenreActive(genreActive - 1);
+        return;
+      }
+      if (event.key === 'Escape' && open) {
+        event.preventDefault();
+        hideGenreSuggest();
+        return;
+      }
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      if (open) {
+        var current = genrePopup.querySelector('button.is-active');
+        if (current) {
+          acceptGenreSuggest(current.getAttribute('data-genre-suggest') || '');
+          return;
+        }
+      }
+      addGenreFromInput();
+    });
+    window.addEventListener('resize', placeGenreSuggest);
+    window.addEventListener('scroll', placeGenreSuggest, true);
+    document.addEventListener('mousedown', function (event) {
+      if (!genrePopup || genrePopup.hidden) return;
+      if (genrePopup.contains(event.target) || genreNew.contains(event.target)) return;
+      hideGenreSuggest();
+    });
+  }
+
   function addGenreFromInput() {
     var list = document.querySelector('[data-genre-list]');
     var field = document.querySelector('[data-genre-new]');
@@ -176,6 +380,7 @@
     });
     if (!exists) list.appendChild(genreRow(name));
     field.value = '';
+    hideGenreSuggest();
     field.focus();
   }
 
@@ -190,15 +395,6 @@
     var row = remove.closest('[data-genre-row]');
     if (row) row.remove();
   });
-
-  var genreNew = document.querySelector('[data-genre-new]');
-  if (genreNew) {
-    genreNew.addEventListener('keydown', function (event) {
-      if (event.key !== 'Enter') return;
-      event.preventDefault();
-      addGenreFromInput();
-    });
-  }
 
   var input = document.querySelector('[data-search-input]');
   if (input && !document.querySelector('[data-catalog]')) {

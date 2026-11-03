@@ -67,6 +67,116 @@ function catalog_sort_attrs(CatalogRecord $record): string
     return $out;
 }
 
+/** @param array<string, string> $keys */
+function catalog_sort_attr_map(array $keys): string
+{
+    $out = '';
+    foreach ($keys as $key => $val) {
+        $out .= ' data-sort-' . h((string) $key) . '="' . h((string) $val) . '"';
+    }
+    return $out;
+}
+
+/**
+ * Parent row for movies that share a folder under a video root.
+ * Children are indented like episodes under a season.
+ *
+ * @param array<string, mixed> $entry
+ */
+function catalog_render_list_folder(array $entry): void
+{
+    $id = (string) ($entry['id'] ?? '');
+    $label = (string) ($entry['label'] ?? '');
+    $count = (int) ($entry['count'] ?? 0);
+    $noun = $count === 1 ? 'movie' : 'movies';
+    $category = (string) ($entry['category'] ?? '');
+    if ($category === '') {
+        $category = 'none';
+    }
+    $search = (string) ($entry['search'] ?? '');
+    $sortKeys = is_array($entry['sortKeys'] ?? null) ? $entry['sortKeys'] : [];
+    ?>
+    <tr class="catalog-season" data-group="<?= h($id) ?>" data-kind="movie" data-category="<?= h($category) ?>" data-search="<?= h($search) ?>"<?= catalog_sort_attr_map($sortKeys) ?>>
+      <td data-col="poster"></td>
+      <td data-col="title">
+        <button type="button" class="expand-btn" data-expand="<?= h($id) ?>" aria-expanded="false" aria-label="Show <?= h($label) ?>">
+          <span class="expand-caret" aria-hidden="true"></span>
+          <span class="catalog-row-title"><?= h($label) ?></span>
+          <span class="episode-count"><?= $count ?> <?= $noun ?></span>
+        </button>
+      </td>
+      <td data-col="year"></td>
+      <td data-col="status"></td>
+      <td data-col="genres"></td>
+    </tr>
+    <?php
+}
+
+function catalog_render_list_folder_child(CatalogGroup $group, string $parentId): void
+{
+    $head = $group->head;
+    if ($group->isPartMovie()) {
+        $partMembers = $group->members;
+        usort($partMembers, static function (CatalogRecord $a, CatalogRecord $b): int {
+            return catalog_part_number($a->partLabel) <=> catalog_part_number($b->partLabel);
+        });
+        $label = $head->seriesTitle !== '' ? $head->seriesTitle : $head->title;
+        $count = count($partMembers);
+        ?>
+    <tr class="catalog-episode" hidden data-nest="1" data-group="<?= h($group->id) ?>" data-parent="<?= h($parentId) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?>>
+      <td data-col="poster"></td>
+      <td data-col="title">
+        <div class="catalog-group-cell">
+          <?= catalog_thumb_button($head, 'sm', $label, $count . ' parts', 'catalog-inline-poster') ?>
+          <button type="button" class="expand-btn" data-expand="<?= h($group->id) ?>" aria-expanded="false" aria-label="Show parts">
+            <span class="expand-caret" aria-hidden="true"></span>
+          </button>
+          <a class="catalog-group-link" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>">
+            <span class="catalog-row-title"><?= h($label) ?></span>
+            <span class="episode-count"><?= (int) $count ?> <?= $count === 1 ? 'part' : 'parts' ?></span>
+          </a>
+        </div>
+      </td>
+      <td data-col="year"><?= h($head->cells['year']) ?></td>
+      <td data-col="status"><?= h($head->cells['status']) ?></td>
+      <td data-col="genres"><?= h($head->cells['genres']) ?></td>
+    </tr>
+        <?php foreach ($partMembers as $record):
+            $partName = $record->partLabel !== '' ? $record->partLabel : $record->title;
+            ?>
+    <tr class="catalog-part" hidden data-nest="2" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+      <td data-col="poster"></td>
+      <td data-col="title">
+        <div class="catalog-group-cell">
+          <?= catalog_thumb_button($record, 'sm', $partName, '', 'catalog-inline-poster') ?>
+          <a class="catalog-row-link catalog-row-title" href="<?= h(app_href('video/' . catalog_group_href($group))) ?>"><?= h($partName) ?></a>
+        </div>
+      </td>
+      <td data-col="year"><?= h($record->cells['year']) ?></td>
+      <td data-col="status"><?= h($record->cells['status']) ?></td>
+      <td data-col="genres"><?= h($record->cells['genres']) ?></td>
+    </tr>
+        <?php endforeach;
+        return;
+    }
+    ?>
+    <tr class="catalog-episode" hidden data-nest="1" data-card data-parent="<?= h($parentId) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?>>
+      <td data-col="poster"></td>
+      <td data-col="title">
+        <div class="catalog-group-cell">
+          <?= catalog_thumb_button($head, 'sm', $head->title, '', 'catalog-inline-poster') ?>
+          <a class="catalog-row-link" href="<?= h($head->href) ?>">
+            <span class="catalog-row-title"><?= h($head->title) ?></span>
+          </a>
+        </div>
+      </td>
+      <td data-col="year"><?= h($head->cells['year']) ?></td>
+      <td data-col="status"><?= h($head->cells['status']) ?></td>
+      <td data-col="genres"><?= h($head->cells['genres']) ?></td>
+    </tr>
+    <?php
+}
+
 render_start('Video · Media Informant');
 render_header(['search' => true, 'section' => 'video', 'branches' => true]);
 
@@ -207,7 +317,17 @@ $view = $prefs->view;
             </tr>
           </thead>
           <tbody data-list-body>
-            <?php foreach ($groups as $group):
+            <?php
+            $listEntries = catalog_list_entries($groups, $prefs);
+            foreach ($listEntries as $entry):
+                if (($entry['type'] ?? '') === 'folder') {
+                    catalog_render_list_folder($entry);
+                    foreach ($entry['groups'] as $folderGroup) {
+                        catalog_render_list_folder_child($folderGroup, (string) $entry['id']);
+                    }
+                    continue;
+                }
+                $group = $entry['group'];
                 $head = $group->head;
                 $series = $group->isSeries();
                 $partMovie = $group->isPartMovie();

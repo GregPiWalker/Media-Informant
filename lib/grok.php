@@ -6,12 +6,12 @@ declare(strict_types=1);
  *
  * Cost: uses grok-4-1-fast-non-reasoning (fallback grok-4-1-fast), never a
  * flagship/reasoning model. Files are batched (default 25, max 50) with a
- * short JSON payload (path, parsed title/year, up to 5 TMDB candidates).
+ * short JSON payload (path, parsed title/year, up to 6 TMDB or RiffTrax candidates).
  * A full ~2500-file unmatched pass is ~100 API calls. At about $0.20/1M
  * input and $0.50/1M output tokens, that stay well under a few dollars.
  *
- * Grok does not replace TMDB. During Scan it runs in batches of 25 after
- * TMDB queues that many failures (and leftover titles at the end).
+ * Grok does not replace TMDB or RiffTrax. During Scan it runs in batches of 25 after
+ * those lookups queue that many failures (and leftover titles at the end).
  */
 
 require_once __DIR__ . '/config.php';
@@ -22,13 +22,18 @@ require_once __DIR__ . '/scanner.php';
 
 function grok_system_prompt(): string
 {
-    return "You match video filenames to TMDB records.\n"
-        . "Never invent an id. Only use an id from that item's candidate list.\n"
+    return "You match video filenames to catalog records from TMDB or RiffTrax.\n"
+        . "Each candidate has source (\"TMDB\" or \"RiffTrax\"), id, title, and year.\n"
+        . "Use those fields the same way for every source. Never invent an id or a source.\n"
+        . "Only use an id from that item's candidate list, and keep that candidate's source.\n"
+        . "When two RiffTrax candidates are the same film, prefer product_kind \"riff\" over \"iriff\".\n"
+        . "Match the filename. The parsed title, or catalog_query, may be only part of that name.\n"
+        . "RiffTrax candidates may come from a catalog search; pick the title that is the same work as the file, or null.\n"
         . "mode=choose: pick the best candidate or null.\n"
         . "mode=verify: return that single candidate id unless it is clearly a different work.\n"
         . "Missing year or punctuation is not a reason to reject.\n"
         . "Reply with JSON only:\n"
-        . '[{"path":"...","tmdb_id":123 or null,"confidence":0.0-1.0,"reason":"short"}]';
+        . '[{"path":"...","source":"TMDB","id":123 or null,"confidence":0.0-1.0,"reason":"short"}]';
 }
 
 function grok_resolve_available(): bool
@@ -370,18 +375,29 @@ function grok_compact_candidates(array $candidates): array
         if (!is_array($row)) {
             continue;
         }
-        $id = (int) ($row['id'] ?? $row['tmdb_id'] ?? 0);
-        if ($id < 1 || isset($seen[$id])) {
+        $id = (int) ($row['id'] ?? $row['lookup_id'] ?? $row['tmdb_id'] ?? 0);
+        $source = trim((string) ($row['source'] ?? 'TMDB'));
+        if ($source === '') {
+            $source = 'TMDB';
+        }
+        $seenKey = strtolower($source) . ':' . $id;
+        if ($id < 1 || isset($seen[$seenKey])) {
             continue;
         }
-        $seen[$id] = true;
+        $seen[$seenKey] = true;
         $year = $row['year'] ?? null;
-        $out[] = [
+        $one = [
+            'source' => strcasecmp($source, 'RiffTrax') === 0 ? 'RiffTrax' : 'TMDB',
             'id' => $id,
             'title' => (string) ($row['title'] ?? ''),
             'year' => is_numeric($year) ? (int) $year : null,
             'media_type' => (string) ($row['media_type'] ?? 'movie'),
         ];
+        $kind = strtolower(trim((string) ($row['product_kind'] ?? '')));
+        if ($kind === 'riff' || $kind === 'iriff') {
+            $one['product_kind'] = $kind;
+        }
+        $out[] = $one;
         if (count($out) >= (function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6)) {
             break;
         }
@@ -393,16 +409,86 @@ function grok_candidate_ids(array $candidates): array
 {
     $ids = [];
     foreach (grok_compact_candidates($candidates) as $row) {
-        $ids[(int) $row['id']] = true;
+        $ids[strtolower((string) $row['source']) . ':' . (int) $row['id']] = $row;
     }
     return $ids;
 }
 
+/**
+ * Candidates already stored for this file. RiffTrax rows stay out of the TMDB id list.
+ *
+ * @return list<array<string, mixed>>
+ */
+function grok_item_candidates(array $item): array
+{
+    $lookup = grok_compact_candidates($item['lookup_candidates'] ?? []);
+    if ($lookup !== []) {
+        return $lookup;
+    }
+    // A RiffTrax miss can leave TMDB hits on the item. Those are the fallback
+    // candidates. An identified file with no hits still returns an empty list,
+    // and grok_ensure_candidates searches RiffTrax before TMDB.
+    return grok_compact_candidates($item['tmdb_candidates'] ?? []);
+}
+
+/**
+ * Read source and id from one Grok row. An omitted source matches the only candidate with that id.
+ *
+ * @param array<string, array<string, mixed>> $allowed
+ * @return array{source:string, id:?int}
+ */
+function grok_resolve_choice(array $allowed, ?array $row): array
+{
+    $source = '';
+    $id = null;
+    if (is_array($row)) {
+        $source = trim((string) ($row['source'] ?? ''));
+        $raw = $row['id'] ?? $row['lookup_id'] ?? $row['tmdb_id'] ?? null;
+        if ($raw !== null && $raw !== '' && $raw !== false) {
+            $id = (int) $raw;
+        }
+    }
+    if ($id === null || $id < 1) {
+        return ['source' => $source !== '' ? $source : 'TMDB', 'id' => null];
+    }
+    $hits = [];
+    foreach ($allowed as $cand) {
+        if ((int) ($cand['id'] ?? 0) !== $id) {
+            continue;
+        }
+        if ($source !== '' && strcasecmp($source, (string) ($cand['source'] ?? '')) !== 0) {
+            continue;
+        }
+        $hits[] = $cand;
+    }
+    if (count($hits) === 1) {
+        return ['source' => (string) $hits[0]['source'], 'id' => $id];
+    }
+    return ['source' => $source !== '' ? $source : 'TMDB', 'id' => null];
+}
+
+function grok_apply_resolved(array $item, string $source, int $id): array
+{
+    if (strcasecmp($source, 'RiffTrax') === 0) {
+        $service = function_exists('lookup_service') ? lookup_service('RiffTrax') : null;
+        $meta = $service ? $service->fetch((string) $id) : null;
+        if (!$meta instanceof VideoMetadata || !function_exists('lookup_apply_metadata')) {
+            throw new RuntimeException('Could not load RiffTrax title ' . $id . '.');
+        }
+        return lookup_apply_metadata($item, $meta, 'grok');
+    }
+    return grok_apply_choice($item, $id);
+}
+
 function grok_ensure_candidates(array &$item): array
 {
-    $existing = grok_compact_candidates($item['tmdb_candidates'] ?? []);
+    $existing = grok_item_candidates($item);
     if ($existing !== []) {
-        $item['tmdb_candidates'] = $existing;
+        if (($existing[0]['source'] ?? '') === 'RiffTrax') {
+            $item['lookup_candidates'] = $existing;
+        } else {
+            $item['tmdb_candidates'] = $existing;
+        }
         return $existing;
     }
     $title = (string) ($item['title'] ?? '');
@@ -410,9 +496,49 @@ function grok_ensure_candidates(array &$item): array
         ? (int) $item['year']
         : null;
     $filename = (string) ($item['filename'] ?? '');
-    $found = tmdb_search_candidates($title, $year, function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6, $filename, tmdb_search_meta_from_item($item));
+    $path = (string) ($item['path'] ?? '');
+    $root = (string) ($item['root'] ?? '');
+    $identified = ($item['lookup_source'] ?? '') === 'RiffTrax';
+    if (!$identified && function_exists('rifftrax_identify')) {
+        $identified = !empty(rifftrax_identify($root, $path, $filename)['match']);
+    }
+    $limit = function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6;
+    if ($identified && function_exists('lookup_service')) {
+        $service = lookup_service('RiffTrax');
+        $hits = $service ? $service->search($title, null, $limit, [
+            'filename' => $filename,
+            'path' => $path,
+            'official_only' => true,
+        ]) : [];
+        $item['lookup_source'] = 'RiffTrax';
+        $item['lookup_candidates'] = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+        return grok_compact_candidates($item['lookup_candidates']);
+    }
+    $service = function_exists('lookup_service') ? lookup_service('TMDB') : null;
+    $hits = $service ? $service->search($title, $year, $limit, [
+        'filename' => $filename,
+        'meta' => function_exists('tmdb_search_meta_from_item') ? tmdb_search_meta_from_item($item) : [],
+    ]) : [];
+    $found = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+    if ($found === [] && function_exists('rifftrax_identify') && function_exists('lookup_service')) {
+        $hint = rifftrax_identify($root, $path, $filename);
+        if (!empty($hint['fallback'])) {
+            $riff = lookup_service('RiffTrax');
+            $riffHits = $riff ? $riff->search($title, null, $limit, [
+                'filename' => $filename,
+                'path' => $path,
+                'official_only' => true,
+            ]) : [];
+            $riffRows = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($riffHits) : [];
+            if ($riffRows !== []) {
+                $item['lookup_source'] = 'RiffTrax';
+                $item['lookup_candidates'] = $riffRows;
+                return grok_compact_candidates($riffRows);
+            }
+        }
+    }
     $item['tmdb_candidates'] = $found;
-    return $found;
+    return grok_compact_candidates($found);
 }
 
 function grok_file_payload(array $item): array
@@ -423,7 +549,7 @@ function grok_file_payload(array $item): array
         'year' => isset($item['year']) && $item['year'] !== null && $item['year'] !== ''
             ? (int) $item['year']
             : null,
-        'candidates' => grok_compact_candidates($item['tmdb_candidates'] ?? []),
+        'candidates' => grok_item_candidates($item),
     ];
     $kind = (string) ($item['kind'] ?? '');
     if ($kind !== '') {
@@ -439,7 +565,72 @@ function grok_file_payload(array $item): array
     if ($episodeTitle !== '') {
         $payload['episode_title'] = $episodeTitle;
     }
+    $filename = trim((string) ($item['filename'] ?? ''));
+    if ($filename !== '') {
+        $payload['filename'] = $filename;
+    }
+    $catalogQuery = trim((string) ($item['catalog_query'] ?? ''));
+    if ($catalogQuery !== '') {
+        $payload['catalog_query'] = $catalogQuery;
+    }
     return $payload;
+}
+
+/**
+ * Ask Grok to choose one candidate for this file.
+ * Returns null when Grok is off, the request fails, or no candidate clears the confidence bar.
+ *
+ * @param array<string, mixed> $item
+ * @param list<array<string, mixed>> $candidates
+ * @return array{source:string, id:int}|null
+ */
+function grok_choose_for_item(array $item, array $candidates, string $catalogQuery = ''): ?array
+{
+    if (!grok_live_enabled()) {
+        return null;
+    }
+    $compact = grok_compact_candidates($candidates);
+    if ($compact === []) {
+        return null;
+    }
+    $item['lookup_candidates'] = $candidates;
+    $item['tmdb_candidates'] = [];
+    if (trim($catalogQuery) !== '') {
+        $item['catalog_query'] = trim($catalogQuery);
+    }
+    $entry = grok_file_payload($item);
+    $entry['mode'] = 'choose';
+    $messages = [
+        ['role' => 'system', 'content' => grok_system_prompt()],
+        ['role' => 'user', 'content' => (string) json_encode([$entry], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+    ];
+    $chat = grok_chat_with_fallback($messages, 800);
+    if (!$chat['ok']) {
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok catalog choice failed: ' . grok_scrub((string) ($chat['error'] ?? 'error')), [], 'error');
+        }
+        return null;
+    }
+    $decoded = grok_extract_json((string) ($chat['content'] ?? ''));
+    $row = null;
+    if (is_array($decoded)) {
+        foreach ($decoded as $one) {
+            if (is_array($one)) {
+                $row = $one;
+                break;
+            }
+        }
+    }
+    $choice = grok_resolve_choice(grok_candidate_ids($compact), is_array($row) ? $row : null);
+    $confidence = is_array($row) ? (float) ($row['confidence'] ?? 0) : 0.0;
+    $reason = is_array($row) ? trim((string) ($row['reason'] ?? '')) : '';
+    $path = (string) ($item['path'] ?? $item['filename'] ?? '');
+    if ($choice['id'] === null || $choice['id'] < 1 || $confidence < grok_min_confidence()) {
+        grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'catalog choose skipped');
+        return null;
+    }
+    grok_log_line($path, $choice['id'], $confidence, $reason !== '' ? $reason : 'catalog choose matched');
+    return ['source' => $choice['source'], 'id' => $choice['id']];
 }
 
 function grok_extract_json(string $content): ?array
@@ -899,7 +1090,7 @@ function grok_job_continue(): array
             $job['attempted'] = (int) $job['attempted'] + 1;
             if ($candidates === []) {
                 $job['skipped_no_candidates'] = (int) $job['skipped_no_candidates'] + 1;
-                grok_log_line((string) ($item['path'] ?? ''), null, 0.0, 'no TMDB candidates');
+                grok_log_line((string) ($item['path'] ?? ''), null, 0.0, 'no candidates');
                 continue;
             }
             $batchItems[$id] = $pos;
@@ -962,26 +1153,28 @@ function grok_job_continue(): array
             $item = $library['items'][$pos];
             $path = (string) ($item['path'] ?? '');
             $row = $byPath[$path] ?? null;
-            $allowed = grok_candidate_ids($item['tmdb_candidates'] ?? []);
+            $allowed = grok_candidate_ids(grok_item_candidates($item));
             if ($row === null) {
                 grok_log_line($path, null, 0.0, 'missing from Grok response');
                 $job['errors'] = (int) $job['errors'] + 1;
                 continue;
             }
-            $rawId = $row['tmdb_id'] ?? null;
-            $tmdbId = $rawId === null || $rawId === '' || $rawId === false ? null : (int) $rawId;
+            $choice = grok_resolve_choice($allowed, $row);
+            $picked = $choice['id'];
             $confidence = (float) ($row['confidence'] ?? 0);
             $reason = trim((string) ($row['reason'] ?? ''));
-            if ($tmdbId === null || $tmdbId < 1) {
+            $raw = $row['id'] ?? $row['lookup_id'] ?? $row['tmdb_id'] ?? null;
+            $rawPresent = $raw !== null && $raw !== '' && $raw !== false;
+            if ($rawPresent && $picked === null) {
+                grok_log_line($path, null, $confidence, 'invented id rejected');
+                $job['invalid_rejected'] = (int) $job['invalid_rejected'] + 1;
+                continue;
+            }
+            if ($picked === null || $picked < 1) {
                 grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'null');
                 if ($confidence > 0 && $confidence < $minConf) {
                     $job['skipped_low_confidence'] = (int) $job['skipped_low_confidence'] + 1;
                 }
-                continue;
-            }
-            if (!isset($allowed[$tmdbId])) {
-                grok_log_line($path, null, $confidence, 'invented id rejected');
-                $job['invalid_rejected'] = (int) $job['invalid_rejected'] + 1;
                 continue;
             }
             if ($confidence < $minConf) {
@@ -990,12 +1183,12 @@ function grok_job_continue(): array
                 continue;
             }
             try {
-                $library['items'][$pos] = grok_apply_choice($item, $tmdbId);
+                $library['items'][$pos] = grok_apply_resolved($item, $choice['source'], $picked);
                 $job['matched'] = (int) $job['matched'] + 1;
-                grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'matched');
+                grok_log_line($path, $picked, $confidence, $reason !== '' ? $reason : 'matched');
             } catch (Throwable $e) {
                 $job['errors'] = (int) $job['errors'] + 1;
-                grok_log_line($path, $tmdbId, $confidence, grok_scrub($e->getMessage()));
+                grok_log_line($path, $picked, $confidence, grok_scrub($e->getMessage()));
             }
         }
 
@@ -1155,7 +1348,7 @@ function grok_run_scan_batch(array &$job): void
 
     if ($payload === []) {
         if (function_exists('app_log')) {
-            app_log('grok', 'Grok batch skipped: no files with TMDB candidates.');
+            app_log('grok', 'Grok batch skipped: no files with candidates.');
         }
         return;
     }
@@ -1191,21 +1384,23 @@ function grok_run_scan_batch(array &$job): void
         $item = $job['items'][$pos];
         $path = $meta['path'];
         $mode = $meta['mode'];
-        $allowed = $meta['ids'];
+        $allowed = is_array($meta['ids'] ?? null) ? $meta['ids'] : [];
         $row = $byPath[$path] ?? null;
-        $rawId = is_array($row) ? ($row['tmdb_id'] ?? null) : null;
-        $tmdbId = $rawId === null || $rawId === '' || $rawId === false ? null : (int) $rawId;
+        $choice = grok_resolve_choice($allowed, is_array($row) ? $row : null);
+        $picked = $choice['id'];
         $confidence = is_array($row) ? (float) ($row['confidence'] ?? 0) : 0.0;
         $reason = is_array($row) ? trim((string) ($row['reason'] ?? '')) : '';
+        $raw = is_array($row) ? ($row['id'] ?? $row['lookup_id'] ?? $row['tmdb_id'] ?? null) : null;
+        $rawPresent = $raw !== null && $raw !== '' && $raw !== false;
 
-        if ($tmdbId !== null && $tmdbId > 0 && !isset($allowed[$tmdbId])) {
+        if ($rawPresent && $picked === null) {
             grok_log_line($path, null, $confidence, 'invented id rejected');
             $job['grok_invalid'] = (int) ($job['grok_invalid'] ?? 0) + 1;
             continue;
         }
 
         if ($mode === 'verify') {
-            if ($tmdbId === null || $tmdbId < 1) {
+            if ($picked === null || $picked < 1) {
                 $job['items'][$pos] = library_clear_match($item);
                 $job['items'][$pos]['status'] = 'unmatched';
                 $job['items'][$pos]['grok_verified'] = 1;
@@ -1215,11 +1410,11 @@ function grok_run_scan_batch(array &$job): void
             }
             $job['items'][$pos]['grok_verified'] = 1;
             $job['grok_verified'] = (int) ($job['grok_verified'] ?? 0) + 1;
-            grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'verify kept');
+            grok_log_line($path, $picked, $confidence, $reason !== '' ? $reason : 'verify kept');
             continue;
         }
 
-        if ($tmdbId === null || $tmdbId < 1 || $confidence < $minConf) {
+        if ($picked === null || $picked < 1 || $confidence < $minConf) {
             grok_log_line($path, null, $confidence, $reason !== '' ? $reason : 'choose skipped');
             $showFolder = (string) ($item['show_folder'] ?? '');
             if ($showFolder !== '' && function_exists('scan_tv_backfill_show')) {
@@ -1236,7 +1431,7 @@ function grok_run_scan_batch(array &$job): void
         }
         try {
             $prevStatus = (string) ($item['status'] ?? '');
-            $updated = grok_apply_choice($item, $tmdbId);
+            $updated = grok_apply_resolved($item, $choice['source'], $picked);
             $updated['grok_verified'] = 1;
             $job['items'][$pos] = $updated;
             $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
@@ -1245,10 +1440,10 @@ function grok_run_scan_batch(array &$job): void
             } elseif ($prevStatus === 'unidentified') {
                 $job['unidentified'] = max(0, (int) ($job['unidentified'] ?? 0) - 1);
             }
-            grok_log_line($path, $tmdbId, $confidence, $reason !== '' ? $reason : 'choose matched');
+            grok_log_line($path, $picked, $confidence, $reason !== '' ? $reason : 'choose matched');
             $showFolder = (string) ($item['show_folder'] ?? '');
-            if ($showFolder !== '' && function_exists('scan_tv_backfill_show')) {
-                scan_tv_backfill_show($job, $showFolder, $tmdbId);
+            if ($showFolder !== '' && strcasecmp($choice['source'], 'TMDB') === 0 && function_exists('scan_tv_backfill_show')) {
+                scan_tv_backfill_show($job, $showFolder, $picked);
             }
             $partKey = (string) ($item['part_bundle'] ?? '');
             if ($partKey === '' && function_exists('scan_part_bundle_key')) {
@@ -1259,7 +1454,7 @@ function grok_run_scan_batch(array &$job): void
             }
         } catch (Throwable $e) {
             $job['grok_errors'] = (int) ($job['grok_errors'] ?? 0) + 1;
-            grok_log_line($path, $tmdbId, $confidence, grok_scrub($e->getMessage()));
+            grok_log_line($path, $picked, $confidence, grok_scrub($e->getMessage()));
         }
     }
 }

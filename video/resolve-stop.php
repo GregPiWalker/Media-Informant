@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require_once dirname(__DIR__) . '/lib/cache.php';
 require_once dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/parser.php';
-require dirname(__DIR__) . '/lib/tmdb.php';
+require_once dirname(__DIR__) . '/lib/tmdb.php';
 require dirname(__DIR__) . '/lib/scanner.php';
 require dirname(__DIR__) . '/lib/grok.php';
 

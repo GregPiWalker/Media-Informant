@@ -18,6 +18,14 @@ define('TMDB_API_KEY', '');
 define('TMDB_LANGUAGE', 'en-US');
 define('TMDB_IMAGE_BASE', 'https://image.tmdb.org/t/p/w342');
 define('TMDB_REQUEST_SLEEP_US', 250000);
+/** RiffTrax catalog. Detail comes from /api/dante/product_display/{nid}, not the marketing HTML. */
+define('RIFFTRAX_BASE', 'https://www.rifftrax.com');
+define('RIFFTRAX_TIMEOUT', 20);
+define('RIFFTRAX_USER_AGENT', 'MediaInformant/1.0');
+/** Pause between RiffTrax HTTP calls, in microseconds. */
+define('RIFFTRAX_REQUEST_SLEEP_US', 200000);
+/** How long to keep the site search index (about 1 MB) under cache/rifftrax-index.json. */
+define('RIFFTRAX_INDEX_TTL', 604800);
 /** xAI Grok key for the unmatched second-pass matcher. Leave empty to disable. Never commit a real key. */
 define('XAI_API_KEY', '');
 define('XAI_API_URL', 'https://api.x.ai/v1/chat/completions');
@@ -79,6 +87,47 @@ function h(string $value): string
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+/**
+ * Escape text and keep blank-line breaks visible inside a paragraph.
+ */
+function h_paragraphs(string $value): string
+{
+    $value = str_replace(["\r\n", "\r"], "\n", $value);
+    $chunks = preg_split("/\n{2,}/", trim($value));
+    if (!is_array($chunks)) {
+        return h($value);
+    }
+    $bits = [];
+    foreach ($chunks as $chunk) {
+        $chunk = trim(preg_replace("/[ \t]*\n[ \t]*/", ' ', $chunk) ?? '');
+        if ($chunk !== '') {
+            $bits[] = h($chunk);
+        }
+    }
+    return implode("<br><br>\n", $bits);
+}
+
+/**
+ * Allow a RiffTrax detail link only when it points at rifftrax.com.
+ */
+function rifftrax_page_url(string $url): string
+{
+    $url = trim($url);
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        return '';
+    }
+    $scheme = strtolower((string) ($parts['scheme'] ?? ''));
+    $host = strtolower((string) ($parts['host'] ?? ''));
+    if ($scheme !== 'https' && $scheme !== 'http') {
+        return '';
+    }
+    if ($host !== 'www.rifftrax.com' && $host !== 'rifftrax.com') {
+        return '';
+    }
+    return $url;
+}
+
 function rel_prefix(): string
 {
     $root = rtrim(str_replace('\\', '/', APP_ROOT), '/');
@@ -121,6 +170,21 @@ function theme_pref(): string
     return in_array($raw, ['auto', 'light', 'dark'], true) ? $raw : 'auto';
 }
 
+function poster_is_local(?string $posterPath): bool
+{
+    return is_string($posterPath)
+        && preg_match('/^local:[a-f0-9]{16}\.(jpg|png|webp|gif)$/', $posterPath) === 1;
+}
+
+function poster_local_disk(?string $posterPath): ?string
+{
+    if (!poster_is_local($posterPath)) {
+        return null;
+    }
+    $path = CACHE_DIR . '/posters/' . substr((string) $posterPath, 6);
+    return is_file($path) ? $path : null;
+}
+
 function poster_url(?string $posterPath): ?string
 {
     if ($posterPath === null || $posterPath === '') {
@@ -128,6 +192,15 @@ function poster_url(?string $posterPath): ?string
     }
     if (str_starts_with($posterPath, 'http://') || str_starts_with($posterPath, 'https://')) {
         return $posterPath;
+    }
+    if (poster_is_local($posterPath)) {
+        $disk = poster_local_disk($posterPath);
+        if ($disk === null) {
+            return null;
+        }
+        $stamp = filemtime($disk);
+        $href = app_href('video/poster.php?file=' . substr($posterPath, 6));
+        return $stamp ? $href . '&v=' . $stamp : $href;
     }
     return TMDB_IMAGE_BASE . $posterPath;
 }
@@ -212,7 +285,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=61">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=62">
 </head>
 <body>
 <?php
@@ -372,7 +445,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=61" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=62" defer></script>
 </body>
 </html>
 <?php
