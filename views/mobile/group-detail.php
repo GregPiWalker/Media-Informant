@@ -175,6 +175,16 @@ if ($partEpisode) {
         $parentGroupHref = 'group.php?key=' . rawurlencode(substr($rest, 0, $markerPos));
     }
 }
+$fromFolder = '';
+if ($parentGroupHref === '' && isset($_GET['from']) && is_string($_GET['from']) && str_starts_with($_GET['from'], 'folder:') && strlen($_GET['from']) <= 80) {
+    $fromFolder = $_GET['from'];
+}
+$backHref = 'index.php';
+if ($parentGroupHref !== '') {
+    $backHref = $parentGroupHref;
+} elseif ($fromFolder !== '') {
+    $backHref = 'group.php?key=' . rawurlencode($fromFolder);
+}
 $pageTitle = $found ? (($partEpisode && $episodeHeading !== '') ? $episodeHeading : $display) . ' · Media Informant' : 'Not found · Media Informant';
 
 render_start($pageTitle);
@@ -182,7 +192,7 @@ render_header(['section' => 'video']);
 ?>
 <main class="page detail-page<?= $sourceAbsent ? ' is-source-absent' : '' ?>" data-group-detail="<?= h($key) ?>">
   <div class="detail-toolbar">
-    <a class="back" href="<?= h(app_href('video/' . ($parentGroupHref !== '' ? $parentGroupHref : 'index.php'))) ?>">
+    <a class="back" href="<?= h(app_href('video/' . $backHref)) ?>">
       <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       Back
     </a>
@@ -195,12 +205,13 @@ render_header(['section' => 'video']);
       </button>
       <div class="page-menu-panel" id="group-menu" data-menu-panel hidden role="menu" aria-label="Group actions">
         <?php if (!$editing): ?>
-        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key) . '&edit=1')) ?>">Edit Data</a>
+        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key) . '&edit=1' . ($fromFolder !== '' ? '&from=' . rawurlencode($fromFolder) : ''))) ?>">Edit Data</a>
         <button type="button" class="page-menu-item" role="menuitem" data-group-rescan="<?= h($key) ?>" data-group-rescan-label="<?= h($partEpisode && $episodeHeading !== '' ? $episodeHeading : $display) ?>">Re-scan</button>
         <?php endif; ?>
         <?php if ($canClear): ?>
         <form method="post" action="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>" role="none">
           <input type="hidden" name="key" value="<?= h($key) ?>">
+          <?php if ($fromFolder !== ''): ?><input type="hidden" name="from" value="<?= h($fromFolder) ?>"><?php endif; ?>
           <input type="hidden" name="action" value="clear_matches">
           <button type="submit" class="page-menu-item" role="menuitem">Clear Matches</button>
         </form>
@@ -280,6 +291,7 @@ render_header(['section' => 'video']);
     <?php if ($editing): ?>
     <form class="detail-edit" method="post" enctype="multipart/form-data" action="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>">
       <input type="hidden" name="key" value="<?= h($key) ?>">
+      <?php if ($fromFolder !== ''): ?><input type="hidden" name="from" value="<?= h($fromFolder) ?>"><?php endif; ?>
       <input type="hidden" name="action" value="save_data">
       <section class="detail-section">
         <h2>Title</h2>

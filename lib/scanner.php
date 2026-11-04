@@ -1485,17 +1485,32 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
                 $scopeRecords[] = CatalogRecord::fromVideo($scopeItem);
             }
         }
-        $scopeGroup = catalog_find_group_by_id($scopeRecords, $groupKey);
-        if ($scopeGroup === null || !$scopeGroup->isSeries()) {
-            throw new RuntimeException('That series is not in the catalog.');
-        }
-        $scopeIds = [];
-        foreach ($scopeGroup->members as $member) {
-            if ($member->id !== '') {
-                $scopeIds[$member->id] = true;
+        if (str_starts_with($groupKey, 'folder:')) {
+            $scopeFolder = catalog_find_folder($scopeRecords, $groupKey);
+            if ($scopeFolder === null) {
+                throw new RuntimeException('That folder is not in the catalog.');
             }
+            $scopeIds = [];
+            foreach (catalog_folder_file_ids($scopeFolder) as $scopeFileId) {
+                $scopeIds[$scopeFileId] = true;
+            }
+            $scopeLabel = trim((string) ($scopeFolder['label'] ?? ''));
+            if ($scopeLabel === '') {
+                $scopeLabel = 'folder';
+            }
+        } else {
+            $scopeGroup = catalog_find_group_by_id($scopeRecords, $groupKey);
+            if ($scopeGroup === null || !$scopeGroup->isSeries()) {
+                throw new RuntimeException('That series is not in the catalog.');
+            }
+            $scopeIds = [];
+            foreach ($scopeGroup->members as $member) {
+                if ($member->id !== '') {
+                    $scopeIds[$member->id] = true;
+                }
+            }
+            $scopeLabel = $scopeGroup->head->seriesTitle !== '' ? $scopeGroup->head->seriesTitle : $scopeGroup->head->title;
         }
-        $scopeLabel = $scopeGroup->head->seriesTitle !== '' ? $scopeGroup->head->seriesTitle : $scopeGroup->head->title;
     }
     if (function_exists('app_log')) {
         app_log('scan', ($scopeLabel !== '' ? 'Re-scanning ' . $scopeLabel : $title . ' scan started')

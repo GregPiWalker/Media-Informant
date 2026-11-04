@@ -782,6 +782,24 @@ button.col-option,
   color: inherit;
 }
 
+.catalog-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.catalog-folder-head > .expand-btn {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.catalog-folder-head > .catalog-group-link {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .expand-caret {
   width: 0.55rem;
   height: 0.55rem;

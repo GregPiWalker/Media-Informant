@@ -99,11 +99,15 @@ function catalog_render_list_folder(array $entry): void
     <tr class="catalog-season" data-group="<?= h($id) ?>" data-kind="movie" data-category="<?= h($category) ?>" data-search="<?= h($search) ?>"<?= catalog_sort_attr_map($sortKeys) ?>>
       <td data-col="poster"></td>
       <td data-col="title">
-        <button type="button" class="expand-btn" data-expand="<?= h($id) ?>" aria-expanded="false" aria-label="Show <?= h($label) ?>">
-          <span class="expand-caret" aria-hidden="true"></span>
-          <span class="catalog-row-title"><?= h($label) ?></span>
-          <span class="episode-count"><?= $count ?> <?= $noun ?></span>
-        </button>
+        <div class="catalog-folder-head">
+          <button type="button" class="expand-btn" data-expand="<?= h($id) ?>" aria-expanded="false" aria-label="Show <?= h($label) ?>">
+            <span class="expand-caret" aria-hidden="true"></span>
+          </button>
+          <a class="catalog-group-link" href="<?= h(app_href('video/group.php?key=' . rawurlencode($id))) ?>">
+            <span class="catalog-row-title"><?= h($label) ?></span>
+            <span class="episode-count"><?= $count ?> <?= $noun ?></span>
+          </a>
+        </div>
       </td>
       <td data-col="year"></td>
       <td data-col="status"></td>

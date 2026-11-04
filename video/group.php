@@ -32,7 +32,9 @@ foreach ($library['items'] as $item) {
     }
     $records[] = CatalogRecord::fromVideo($item);
 }
-$group = $key !== '' ? catalog_find_group_by_id($records, $key) : null;
+$isFolder = str_starts_with($key, 'folder:');
+$folder = $isFolder ? catalog_find_folder($records, $key) : null;
+$group = !$isFolder && $key !== '' ? catalog_find_group_by_id($records, $key) : null;
 
 $error = '';
 $editing = isset($_GET['edit']);
@@ -54,10 +56,47 @@ function group_member_ids(CatalogGroup $group): array
     return $ids;
 }
 
+function group_from_query(): string
+{
+    $from = '';
+    if (isset($_POST['from']) && is_string($_POST['from'])) {
+        $from = $_POST['from'];
+    } elseif (isset($_GET['from']) && is_string($_GET['from'])) {
+        $from = $_GET['from'];
+    }
+    if (!str_starts_with($from, 'folder:') || strlen($from) > 80) {
+        return '';
+    }
+    return $from;
+}
+
 function group_reload(string $key): void
 {
-    header('Location: group.php?key=' . rawurlencode($key), true, 303);
+    $from = group_from_query();
+    $extra = $from !== '' ? '&from=' . rawurlencode($from) : '';
+    header('Location: group.php?key=' . rawurlencode($key) . $extra, true, 303);
     exit;
+}
+
+if ($folder !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_matches') {
+    $folderLabel = trim((string) ($folder['label'] ?? ''));
+    if ($folderLabel === '') {
+        $folderLabel = 'folder';
+    }
+    $n = cache_update_items(catalog_folder_file_ids($folder), static function (array $row): array {
+        return library_clear_match($row);
+    });
+    if ($n < 1) {
+        $error = 'Could not clear matches. Check that cache/ is writable.';
+    } else {
+        if (function_exists('app_log')) {
+            app_log('match', 'Cleared matches for folder “' . $folderLabel . '” (' . $n . ' files).', [
+                'key' => $key,
+                'count' => $n,
+            ]);
+        }
+        group_reload($key);
+    }
 }
 
 if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_matches') {
@@ -162,8 +201,7 @@ if ($group !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string)
         } else {
             $newKey = 'series:' . $group->kind . ':' . lower($displayTitle);
         }
-        header('Location: group.php?key=' . rawurlencode($newKey), true, 303);
-        exit;
+        group_reload($newKey);
     }
     }
 }
@@ -218,6 +256,11 @@ if ($group !== null && $group->head->id !== '') {
     if (is_array($headItem) && str_starts_with((string) $group->id, 'parts::')) {
         $headItem = tmdb_remember_item_runtime((string) ($headItem['id'] ?? ''), $headItem, is_array($meta) ? $meta : null);
     }
+}
+
+if ($isFolder) {
+    require app_view('folder-detail');
+    return;
 }
 
 require app_view('group-detail');

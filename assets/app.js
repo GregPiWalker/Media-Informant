@@ -599,6 +599,70 @@
       }, 100);
     }
 
+    // Groups render closed. Remember the open ones when a list row is opened,
+    // including every parent of that row, and reopen them before scroll restore.
+    function catalogOpenKey() {
+      return 'media-catalog-open:' + location.pathname;
+    }
+
+    function catalogAncestorIds(row) {
+      var ids = [];
+      var seen = {};
+      var current = row;
+      var guard = 0;
+      while (current && guard < 16) {
+        guard += 1;
+        var parentId = current.getAttribute('data-parent');
+        if (!parentId || seen[parentId]) break;
+        seen[parentId] = true;
+        ids.unshift(parentId);
+        current = null;
+        for (var i = 0; i < groupRows.length; i += 1) {
+          if (groupRows[i].getAttribute('data-group') === parentId) {
+            current = groupRows[i];
+            break;
+          }
+        }
+      }
+      return ids;
+    }
+
+    function catalogRememberOpen(row) {
+      if (!row) return;
+      var ids = [];
+      var seen = {};
+      function add(id) {
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        ids.push(id);
+      }
+      var ancestors = catalogAncestorIds(row);
+      for (var a = 0; a < ancestors.length; a += 1) add(ancestors[a]);
+      for (var g = 0; g < groupRows.length; g += 1) {
+        var head = groupRows[g];
+        var id = head.getAttribute('data-group');
+        if (id && groupIsOpen(head)) add(id);
+      }
+      try {
+        if (ids.length === 0) sessionStorage.removeItem(catalogOpenKey());
+        else sessionStorage.setItem(catalogOpenKey(), JSON.stringify(ids));
+      } catch (e) {}
+    }
+
+    function catalogRestoreOpen() {
+      if (!catalog.querySelector('[data-list-body]')) return;
+      var raw;
+      try { raw = sessionStorage.getItem(catalogOpenKey()); } catch (e) { return; }
+      if (raw == null || raw === '') return;
+      try { sessionStorage.removeItem(catalogOpenKey()); } catch (e) {}
+      var ids;
+      try { ids = JSON.parse(raw); } catch (e) { return; }
+      if (!ids || !ids.length) return;
+      for (var i = 0; i < ids.length; i += 1) {
+        if (typeof ids[i] === 'string' && ids[i] !== '') setExpanded(ids[i], true);
+      }
+    }
+
     window.addEventListener('scroll', function () {
       if (catalogScrollTimer) return;
       catalogScrollTimer = window.setTimeout(function () {
@@ -611,8 +675,20 @@
       if (document.visibilityState === 'hidden') catalogPersistScroll();
     });
     document.addEventListener('click', function (event) {
-      if (event.target.closest('a[href]')) catalogPersistScroll();
+      var link = event.target.closest('a[href]');
+      if (!link) return;
+      catalogPersistScroll();
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (link.getAttribute('target') === '_blank') return;
+      var row = link.closest('tr');
+      var body = catalog.querySelector('[data-list-body]');
+      if (!row || !body || !body.contains(row)) return;
+      catalogRememberOpen(row);
     }, true);
+    window.addEventListener('pageshow', function (event) {
+      if (!event.persisted) return;
+      try { sessionStorage.removeItem(catalogOpenKey()); } catch (e) {}
+    });
 
     function catalogSave() {
       var raw = JSON.stringify({
@@ -1270,7 +1346,10 @@
         var row = event.target.closest('tr[data-card]');
         if (!row) return;
         var link = row.querySelector('a.catalog-row-link');
-        if (link) window.location.href = link.href;
+        if (!link) return;
+        catalogRememberOpen(row);
+        catalogPersistScroll();
+        window.location.href = link.href;
       });
     }
 
@@ -1323,6 +1402,7 @@
     } catch (e) {}
     indexCatalog();
     applySearch();
+    catalogRestoreOpen();
     catalogRestoreScroll();
   }
 

@@ -1062,36 +1062,19 @@ function catalog_sort_groups(array $groups, CatalogPreferences $prefs): array
  */
 function catalog_list_entries(array $groups, CatalogPreferences $prefs): array
 {
-    $loose = [];
-    $buckets = [];
+    $entries = [];
     foreach ($groups as $group) {
-        $key = catalog_group_folder_key($group);
-        if ($key === '') {
-            $loose[] = $group;
+        if (catalog_group_folder_key($group) !== '') {
             continue;
         }
-        if (!isset($buckets[$key])) {
-            $buckets[$key] = [
-                'label' => catalog_group_folder_label($group),
-                'groups' => [],
-            ];
-        }
-        $buckets[$key]['groups'][] = $group;
-    }
-    $entries = [];
-    foreach ($loose as $group) {
         $entries[] = [
             'type' => 'group',
             'group' => $group,
             'sortKeys' => $group->head->sortKeys,
         ];
     }
-    foreach ($buckets as $key => $bucket) {
-        $members = $bucket['groups'];
-        usort($members, static function (CatalogGroup $a, CatalogGroup $b): int {
-            return strnatcasecmp(catalog_group_list_title($a), catalog_group_list_title($b));
-        });
-        $entries[] = catalog_folder_entry($key, (string) $bucket['label'], $members);
+    foreach (catalog_folder_entries_from_groups($groups) as $entry) {
+        $entries[] = $entry;
     }
     $col = $prefs->sort;
     $dir = $prefs->dir === 'desc' ? -1 : 1;
@@ -1153,6 +1136,85 @@ function catalog_group_folder_label(CatalogGroup $group): string
     return '';
 }
 
+function catalog_folder_id(string $key): string
+{
+    return 'folder:' . substr(hash('sha256', $key), 0, 16);
+}
+
+/**
+ * Folder parents built from the same movie groups the List view uses.
+ *
+ * @param list<CatalogGroup> $groups
+ * @return list<array<string, mixed>>
+ */
+function catalog_folder_entries_from_groups(array $groups): array
+{
+    $buckets = [];
+    foreach ($groups as $group) {
+        $key = catalog_group_folder_key($group);
+        if ($key === '') {
+            continue;
+        }
+        if (!isset($buckets[$key])) {
+            $buckets[$key] = [
+                'label' => catalog_group_folder_label($group),
+                'groups' => [],
+            ];
+        }
+        $buckets[$key]['groups'][] = $group;
+    }
+    $entries = [];
+    foreach ($buckets as $key => $bucket) {
+        $members = $bucket['groups'];
+        usort($members, static function (CatalogGroup $a, CatalogGroup $b): int {
+            return strnatcasecmp(catalog_group_list_title($a), catalog_group_list_title($b));
+        });
+        $entries[] = catalog_folder_entry($key, (string) $bucket['label'], $members);
+    }
+    return $entries;
+}
+
+/**
+ * @param list<CatalogRecord> $records
+ * @return array<string, mixed>|null
+ */
+function catalog_find_folder(array $records, string $id): ?array
+{
+    if ($id === '' || !str_starts_with($id, 'folder:')) {
+        return null;
+    }
+    foreach (catalog_folder_entries_from_groups(catalog_collect_groups($records)) as $entry) {
+        if ((string) ($entry['id'] ?? '') === $id) {
+            return $entry;
+        }
+    }
+    return null;
+}
+
+/**
+ * @param array<string, mixed> $entry
+ * @return list<string>
+ */
+function catalog_folder_file_ids(array $entry): array
+{
+    $ids = [];
+    $groups = $entry['groups'] ?? [];
+    if (!is_array($groups)) {
+        return [];
+    }
+    foreach ($groups as $group) {
+        if (!$group instanceof CatalogGroup) {
+            continue;
+        }
+        foreach ($group->members as $member) {
+            if ($member->id !== '') {
+                $ids[] = $member->id;
+            }
+        }
+    }
+    return $ids;
+}
+
 /**
  * @param list<CatalogGroup> $members
  * @return array<string, mixed>
@@ -1185,7 +1247,7 @@ function catalog_folder_entry(string $key, string $label, array $members): array
     }
     return [
         'type' => 'folder',
-        'id' => 'folder:' . substr(hash('sha256', $key), 0, 16),
+        'id' => catalog_folder_id($key),
         'label' => $label,
         'groups' => $members,
         'count' => count($members),
