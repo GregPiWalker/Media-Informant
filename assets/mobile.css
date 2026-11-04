@@ -801,7 +801,7 @@ button.col-option,
   gap: 0.45rem;
 }
 
-/* The caret's hit target covers the poster-column gap. The glyph stays in the title padding so the label keeps the movie title's left edge. */
+/* The caret's hit target covers the poster-column gap. padding-right matches the caret so the label keeps the movie title's left edge. */
 .catalog[data-cols~="poster"] .catalog-table tr:not([data-nest]) > td[data-col="title"] > .catalog-group-cell,
 .catalog[data-cols~="poster"] .catalog-table tr:not([data-nest]) > td[data-col="title"] > .catalog-folder-head {
   position: relative;
@@ -816,7 +816,7 @@ button.col-option,
   width: 2.4rem;
   margin: 0;
   justify-content: flex-end;
-  padding-right: 0.2rem;
+  padding-right: 0.55rem;
 }
 
 .expand-caret {
