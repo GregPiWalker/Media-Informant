@@ -78,6 +78,39 @@ function group_reload(string $key): void
     exit;
 }
 
+$configuring = $isFolder && isset($_GET['configure']);
+$scanServices = [];
+$scanServiceSaved = '';
+$scanServiceActive = '';
+
+if ($folder !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'save_scan_service') {
+    if (!function_exists('lookup_services')) {
+        require_once dirname(__DIR__) . '/lib/lookup.php';
+    }
+    $choice = function_exists('catalog_lookup_service_name')
+        ? catalog_lookup_service_name((string) ($_POST['scan_service'] ?? ''))
+        : '';
+    $folderLabel = trim((string) ($folder['label'] ?? ''));
+    if ($folderLabel === '') {
+        $folderLabel = 'Folder';
+    }
+    if ($choice === '') {
+        $error = 'Choose a lookup service.';
+        $configuring = true;
+    } elseif (!function_exists('catalog_folder_scan_service_write') || !catalog_folder_scan_service_write($key, $folderLabel, $choice, catalog_folder_file_ids($folder))) {
+        $error = 'Could not save the scan service. Check that cache/ is writable.';
+        $configuring = true;
+    } else {
+        if (function_exists('app_log')) {
+            app_log('scan', 'Folder “' . $folderLabel . '” scan service set to ' . $choice . '.', [
+                'key' => $key,
+                'service' => $choice,
+            ]);
+        }
+        group_reload($key);
+    }
+}
+
 if ($folder !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_matches') {
     $folderLabel = trim((string) ($folder['label'] ?? ''));
     if ($folderLabel === '') {
@@ -255,6 +288,24 @@ if ($group !== null && $group->head->id !== '') {
     }
     if (is_array($headItem) && str_starts_with((string) $group->id, 'parts::')) {
         $headItem = tmdb_remember_item_runtime((string) ($headItem['id'] ?? ''), $headItem, is_array($meta) ? $meta : null);
+    }
+}
+
+if ($isFolder && $folder !== null) {
+    if (!function_exists('lookup_services')) {
+        require_once dirname(__DIR__) . '/lib/lookup.php';
+    }
+    if (function_exists('lookup_services')) {
+        foreach (array_keys(lookup_services()) as $serviceName) {
+            $scanServices[] = (string) $serviceName;
+        }
+    }
+    $folderLabel = trim((string) ($folder['label'] ?? ''));
+    if (function_exists('catalog_folder_scan_service_saved')) {
+        $scanServiceSaved = catalog_folder_scan_service_saved($key);
+    }
+    if (function_exists('catalog_folder_scan_service_for_rescan')) {
+        $scanServiceActive = catalog_folder_scan_service_for_rescan($key, $folderLabel);
     }
 }
 

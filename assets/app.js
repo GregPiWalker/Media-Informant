@@ -1763,8 +1763,10 @@
 
     if (detailReloadAfterScan && (state === 'done' || state === 'stopped')) {
       detailReloadAfterScan = false;
-      window.location.reload();
-      return;
+      if (!(data && data.catalog_unchanged)) {
+        window.location.reload();
+        return;
+      }
     }
 
     lastScanState = state;

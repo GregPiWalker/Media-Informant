@@ -104,16 +104,17 @@ function catalog_show_season_key(int $season): string
 function catalog_store_group_extras(PDO $pdo, string $groupId, string $kind): array
 {
     $extras = ['kind' => $kind];
+    $prev = [];
     $stmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ?');
     $stmt->execute([$groupId]);
     $raw = $stmt->fetchColumn();
-    if (!is_string($raw) || $raw === '') {
-        return $extras;
+    if (is_string($raw) && $raw !== '') {
+        $prev = catalog_json_decode($raw);
+        if (isset($prev['seasons']) && is_array($prev['seasons'])) {
+            $extras['seasons'] = $prev['seasons'];
+        }
     }
-    $prev = catalog_json_decode($raw);
-    if (isset($prev['seasons']) && is_array($prev['seasons'])) {
-        $extras['seasons'] = $prev['seasons'];
-    }
+    $extras['scan_service'] = catalog_scan_service_from_extras($prev);
     return $extras;
 }
 
@@ -349,7 +350,339 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     if (isset($extras['runtime']) && is_numeric($extras['runtime']) && (int) $extras['runtime'] > 0) {
         $item['runtime'] = (int) $extras['runtime'];
     }
+    if (trim((string) ($extras['scan_service'] ?? '')) !== '') {
+        $item['scan_service'] = catalog_scan_service_keep_value($extras['scan_service']);
+    }
     return $item;
+}
+
+function catalog_folder_id_ok(string $folderId): bool
+{
+    return preg_match('/^folder:[a-f0-9]{16}$/', $folderId) === 1;
+}
+
+/**
+ * Registered lookup source, using that source's own spelling.
+ */
+function catalog_lookup_service_name(string $service): string
+{
+    $service = trim($service);
+    if ($service === '' || !function_exists('lookup_services')) {
+        return '';
+    }
+    foreach (array_keys(lookup_services()) as $name) {
+        if (strcasecmp((string) $name, $service) === 0) {
+            return (string) $name;
+        }
+    }
+    return '';
+}
+
+/**
+ * Stored scan service, using the registered spelling when the name is known.
+ * An unknown non-empty name is kept so a later save does not silently replace it.
+ */
+function catalog_scan_service_keep_value($value): string
+{
+    $stored = trim((string) $value);
+    if ($stored === '') {
+        return '';
+    }
+    if (!function_exists('lookup_services')) {
+        return $stored;
+    }
+    $named = catalog_lookup_service_name($stored);
+    return $named !== '' ? $named : $stored;
+}
+
+function catalog_scan_service_default(): string
+{
+    $named = catalog_lookup_service_name('TMDB');
+    return $named !== '' ? $named : 'TMDB';
+}
+
+function catalog_scan_service_from_extras(array $extras): string
+{
+    $kept = catalog_scan_service_keep_value($extras['scan_service'] ?? '');
+    return $kept !== '' ? $kept : catalog_scan_service_default();
+}
+
+/**
+ * Movie folder for a file, matching the List parent key.
+ *
+ * @return array{label: string, id: string}
+ */
+function catalog_file_movie_folder(array $item): array
+{
+    $none = ['label' => '', 'id' => ''];
+    $kind = function_exists('library_item_kind') ? library_item_kind($item) : (string) ($item['kind'] ?? '');
+    if ($kind !== 'movie') {
+        return $none;
+    }
+    if (!function_exists('catalog_movie_folder') || !function_exists('catalog_folder_id')) {
+        $catalogFile = __DIR__ . '/catalog.php';
+        if (is_file($catalogFile)) {
+            require_once $catalogFile;
+        }
+    }
+    if (!function_exists('catalog_movie_folder') || !function_exists('catalog_folder_id') || !function_exists('lower')) {
+        return $none;
+    }
+    $label = catalog_movie_folder(
+        (string) ($item['root'] ?? ''),
+        (string) ($item['path'] ?? ''),
+        (string) ($item['filename'] ?? '')
+    );
+    if ($label === '') {
+        return $none;
+    }
+    $key = lower((string) ($item['root'] ?? '')) . "\n" . lower($label);
+    return ['label' => $label, 'id' => catalog_folder_id($key)];
+}
+
+/**
+ * @return array{saved: string, effective: string}
+ */
+function catalog_file_folder_services(array $item): array
+{
+    static $savedCache = [];
+    static $effectiveCache = [];
+    $folder = catalog_file_movie_folder($item);
+    if ($folder['id'] === '') {
+        return ['saved' => '', 'effective' => ''];
+    }
+    $id = $folder['id'];
+    if (!array_key_exists($id, $savedCache)) {
+        $savedCache[$id] = catalog_folder_scan_service_saved($id);
+        $effectiveCache[$id] = catalog_folder_scan_service_for_rescan($id, $folder['label']);
+    }
+    return ['saved' => $savedCache[$id], 'effective' => $effectiveCache[$id]];
+}
+
+function catalog_file_folder_scan_service(array $item): string
+{
+    return catalog_file_folder_services($item)['effective'];
+}
+
+function catalog_file_folder_saved_service(array $item): string
+{
+    return catalog_file_folder_services($item)['saved'];
+}
+
+/**
+ * Service Match title, the detail status line, and a file lookup should use.
+ * A saved choice on the movie's folder wins, including over an older stored default.
+ * Otherwise a stored value wins. Otherwise the folder's effective service, then TMDB.
+ */
+function catalog_item_scan_service(array $item): string
+{
+    $saved = catalog_file_folder_saved_service($item);
+    if ($saved !== '') {
+        return $saved;
+    }
+    $kept = catalog_scan_service_keep_value($item['scan_service'] ?? '');
+    if ($kept !== '') {
+        return $kept;
+    }
+    $folder = catalog_file_folder_scan_service($item);
+    if ($folder !== '') {
+        return $folder;
+    }
+    return catalog_scan_service_default();
+}
+
+function catalog_file_scan_service_for_store(string $catalog, array $item): string
+{
+    if ($catalog === 'video') {
+        $saved = catalog_file_folder_saved_service($item);
+        if ($saved !== '') {
+            return $saved;
+        }
+    }
+    $kept = catalog_scan_service_keep_value($item['scan_service'] ?? '');
+    if ($kept !== '') {
+        return $kept;
+    }
+    if ($catalog === 'video') {
+        $folder = catalog_file_folder_scan_service($item);
+        if ($folder !== '') {
+            return $folder;
+        }
+    }
+    return catalog_scan_service_default();
+}
+
+/**
+ * @param list<string> $fileIds
+ */
+function catalog_files_apply_scan_service(PDO $pdo, array $fileIds, string $service): int
+{
+    $byFile = $pdo->prepare(
+        'SELECT i.id AS item_id, i.extras_json FROM files f INNER JOIN items i ON i.id = f.item_id WHERE f.id = ?'
+    );
+    $byItem = $pdo->prepare('SELECT id AS item_id, extras_json FROM items WHERE id = ? AND grouping = ?');
+    $upd = $pdo->prepare('UPDATE items SET extras_json = ?, updated_at = ? WHERE id = ?');
+    $now = time();
+    $n = 0;
+    $seen = [];
+    foreach ($fileIds as $id) {
+        $id = strtolower((string) $id);
+        if ($id === '' || isset($seen[$id]) || preg_match('/^[a-f0-9]{16}$/', $id) !== 1) {
+            continue;
+        }
+        $seen[$id] = true;
+        $byFile->execute([$id]);
+        $row = $byFile->fetch();
+        if (!is_array($row) || (string) ($row['item_id'] ?? '') === '') {
+            $byItem->execute([$id, 'standalone']);
+            $row = $byItem->fetch();
+        }
+        if (!is_array($row) || (string) ($row['item_id'] ?? '') === '') {
+            continue;
+        }
+        $raw = $row['extras_json'] ?? null;
+        $extras = is_string($raw) && $raw !== '' ? catalog_json_decode($raw) : [];
+        if ((string) ($extras['scan_service'] ?? '') !== $service) {
+            $extras['scan_service'] = $service;
+            $upd->execute([catalog_json_encode($extras), $now, (string) $row['item_id']]);
+        }
+        $n++;
+    }
+    return $n;
+}
+
+/**
+ * Lookup service saved on a folder parent, or an empty string when none is saved.
+ */
+function catalog_folder_scan_service_saved(string $folderId): string
+{
+    if (!catalog_folder_id_ok($folderId) || !function_exists('db_open')) {
+        return '';
+    }
+    $pdo = db_open('video');
+    if ($pdo === null) {
+        return '';
+    }
+    $stmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ? AND grouping = ?');
+    $stmt->execute([$folderId, 'group']);
+    $raw = $stmt->fetchColumn();
+    if (!is_string($raw) || $raw === '') {
+        return '';
+    }
+    $extras = catalog_json_decode($raw);
+    return catalog_lookup_service_name((string) ($extras['scan_service'] ?? ''));
+}
+
+/**
+ * Service a folder Re-scan should use.
+ * A saved choice wins. A folder named RiffTrax uses RiffTrax until one is saved.
+ * Any other folder with no choice returns an empty string and keeps the usual scan.
+ */
+function catalog_folder_scan_service_for_rescan(string $folderId, string $label): string
+{
+    $saved = catalog_folder_scan_service_saved($folderId);
+    if ($saved !== '') {
+        return $saved;
+    }
+    if (strcasecmp(trim($label), 'RiffTrax') === 0) {
+        return 'RiffTrax';
+    }
+    return '';
+}
+
+/**
+ * Store the lookup service on the folder parent and on each child file.
+ * Later catalog writes keep the folder row.
+ *
+ * @param list<string> $fileIds
+ */
+function catalog_folder_scan_service_write(string $folderId, string $label, string $service, array $fileIds = []): bool
+{
+    $service = catalog_lookup_service_name($service);
+    if (!catalog_folder_id_ok($folderId) || $service === '' || !function_exists('db_open')) {
+        return false;
+    }
+    $pdo = db_open('video');
+    if ($pdo === null) {
+        return false;
+    }
+    $label = trim($label);
+    if ($label === '') {
+        $label = 'Folder';
+    }
+    if (strlen($label) > 200) {
+        $label = substr($label, 0, 200);
+    }
+    $extras = ['folder' => true, 'scan_service' => $service];
+    $stmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ?');
+    $stmt->execute([$folderId]);
+    $raw = $stmt->fetchColumn();
+    if (is_string($raw) && $raw !== '') {
+        $prev = catalog_json_decode($raw);
+        if ($prev !== []) {
+            $extras = $prev;
+            $extras['folder'] = true;
+            $extras['scan_service'] = $service;
+        }
+    }
+    $copied = 0;
+    try {
+        $pdo->beginTransaction();
+        $typeId = catalog_type_id($pdo, 'video', 'movie');
+        catalog_store_write_item($pdo, [
+            'id' => $folderId,
+            'type_id' => $typeId,
+            'parent_id' => null,
+            'grouping' => 'group',
+            'title' => $label,
+            'sort_title' => function_exists('lower') ? lower($label) : strtolower($label),
+            'year' => null,
+            'tmdb_id' => null,
+            'tmdb_media_type' => null,
+            'overview' => '',
+            'poster_path' => null,
+            'extras_json' => catalog_json_encode($extras),
+        ], time());
+        $copied = catalog_files_apply_scan_service($pdo, $fileIds, $service);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        if (function_exists('db_last_error')) {
+            db_last_error('Could not save folder scan service: ' . $e->getMessage());
+        }
+        return false;
+    }
+    if (function_exists('app_log')) {
+        $level = ($copied === 0 && $fileIds !== []) ? 'warn' : 'info';
+        app_log('scan', 'Folder “' . $label . '” scan service ' . $service . ' stored on ' . $copied . ' file' . ($copied === 1 ? '' : 's') . '.', [
+            'key' => $folderId,
+            'service' => $service,
+            'files' => $copied,
+        ], $level);
+    }
+    return true;
+}
+
+/**
+ * @param array<string, bool> $keepItemIds
+ */
+function catalog_store_keep_folder_groups(PDO $pdo, array &$keepItemIds): void
+{
+    $rows = $pdo->query("SELECT id FROM items WHERE grouping = 'group' AND id LIKE 'folder:%'");
+    if ($rows === false) {
+        return;
+    }
+    foreach ($rows as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $id = (string) ($row['id'] ?? '');
+        if (catalog_folder_id_ok($id)) {
+            $keepItemIds[$id] = true;
+        }
+    }
 }
 
 function catalog_store_save(string $catalog, array $items, ?int $scannedAt = null): bool
@@ -370,6 +703,7 @@ function catalog_store_save(string $catalog, array $items, ?int $scannedAt = nul
             }
             catalog_store_upsert_item($pdo, $catalog, $item, $now, $keepFileIds, $keepItemIds);
         }
+        catalog_store_keep_folder_groups($pdo, $keepItemIds);
         catalog_store_delete_missing($pdo, 'files', $keepFileIds);
         catalog_store_delete_missing($pdo, 'items', array_keys($keepItemIds));
         $root = $catalog === 'music'
@@ -444,6 +778,9 @@ function catalog_store_keep_user_media(PDO $pdo, array $item): array
             $item['poster_path'] = $prevPoster;
         }
     }
+    if (trim((string) ($item['scan_service'] ?? '')) === '' && trim((string) ($prevExtras['scan_service'] ?? '')) !== '') {
+        $item['scan_service'] = (string) $prevExtras['scan_service'];
+    }
     return $item;
 }
 
@@ -485,6 +822,17 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
         $season = $item['season'] ?? null;
         if ($season !== null && $season !== '') {
             $seasonId = 's-' . substr(hash('sha256', $groupId . '|s' . (int) $season), 0, 14);
+            $seasonPrev = [];
+            $seasonStmt = $pdo->prepare('SELECT extras_json FROM items WHERE id = ?');
+            $seasonStmt->execute([$seasonId]);
+            $seasonRaw = $seasonStmt->fetchColumn();
+            if (is_string($seasonRaw) && $seasonRaw !== '') {
+                $seasonPrev = catalog_json_decode($seasonRaw);
+            }
+            $seasonExtras = [
+                'season' => (int) $season,
+                'scan_service' => catalog_scan_service_from_extras($seasonPrev),
+            ];
             catalog_store_write_item($pdo, [
                 'id' => $seasonId,
                 'type_id' => $typeId,
@@ -497,7 +845,7 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
                 'tmdb_media_type' => null,
                 'overview' => '',
                 'poster_path' => null,
-                'extras_json' => catalog_json_encode(['season' => (int) $season]),
+                'extras_json' => catalog_json_encode($seasonExtras),
             ], $now);
             $keepItemIds[$seasonId] = true;
             $parentId = $seasonId;
@@ -569,6 +917,8 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
     if (isset($item['runtime']) && is_numeric($item['runtime']) && (int) $item['runtime'] > 0) {
         $extras['runtime'] = (int) $item['runtime'];
     }
+    $item['scan_service'] = catalog_file_scan_service_for_store($catalog, $item);
+    $extras['scan_service'] = (string) $item['scan_service'];
     catalog_store_write_item($pdo, [
         'id' => $fileId,
         'type_id' => $typeId,
@@ -842,8 +1192,10 @@ function catalog_store_drop_root(string $catalog, string $root): int
         $stmt->execute([$root . "\n", $root . "\n%"]);
         $n = $stmt->rowCount();
         $pdo->exec('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM files WHERE item_id IS NOT NULL)
+            AND id NOT LIKE \'folder:%\'
             AND (parent_id IS NULL OR parent_id NOT IN (SELECT id FROM items))');
         $pdo->exec('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM files WHERE item_id IS NOT NULL)
+            AND id NOT LIKE \'folder:%\'
             AND id NOT IN (SELECT parent_id FROM items WHERE parent_id IS NOT NULL)');
         return $n;
     } catch (Throwable $e) {

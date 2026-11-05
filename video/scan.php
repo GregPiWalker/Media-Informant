@@ -30,6 +30,6 @@ $idleCopy = $showGrokUi
     : 'Scan looks up files already in the catalog with TMDB. Unmatched titles stay unmatched unless you turn Grok on. New folders are indexed when you save them in Config.';
 
 render_start('Video scan · Media Informant');
-render_header(['section' => 'config', 'branches' => true]);
+render_header(['section' => 'scan', 'branches' => true]);
 require app_view('scan');
 render_end();

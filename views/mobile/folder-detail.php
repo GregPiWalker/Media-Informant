@@ -4,6 +4,10 @@ declare(strict_types=1);
 /** @var array<string, mixed>|null $folder */
 /** @var string $error */
 /** @var string $key */
+/** @var bool $configuring */
+/** @var list<string> $scanServices */
+/** @var string $scanServiceSaved */
+/** @var string $scanServiceActive */
 
 $error = (string) ($error ?? '');
 $key = (string) ($key ?? '');
@@ -46,6 +50,18 @@ $summary = $movieCount === 1 ? '1 movie' : ((string) $movieCount . ' movies');
 if ($fileCount !== $movieCount) {
     $summary .= ' · ' . (string) $fileCount . ' ' . ($fileCount === 1 ? 'file' : 'files');
 }
+$configuring = !empty($configuring);
+$scanServices = is_array($scanServices ?? null) ? $scanServices : [];
+$scanServiceSaved = trim((string) ($scanServiceSaved ?? ''));
+$scanServiceActive = trim((string) ($scanServiceActive ?? ''));
+$scanServiceSelected = $scanServiceSaved !== ''
+    ? $scanServiceSaved
+    : (strcasecmp($label, 'RiffTrax') === 0 ? 'RiffTrax' : 'TMDB');
+if ($scanServiceActive === '') {
+    $scanServiceLabel = 'Catalog scan';
+} else {
+    $scanServiceLabel = $scanServiceActive;
+}
 $pageTitle = ($found ? $label : 'Not found') . ' · Media Informant';
 
 render_start($pageTitle);
@@ -66,6 +82,7 @@ render_header(['section' => 'video']);
       </button>
       <div class="page-menu-panel" id="folder-menu" data-menu-panel hidden role="menu" aria-label="Folder actions">
         <button type="button" class="page-menu-item" role="menuitem" data-group-rescan="<?= h($key) ?>" data-group-rescan-label="<?= h($label) ?>">Re-scan</button>
+        <a class="page-menu-item" role="menuitem" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key) . '&configure=1')) ?>">Configure Scan</a>
         <?php if ($canClear): ?>
         <form method="post" action="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>" role="none">
           <input type="hidden" name="key" value="<?= h($key) ?>">
@@ -93,7 +110,40 @@ render_header(['section' => 'video']);
       <h1><?= h($label) ?></h1>
       <p class="detail-year"><?= h($summary) ?></p>
       <p class="hint"><?= (int) $matched ?> of <?= (int) $fileCount ?> matched.</p>
+      <p class="hint">Scan service: <?= h($scanServiceLabel) ?><?= $scanServiceSaved === '' ? '' : ' (saved)' ?>.</p>
     </header>
+    <?php if ($configuring): ?>
+    <form class="detail-edit" method="post" action="<?= h(app_href('video/group.php?key=' . rawurlencode($key) . '&configure=1')) ?>">
+      <input type="hidden" name="key" value="<?= h($key) ?>">
+      <input type="hidden" name="action" value="save_scan_service">
+      <section class="detail-section">
+        <h2>Lookup service</h2>
+        <p class="hint">Re-scan uses the service you save here for every movie in this folder, and Match title on one of those movies uses the same service. A folder named RiffTrax uses RiffTrax until you save a different one. Clear Matches first when a new service should replace titles that are already matched.</p>
+        <?php if ($scanServices === []): ?>
+        <p class="hint">No lookup services are available.</p>
+        <?php else: ?>
+        <label class="field">
+          <span class="field-label">Service</span>
+          <select name="scan_service" class="folder-input">
+            <?php foreach ($scanServices as $serviceName): ?>
+            <option value="<?= h($serviceName) ?>"<?= strcasecmp($scanServiceSelected, $serviceName) === 0 ? ' selected' : '' ?>><?= h($serviceName) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </label>
+        <?php endif; ?>
+      </section>
+      <?php if ($scanServices !== []): ?>
+      <div class="detail-edit-actions">
+        <button type="submit" class="btn btn-accent btn-block">Save</button>
+        <a class="btn btn-ghost btn-block" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>">Cancel</a>
+      </div>
+      <?php else: ?>
+      <div class="detail-edit-actions">
+        <a class="btn btn-ghost btn-block" href="<?= h(app_href('video/group.php?key=' . rawurlencode($key))) ?>">Cancel</a>
+      </div>
+      <?php endif; ?>
+    </form>
+    <?php endif; ?>
     <?php if ($sourceAbsent): ?>
     <p class="absent-banner">Source folder is absent. These movies stay in the catalog until the drive is mounted again, or you remove the source in Config.</p>
     <?php endif; ?>

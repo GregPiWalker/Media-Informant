@@ -842,27 +842,107 @@ function scan_file_needs_lookup(?array $prev, bool $unchanged, array $targets): 
     if ($prev === null) {
         return !empty($targets['unidentified']);
     }
-    if (library_is_manual($prev)) {
-        return false;
+    return scan_lookup_skip_reason($prev, $targets) === '';
+}
+
+/**
+ * Why a catalog file is left out of this scan, or an empty string when it is included.
+ */
+function scan_lookup_skip_reason(array $item, array $targets): string
+{
+    if (library_is_manual($item)) {
+        return 'manual';
     }
-    $status = library_item_status($prev);
+    $status = library_item_status($item);
     if ($status === 'unidentified') {
-        return !empty($targets['unidentified']);
+        return !empty($targets['unidentified']) ? '' : 'unidentified';
     }
     if ($status === 'unmatched') {
-        return !empty($targets['unmatched']);
+        return !empty($targets['unmatched']) ? '' : 'unmatched';
     }
     if ($status === 'matched') {
-        $source = library_match_source($prev);
+        $source = library_match_source($item);
         if ($source === 'grok') {
-            return !empty($targets['matched_grok']);
+            return !empty($targets['matched_grok']) ? '' : 'matched_grok';
         }
         if ($source === 'direct') {
-            return !empty($targets['matched_direct']);
+            return !empty($targets['matched_direct']) ? '' : 'matched_direct';
         }
-        return false;
+        if ($source === 'rifftrax') {
+            return 'matched_rifftrax';
+        }
+        return 'manual';
     }
-    return !empty($targets['unidentified']);
+    return !empty($targets['unidentified']) ? '' : 'unidentified';
+}
+
+/**
+ * @param array<string, int> $skipped
+ */
+function scan_skip_tally(array &$skipped, string $reason): void
+{
+    if ($reason === '') {
+        return;
+    }
+    $skipped[$reason] = (int) ($skipped[$reason] ?? 0) + 1;
+}
+
+/**
+ * @param array<string, int> $skipped
+ */
+function scan_empty_lookup_message(string $scopeLabel, string $noun, array $targets, array $skipped): string
+{
+    $options = scan_options_summary($targets);
+    $where = $scopeLabel !== ''
+        ? ('No files in ' . $scopeLabel)
+        : ('No ' . $noun . ' files');
+    $msg = $where . ' match the current scan options (' . $options . ').';
+    $counts = [];
+    $labels = [
+        'unmatched' => 'unmatched',
+        'unidentified' => 'unidentified',
+        'matched_grok' => 'matched by Grok',
+        'matched_direct' => 'matched directly',
+        'matched_rifftrax' => 'matched from RiffTrax',
+        'manual' => 'matched by you',
+        'absent' => 'on an absent source',
+        'missing' => 'missing from disk',
+    ];
+    foreach ($labels as $key => $label) {
+        $n = (int) ($skipped[$key] ?? 0);
+        if ($n > 0) {
+            $counts[] = $n . ' ' . $label;
+        }
+    }
+    if ($counts !== []) {
+        $msg .= ' Skipped ' . implode(', ', $counts) . '.';
+    }
+    $hints = [];
+    if (!empty($skipped['unidentified'])) {
+        $hints[] = 'Turn on Unidentified in Scan options to include files that have not been scanned yet.';
+    }
+    if (!empty($skipped['unmatched'])) {
+        $hints[] = 'Turn on Unmatched in Scan options to include files that were already scanned without a confident match.';
+    }
+    if (!empty($skipped['matched_grok'])) {
+        $hints[] = 'Turn on Matched (Grok) in Scan options to look those up again.';
+    }
+    if (!empty($skipped['matched_direct'])) {
+        $hints[] = 'Turn on Matched (Direct) in Scan options to look those up again.';
+    }
+    if (!empty($skipped['matched_rifftrax']) || !empty($skipped['manual'])) {
+        $hints[] = 'Clear Matches to look up titles that are already matched. Scan options do not include those.';
+    }
+    if (!empty($skipped['absent'])) {
+        $hints[] = 'Mount the source drive, or remove that source in Config.';
+    }
+    if (!empty($skipped['missing'])) {
+        $hints[] = 'Those files are no longer at the stored path.';
+    }
+    if ($hints !== []) {
+        $msg .= ' ' . implode(' ', $hints);
+    }
+    return $msg . ' Catalog unchanged.';
 }
 
 function scan_tally_status(array &$job, string $status): void
@@ -899,6 +979,9 @@ function scan_lookup_message(int $found, int $pending, string $catalog = 'video'
 function scan_status_write(array $patch): void
 {
     $current = scan_status_read();
+    if (!array_key_exists('catalog_unchanged', $patch)) {
+        $patch['catalog_unchanged'] = false;
+    }
     $next = array_merge($current, $patch, ['updated_at' => time()]);
     cache_write_atomic(scan_status_path(), $next);
 }
@@ -1577,6 +1660,7 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
             'started_at' => $started,
             'catalog' => $catalog,
             'lookup_targets' => $targets,
+            'catalog_unchanged' => true,
             'message' => $msg,
         ]);
         if (function_exists('app_log')) {
@@ -1588,6 +1672,8 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
     $old = cache_read_library();
     $files = [];
     $pending = 0;
+    $skipped = [];
+    $scopedSeen = 0;
     $presentSet = array_fill_keys($presentRoots, true);
     foreach (is_array($old['items'] ?? null) ? $old['items'] : [] as $item) {
         if (!is_array($item) || (string) ($item['path'] ?? '') === '') {
@@ -1596,12 +1682,15 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
         if ($scopeIds !== null && !isset($scopeIds[(string) ($item['id'] ?? '')])) {
             continue;
         }
+        $scopedSeen++;
         $root = settings_normalize_path((string) ($item['root'] ?? ''));
         if ($root === '' || !isset($presentSet[$root])) {
+            scan_skip_tally($skipped, 'absent');
             continue;
         }
         $full = function_exists('format_source_path') ? format_source_path($item) : '';
         if ($full === '' || !is_file($full)) {
+            scan_skip_tally($skipped, 'missing');
             continue;
         }
         $file = scan_file_from_item($item);
@@ -1610,6 +1699,7 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
         $unchanged = (int) ($item['mtime'] ?? 0) === (int) $file['mtime']
             && (int) ($item['size'] ?? 0) === (int) $file['size'];
         if (!scan_file_needs_lookup($item, $unchanged, $targets)) {
+            scan_skip_tally($skipped, scan_lookup_skip_reason($item, $targets));
             continue;
         }
         $files[] = $file;
@@ -1617,9 +1707,9 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
     }
 
     if ($files === []) {
-        $msg = $scopeLabel !== ''
-            ? ('No files in ' . $scopeLabel . ' match the current scan options. Catalog unchanged.')
-            : ('No ' . $noun . ' files match the current scan options. Catalog unchanged.');
+        $msg = ($scopeLabel !== '' && $scopedSeen === 0)
+            ? ('No catalog files were found in ' . $scopeLabel . '. Catalog unchanged.')
+            : scan_empty_lookup_message($scopeLabel, $noun, $targets, $skipped);
         scan_status_write([
             'state' => 'done',
             'phase' => 'done',
@@ -1627,13 +1717,25 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
             'started_at' => $started,
             'catalog' => $catalog,
             'lookup_targets' => $targets,
+            'catalog_unchanged' => true,
             'pending' => 0,
             'message' => $msg,
         ]);
         if (function_exists('app_log')) {
-            app_log('scan', $msg);
+            app_log('scan', $msg, [
+                'group' => $groupKey,
+                'lookup_targets' => $targets,
+                'skipped' => $skipped,
+            ], 'warn');
         }
         return scan_status_read();
+    }
+
+    $folderScanService = '';
+    if (str_starts_with($groupKey, 'folder:') && function_exists('catalog_folder_scan_service_for_rescan')) {
+        $folderScanService = catalog_folder_scan_service_for_rescan($groupKey, $scopeLabel);
+    } elseif (str_starts_with($groupKey, 'folder:') && strcasecmp($scopeLabel, 'RiffTrax') === 0) {
+        $folderScanService = 'RiffTrax';
     }
 
     $job = [
@@ -1645,6 +1747,8 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
         'lookup_only' => true,
         'scope_group' => $groupKey,
         'scope_label' => $scopeLabel,
+        'group_scan_service' => $folderScanService,
+        'rifftrax_group' => strcasecmp($folderScanService, 'RiffTrax') === 0,
         'started_at' => $started,
         'roots' => $roots,
         'walked_roots' => [],
@@ -1681,6 +1785,11 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
             'pending' => $pending,
             'mode' => $mode,
         ]);
+        if (strcasecmp($folderScanService, 'RiffTrax') === 0) {
+            app_log('scan', $scopeLabel . ' re-scan uses the RiffTrax lookup service. A file that does not resolve is logged and left unmatched.');
+        } elseif ($folderScanService !== '') {
+            app_log('scan', $scopeLabel . ' re-scan uses the ' . $folderScanService . ' lookup service.');
+        }
     }
     return scan_status_read();
 }
@@ -1773,6 +1882,153 @@ function scan_take_rifftrax(array &$job, array $item, int $itemNo, string $filen
         app_log('rifftrax', 'RiffTrax item ' . $itemNo . ' no match for "' . $title . '" file=' . $filename);
     }
     return null;
+}
+
+/**
+ * Match one file during a RiffTrax folder re-scan.
+ * Search matches Match title. One exact or title-close hit is stored.
+ * Otherwise Grok chooses when it is configured. A file that still has no
+ * title is left unmatched and logged. This does not open the match page,
+ * queue a Grok batch, or try TMDB.
+ *
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param array<string, mixed> $knownMatches
+ * @return array<string, mixed>
+ */
+function scan_take_rifftrax_group(array &$job, array $item, int $itemNo, string $filename, string $key, array &$knownMatches): array
+{
+    $title = trim((string) ($item['title'] ?? ''));
+    $service = function_exists('lookup_service') ? lookup_service('RiffTrax') : null;
+    $context = [
+        'filename' => (string) ($item['filename'] ?? $filename),
+        'path' => (string) ($item['path'] ?? ''),
+    ];
+    $hits = [];
+    $via = 'none';
+    if ($service instanceof RiffTraxVideoLookupService && $title !== '') {
+        $hits = $service->search($title, null, 12, $context);
+        $via = $service->lastVia();
+    }
+    $rows = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+    $job['lookups'] = (int) ($job['lookups'] ?? 0) + 1;
+    if (function_exists('app_log')) {
+        app_log('rifftrax', 'RiffTrax search for "' . $title . '" via ' . $via
+            . ' returned ' . count($rows) . ' title(s). file=' . $filename);
+    }
+
+    if ($service instanceof RiffTraxVideoLookupService && $hits !== []) {
+        $directContext = $context;
+        $directContext['hits'] = $hits;
+        $direct = $service->lookup($title, null, $directContext);
+        if ($direct instanceof VideoMetadata && function_exists('lookup_apply_metadata')) {
+            $item = lookup_apply_metadata($item, $direct, 'rifftrax');
+            if (function_exists('app_log')) {
+                $storedYear = isset($item['year']) && is_numeric($item['year']) ? (string) (int) $item['year'] : '-';
+                app_log(
+                    'rifftrax',
+                    'RiffTrax item ' . $itemNo . ' stored ' . (string) ($item['lookup_id'] ?? '')
+                    . ' "' . (string) ($item['display_title'] ?? $item['title'] ?? '') . '"'
+                    . ' year=' . $storedYear
+                    . ' file=' . $filename
+                );
+            }
+            return scan_rifftrax_group_keep($job, $item, $key, $knownMatches);
+        }
+    }
+
+    if ($rows === []) {
+        return scan_rifftrax_group_fail($job, $item, $rows, $filename, 'no RiffTrax title for "' . $title . '"');
+    }
+
+    if (!function_exists('grok_resolve_available')) {
+        require_once __DIR__ . '/grok.php';
+    }
+    if (!function_exists('grok_resolve_available') || !grok_resolve_available()) {
+        return scan_rifftrax_group_fail(
+            $job,
+            $item,
+            $rows,
+            $filename,
+            'Grok is not configured, so ' . count($rows) . ' title(s) for "' . $title . '" were not sent'
+        );
+    }
+
+    if (function_exists('app_log')) {
+        app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' RiffTrax title(s) for "' . $title . '" via ' . $via . '. file=' . $filename);
+    }
+    $job['grok_attempted'] = (int) ($job['grok_attempted'] ?? 0) + 1;
+    $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $title) : null;
+    if (is_array($choice) && $service instanceof RiffTraxVideoLookupService) {
+        $picked = $service->fetch((string) $choice['id']);
+        if ($picked instanceof VideoMetadata && function_exists('lookup_apply_metadata')) {
+            $item = lookup_apply_metadata($item, $picked, 'grok');
+            if (function_exists('app_log')) {
+                app_log('grok', 'Grok chose RiffTrax "' . $picked->title . '" for ' . $filename . '.', [
+                    'lookup_id' => $picked->lookupId,
+                    'item' => $itemNo,
+                ]);
+            }
+            return scan_rifftrax_group_keep($job, $item, $key, $knownMatches);
+        }
+        return scan_rifftrax_group_fail(
+            $job,
+            $item,
+            $rows,
+            $filename,
+            'Grok chose a title for "' . $title . '" but the RiffTrax record could not be loaded'
+        );
+    }
+
+    return scan_rifftrax_group_fail(
+        $job,
+        $item,
+        $rows,
+        $filename,
+        'Grok could not choose among ' . count($rows) . ' title(s) for "' . $title . '"'
+    );
+}
+
+/**
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param array<string, mixed> $knownMatches
+ * @return array<string, mixed>
+ */
+function scan_rifftrax_group_keep(array &$job, array $item, string $key, array &$knownMatches): array
+{
+    $knownMatches[$key] = $item;
+    if (!empty($item['display_title'])) {
+        $knownMatches[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
+    }
+    scan_part_remember($job, $item);
+    $job['found'] = (int) ($job['found'] ?? 0) + 1;
+    if (($item['match_source'] ?? '') === 'grok') {
+        $job['grok_matched'] = (int) ($job['grok_matched'] ?? 0) + 1;
+    }
+    return $item;
+}
+
+/**
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param list<array<string, mixed>> $rows
+ * @return array<string, mixed>
+ */
+function scan_rifftrax_group_fail(array &$job, array $item, array $rows, string $filename, string $reason): array
+{
+    if (function_exists('app_log')) {
+        app_log('rifftrax', 'RiffTrax group match failed for ' . $filename . ': ' . $reason . '.', [], 'warn');
+    }
+    $item['status'] = 'unmatched';
+    $item['match_source'] = 'none';
+    $item['lookup_source'] = 'RiffTrax';
+    $item['lookup_candidates'] = $rows;
+    $item['tmdb_candidates'] = [];
+    $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+    $item['part_bundle'] = scan_part_bundle_key($item);
+    scan_part_remember($job, $item, true);
+    return $item;
 }
 
 function scan_job_process_file(array &$job, array $file, array $oldByPath, array &$knownMatches, bool $skipLookup): bool
@@ -1869,6 +2125,20 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         } elseif (library_item_kind($item) === 'show') {
             $item['grouped'] = true;
         }
+        if (trim((string) ($prev['scan_service'] ?? '')) !== '') {
+            $item['scan_service'] = (string) $prev['scan_service'];
+        }
+    }
+
+    $groupService = trim((string) ($job['group_scan_service'] ?? ''));
+    $groupRiff = strcasecmp($groupService, 'RiffTrax') === 0;
+    if ($groupService !== '') {
+        $item['scan_service'] = $groupService;
+    } elseif (function_exists('catalog_item_scan_service')) {
+        $resolvedService = catalog_item_scan_service($item);
+        if ($resolvedService !== '') {
+            $item['scan_service'] = $resolvedService;
+        }
     }
 
     $partKey = scan_part_bundle_key($item);
@@ -1885,14 +2155,22 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         return false;
     }
 
+    $fileService = function_exists('catalog_scan_service_keep_value')
+        ? catalog_scan_service_keep_value($item['scan_service'] ?? '')
+        : trim((string) ($item['scan_service'] ?? ''));
+    $fileRiff = strcasecmp($fileService, 'RiffTrax') === 0;
+    $fileForceTmdb = strcasecmp($fileService, 'TMDB') === 0
+        && function_exists('catalog_file_folder_saved_service')
+        && strcasecmp(catalog_file_folder_saved_service($item), 'TMDB') === 0;
+    $useFileRiff = $fileRiff && !$groupRiff && ($item['lookup_source'] ?? '') !== 'RiffTrax';
     $source = null;
-    if ($sameParse) {
+    if ($sameParse && !$groupRiff && !$useFileRiff) {
         $source = $prev;
     } elseif (isset($knownMatches[$key])) {
         $source = $knownMatches[$key];
     }
 
-    if ($source && !empty($source['tmdb_id'])) {
+    if (!$groupRiff && !$useFileRiff && $source && !empty($source['tmdb_id'])) {
         $tmdbId = (int) $source['tmdb_id'];
         $meta = scan_cached_title($item, $source, $tmdbId);
         if ($meta === null && ($source['status'] ?? '') === 'matched') {
@@ -1969,7 +2247,8 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         }
     }
 
-    if ($source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
+    if (!$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0
+        && $source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
         && function_exists('lookup_copy_rifftrax_item')) {
         $item = lookup_copy_rifftrax_item($item, $source);
         $knownMatches[$key] = $item;
@@ -1983,7 +2262,11 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
     }
 
     $isRiff = ($item['lookup_source'] ?? '') === 'RiffTrax';
-    if ($skipLookup || !$needsLookup || !function_exists('curl_init') || (!$isRiff && !tmdb_has_key())) {
+    if (strcasecmp($groupService, 'TMDB') === 0 || $fileForceTmdb) {
+        unset($item['lookup_source']);
+        $isRiff = false;
+    }
+    if ($skipLookup || !$needsLookup || !function_exists('curl_init') || (!$isRiff && !$groupRiff && !tmdb_has_key())) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         scan_tally_status($job, 'unidentified');
@@ -2002,7 +2285,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         tmdb_scan_item_begin($itemNo, $filename, $path);
     }
     if (function_exists('app_log')) {
-        if ($isRiff) {
+        if ($isRiff || $groupRiff || $useFileRiff) {
             app_log('rifftrax', 'RiffTrax item ' . $itemNo . ': ' . $filename);
         } else {
             app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
@@ -2058,6 +2341,32 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
                 $lookupFile = $namedLookup['stem'] . ($ext !== '' ? ('.' . $ext) : '');
             }
         }
+        if ($groupRiff || $useFileRiff) {
+            $job['items'][] = scan_take_rifftrax_group($job, $item, $itemNo, $filename, $key, $knownMatches);
+            return true;
+        }
+        if ($groupService === '' && $fileService !== '' && !$fileRiff && strcasecmp($fileService, 'TMDB') !== 0) {
+            if (function_exists('app_log')) {
+                app_log('scan', 'Scan service "' . $fileService . '" has no lookup yet. file=' . $filename, [], 'warn');
+            }
+            $item['status'] = 'unmatched';
+            $item['match_source'] = 'none';
+            $job['unmatched'] = (int) $job['unmatched'] + 1;
+            $job['lookups'] = (int) $job['lookups'] + 1;
+            $job['items'][] = $item;
+            return true;
+        }
+        if ($groupService !== '' && strcasecmp($groupService, 'TMDB') !== 0) {
+            if (function_exists('app_log')) {
+                app_log('scan', 'Folder scan service "' . $groupService . '" has no group lookup yet. file=' . $filename, [], 'warn');
+            }
+            $item['status'] = 'unmatched';
+            $item['match_source'] = 'none';
+            $job['unmatched'] = (int) $job['unmatched'] + 1;
+            $job['lookups'] = (int) $job['lookups'] + 1;
+            $job['items'][] = $item;
+            return true;
+        }
         if ($isRiff) {
             $taken = scan_take_rifftrax($job, $item, $itemNo, $filename, $key, $knownMatches);
             if ($taken !== null) {
@@ -2104,7 +2413,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         $item['tmdb_candidates'] = $usable;
 
         if ($usable === []) {
-            if (!$isRiff && $showFolder === '' && function_exists('rifftrax_identify')) {
+            if (!$isRiff && !$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0 && $showFolder === '' && function_exists('rifftrax_identify')) {
                 $hint = rifftrax_identify($root, $path, $filename);
                 if (!empty($hint['fallback'])) {
                     $item['lookup_source'] = 'RiffTrax';

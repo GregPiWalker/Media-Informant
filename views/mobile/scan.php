@@ -43,10 +43,12 @@ $advancedSummary = $isMusic
 $launchLabel = 'Start a ' . $title . ' scan';
 ?>
 <main class="page scan-page">
+  <?php if ($isMusic): ?>
   <a class="back" href="<?= h($backHref) ?>">
     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 5.5 9 12l6.5 6.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     Config
   </a>
+  <?php endif; ?>
   <section class="panel" data-scan-panel data-scan-catalog="<?= h($catalog) ?>" data-scan-enabled="<?= $scanEnabled ? '1' : '0' ?>" data-scan-idle="<?= h($idleCopy) ?>" data-scan-run-url="<?= h($runUrl) ?>" data-scan-options-url="<?= h($optionsUrl) ?>" data-grok-toggle-url="<?= h($grokToggleUrl) ?>" data-grok-pause-url="<?= h($grokPauseUrl) ?>"<?= $runMode !== '' && $scanEnabled ? ' data-scan-start="retry"' : '' ?>>
     <p class="scan-kicker" data-scan-kicker><?= h($kicker) ?></p>
     <h1 id="scan-status-heading" data-scan-title><?= h($h1) ?></h1>

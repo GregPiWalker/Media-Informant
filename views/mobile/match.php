@@ -19,6 +19,9 @@ declare(strict_types=1);
 /** @var bool $relaxedYear */
 /** @var string $parsedTitle */
 /** @var string $grokNote */
+/** @var string $scanServiceNote */
+
+$scanServiceNote = isset($scanServiceNote) ? (string) $scanServiceNote : '';
 
 $searchSource = isset($searchSource) ? (string) $searchSource : 'TMDB';
 $canSearch = isset($canSearch) ? (bool) $canSearch : (bool) ($hasKey ?? false);
@@ -76,11 +79,27 @@ if ($mode === 'popular') {
 
   <?php if (!$canSearch): ?>
   <section class="panel">
-    <h1><?= $onRiff ? 'RiffTrax lookup unavailable' : 'TMDB key needed' ?></h1>
-    <p><?= $onRiff
-        ? 'This PHP build has no curl extension, so RiffTrax cannot be reached.'
-        : 'Add an API key in Config to search and browse titles.' ?></p>
-    <?php if (!$onRiff): ?>
+    <h1><?php
+      if ($onRiff) {
+          echo 'RiffTrax lookup unavailable';
+      } elseif ($scanServiceNote !== '') {
+          echo 'Lookup unavailable';
+      } else {
+          echo 'TMDB key needed';
+      }
+    ?></h1>
+    <p><?php
+      if ($onRiff) {
+          echo 'This PHP build has no curl extension, so RiffTrax cannot be reached.';
+      } elseif ($scanServiceNote !== '') {
+          echo h($scanServiceNote);
+      } else {
+          echo 'Add an API key in Config to search and browse titles.';
+      }
+    ?></p>
+    <?php if ($scanServiceNote !== ''): ?>
+    <a class="btn btn-accent btn-block" href="<?= h(app_href('video/match.php?id=' . rawurlencode($id) . '&source=tmdb')) ?>">Search TMDB instead</a>
+    <?php elseif (!$onRiff): ?>
     <a class="btn btn-accent btn-block" href="<?= h(app_href('config/index.php')) ?>">Open Config</a>
     <?php endif; ?>
   </section>

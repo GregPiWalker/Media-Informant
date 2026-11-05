@@ -285,7 +285,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=65">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=66">
 </head>
 <body>
 <?php
@@ -316,6 +316,11 @@ function render_header(array $opts = []): void
         <span class="scan-live-ring" aria-hidden="true"></span>
         <span class="visually-hidden">Scan running</span>
       </button>
+      <a class="btn btn-icon<?= $section === 'scan' ? ' is-active' : '' ?>" href="<?= h(app_href('video/scan.php')) ?>" aria-label="Scan"<?= $section === 'scan' ? ' aria-current="page"' : '' ?>>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <path fill="currentColor" d="M7 9H2V7h5v2zm0 3H2v2h5v-2zm13.59 7-3.83-3.83A4.96 4.96 0 0 0 18 12a5 5 0 1 0-5 5c1.02 0 1.96-.3 2.75-.83L19 19.59 20.59 19zM13 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM2 19h10v-2H2v2z"/>
+        </svg>
+      </a>
       <a class="btn btn-icon<?= $section === 'tools' ? ' is-active' : '' ?>" href="<?= h(app_href('tools/index.php')) ?>" aria-label="Tools"<?= $section === 'tools' ? ' aria-current="page"' : '' ?>>
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
           <path fill="currentColor" d="M22.7 19 13.6 9.9a5.4 5.4 0 0 0-1.5-6.9 5.5 5.5 0 0 0-7.4-1.3L9 6 6 9 1.6 4.7A5.5 5.5 0 0 0 2.9 12a5.4 5.4 0 0 0 6.9 1.5L19 22.7a1.5 1.5 0 0 0 2.1 0l1.6-1.6a1.5 1.5 0 0 0 0-2.1Z"/>
@@ -324,6 +329,13 @@ function render_header(array $opts = []): void
       <a class="btn btn-icon<?= $section === 'config' ? ' is-active' : '' ?>" href="<?= h(app_href('config/index.php')) ?>" aria-label="Settings"<?= $section === 'config' ? ' aria-current="page"' : '' ?>>
         <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
           <path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.2 7.2 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.81 8.48a.5.5 0 0 0 .12.64L4.96 10.7c-.04.31-.06.63-.06.94s.02.63.06.94L2.93 14.16a.5.5 0 0 0-.12.64l1.92 3.32c.13.23.4.32.64.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.25.42.49.42h3.8c.24 0 .44-.18.49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.24.1.51 0 .64-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2Z"/>
+        </svg>
+      </a>
+      <a class="btn btn-icon<?= $section === 'help' ? ' is-active' : '' ?>" href="<?= h(app_href('help/index.php')) ?>" aria-label="Help"<?= $section === 'help' ? ' aria-current="page"' : '' ?>>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <circle cx="12" cy="12" r="8.25" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M9.2 9.3a2.8 2.8 0 1 1 3.55 2.65c-.75.28-1.15.85-1.15 1.6V14.2"/>
+          <circle cx="11.6" cy="16.85" r="0.95" fill="currentColor"/>
         </svg>
       </a>
     </div>
@@ -445,7 +457,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=63" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=64" defer></script>
 </body>
 </html>
 <?php

@@ -28,8 +28,9 @@ function grok_system_prompt(): string
         . "Only use an id from that item's candidate list, and keep that candidate's source.\n"
         . "When two RiffTrax candidates are the same film, prefer product_kind \"riff\" over \"iriff\".\n"
         . "Match the filename. The parsed title, or catalog_query, may be only part of that name.\n"
-        . "RiffTrax candidates may come from a catalog search; pick the title that is the same work as the file, or null.\n"
-        . "mode=choose: pick the best candidate or null.\n"
+        . "RiffTrax candidates may come from a direct page or a catalog search. Pick the title that is the same work as the file, or null.\n"
+        . "mode=choose: pick the best candidate or null. One candidate is still a choice: select it when it is the same work, and return null when it is a different work.\n"
+        . "A shared word is not a match. Return null when every candidate is a different work.\n"
         . "mode=verify: return that single candidate id unless it is clearly a different work.\n"
         . "Missing year or punctuation is not a reason to reject.\n"
         . "Reply with JSON only:\n"
@@ -578,7 +579,7 @@ function grok_file_payload(array $item): array
 
 /**
  * Ask Grok to choose one candidate for this file.
- * Returns null when Grok is off, the request fails, or no candidate clears the confidence bar.
+ * Returns null when Grok is not configured, the request fails, or no candidate clears the confidence bar.
  *
  * @param array<string, mixed> $item
  * @param list<array<string, mixed>> $candidates
@@ -586,7 +587,7 @@ function grok_file_payload(array $item): array
  */
 function grok_choose_for_item(array $item, array $candidates, string $catalogQuery = ''): ?array
 {
-    if (!grok_live_enabled()) {
+    if (!grok_resolve_available()) {
         return null;
     }
     $compact = grok_compact_candidates($candidates);
@@ -599,7 +600,7 @@ function grok_choose_for_item(array $item, array $candidates, string $catalogQue
         $item['catalog_query'] = trim($catalogQuery);
     }
     $entry = grok_file_payload($item);
-    $entry['mode'] = 'choose';
+    $entry['mode'] = count($compact) === 1 ? 'verify' : 'choose';
     $messages = [
         ['role' => 'system', 'content' => grok_system_prompt()],
         ['role' => 'user', 'content' => (string) json_encode([$entry], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],

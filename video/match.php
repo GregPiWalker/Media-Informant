@@ -170,15 +170,31 @@ $titleInFile = match_filename_contains_title($filename, $storedTitle);
 $riffFile = ($item !== null && function_exists('rifftrax_identify'))
     ? rifftrax_identify((string) ($item['root'] ?? ''), (string) ($item['path'] ?? ''), $filename)
     : ['match' => false, 'title' => '', 'via' => '', 'fallback' => false];
-$sourceRaw = isset($_GET['source']) ? strtolower(trim((string) $_GET['source'])) : '';
-if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax') {
-    $sourceRaw = !empty($riffFile['match']) ? 'rifftrax' : 'tmdb';
+$itemService = 'TMDB';
+if (is_array($item) && function_exists('catalog_item_scan_service')) {
+    $resolvedService = catalog_item_scan_service($item);
+    if ($resolvedService !== '') {
+        $itemService = $resolvedService;
+    }
 }
-$searchSource = $sourceRaw === 'rifftrax' ? 'RiffTrax' : 'TMDB';
+$sourceRaw = isset($_GET['source']) ? strtolower(trim((string) $_GET['source'])) : '';
+$scanServiceNote = '';
+if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax') {
+    if (strcasecmp($itemService, 'RiffTrax') === 0) {
+        $sourceRaw = 'rifftrax';
+    } elseif (strcasecmp($itemService, 'TMDB') === 0) {
+        $sourceRaw = 'tmdb';
+    } else {
+        $sourceRaw = '';
+        $scanServiceNote = 'Scan service "' . $itemService . '" has no match page yet.';
+    }
+}
+$searchSource = $sourceRaw === 'rifftrax' ? 'RiffTrax' : ($sourceRaw === 'tmdb' ? 'TMDB' : $itemService);
 
 $browse = (string) ($_GET['browse'] ?? '') === 'popular';
 if ($browse) {
     $searchSource = 'TMDB';
+    $scanServiceNote = '';
 }
 $q = isset($_GET['q']) ? trim((string) $_GET['q']) : (($browse || !$titleInFile) ? '' : $storedTitle);
 if ($searchSource === 'RiffTrax' && !isset($_GET['q']) && !empty($riffFile['title'])) {
@@ -198,7 +214,9 @@ $payload = ['results' => [], 'page' => 1, 'total_pages' => 1];
 $relaxedYear = false;
 $grokNote = '';
 $hasKey = tmdb_has_key();
-$canSearch = $searchSource === 'RiffTrax' ? function_exists('curl_init') : $hasKey;
+$canSearch = $scanServiceNote !== ''
+    ? false
+    : ($searchSource === 'RiffTrax' ? function_exists('curl_init') : $hasKey);
 
 if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
     $queryText = $q !== '' ? $q : (string) ($riffFile['title'] ?? '');
@@ -216,16 +234,16 @@ if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
         app_log('rifftrax', 'RiffTrax search for "' . $queryText . '" via ' . $via
             . ' returned ' . count($rows) . ' title(s). file=' . $filename);
     }
-    if ($via === 'catalog' && $rows !== []) {
+    if ($rows !== []) {
         require_once dirname(__DIR__) . '/lib/grok.php';
-        $grokOn = function_exists('grok_live_enabled') && grok_live_enabled();
+        $grokOn = function_exists('grok_resolve_available') && grok_resolve_available();
         if (!$grokOn) {
             if (function_exists('app_log')) {
-                app_log('grok', 'Grok is off, so ' . count($rows) . ' catalog title(s) for "' . $queryText . '" were not sent. file=' . $filename);
+                app_log('grok', 'Grok is not configured, so ' . count($rows) . ' RiffTrax title(s) for "' . $queryText . '" were not sent. file=' . $filename);
             }
         } else {
             if (function_exists('app_log')) {
-                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' catalog title(s) for "' . $queryText . '". file=' . $filename);
+                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' RiffTrax title(s) for "' . $queryText . '" via ' . $via . '. file=' . $filename);
             }
             $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $queryText) : null;
             if (is_array($choice) && $service instanceof RiffTraxVideoLookupService) {
@@ -248,7 +266,7 @@ if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
                 }
             }
             if ($error === '') {
-                $grokNote = 'Grok did not choose a title from these results.';
+                $grokNote = 'Grok could not choose a title from these results. Pick one below.';
             }
         }
     }
@@ -257,7 +275,7 @@ if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
         'page' => 1,
         'total_pages' => 1,
     ];
-} elseif ($item !== null && $hasKey) {
+} elseif ($item !== null && $hasKey && $scanServiceNote === '' && $searchSource === 'TMDB') {
     if ($q !== '') {
         $payload = tmdb_search_results($q, $year, $page, $searchMedia);
         $relaxedYear = !empty($payload['relaxed_year']);

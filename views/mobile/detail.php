@@ -136,15 +136,14 @@ if ($episodeNum !== null) {
 }
 $episodeCode = implode(' - ', $episodeCodeBits);
 $lookupSource = $found ? (string) ($item['lookup_source'] ?? '') : '';
-$pathIsRiff = false;
-if ($found && function_exists('rifftrax_identify')) {
-    $namedRiff = rifftrax_identify(
-        (string) ($item['root'] ?? ''),
-        (string) ($item['path'] ?? ''),
-        (string) ($item['filename'] ?? '')
-    );
-    $pathIsRiff = !empty($namedRiff['match']);
+$scanService = 'TMDB';
+if ($found && function_exists('catalog_item_scan_service')) {
+    $resolvedService = catalog_item_scan_service($item);
+    if ($resolvedService !== '') {
+        $scanService = $resolvedService;
+    }
 }
+$scanIsRiff = strcasecmp($scanService, 'RiffTrax') === 0;
 $filmYear = null;
 if ($found && $lookupSource === 'RiffTrax' && isset($item['original_year']) && is_numeric($item['original_year'])) {
     $originalYear = (int) $item['original_year'];
@@ -160,15 +159,12 @@ $matchNote = '';
 $matchClass = 'hint';
 if ($found) {
     if ($status === 'unidentified') {
-        $matchNote = $pathIsRiff
+        $matchNote = $scanIsRiff
             ? 'Not looked up yet. Scan unidentified titles to search RiffTrax, or match it from the menu.'
             : 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
         $matchClass = 'unmatched-note';
     } elseif ($status !== 'matched') {
-        $hasRiffCandidates = is_array($item['lookup_candidates'] ?? null) && $item['lookup_candidates'] !== [];
-        $hasTmdbCandidates = is_array($item['tmdb_candidates'] ?? null) && $item['tmdb_candidates'] !== [];
-        $unmatchedRiff = $lookupSource === 'RiffTrax' || $hasRiffCandidates || ($pathIsRiff && !$hasTmdbCandidates);
-        $matchNote = $unmatchedRiff
+        $matchNote = $scanIsRiff
             ? 'No confident RiffTrax match. Showing the title parsed from the folder or filename.'
             : 'No confident TMDB match. Showing the title parsed from the folder or filename.';
         $matchClass = 'unmatched-note';

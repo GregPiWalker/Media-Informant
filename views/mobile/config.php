@@ -123,11 +123,6 @@ if ($configTab !== 'music' && $configTab !== 'general') {
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="video-exclude">Add excluded path</button>
     </section>
 
-    <section class="form-section">
-      <h2>Video library</h2>
-      <p class="hint">Look up titles on TMDB, then Grok if enabled, for files already in the catalog. Save new folders first so they can be indexed.</p>
-      <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Open video scan page</a>
-    </section>
     </div>
 
     <div id="config-panel-music" class="config-panel" data-config-panel="music" role="tabpanel" aria-labelledby="config-tab-music"<?= $configTab === 'music' ? '' : ' hidden' ?>>
