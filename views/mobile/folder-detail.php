@@ -54,9 +54,13 @@ $configuring = !empty($configuring);
 $scanServices = is_array($scanServices ?? null) ? $scanServices : [];
 $scanServiceSaved = trim((string) ($scanServiceSaved ?? ''));
 $scanServiceActive = trim((string) ($scanServiceActive ?? ''));
-$scanServiceSelected = $scanServiceSaved !== ''
-    ? $scanServiceSaved
-    : (strcasecmp($label, 'RiffTrax') === 0 ? 'RiffTrax' : 'TMDB');
+$folderDefault = 'TMDB';
+if (function_exists('mst3k_folder_name') && mst3k_folder_name($label)) {
+    $folderDefault = 'MST3K';
+} elseif (strcasecmp($label, 'RiffTrax') === 0) {
+    $folderDefault = 'RiffTrax';
+}
+$scanServiceSelected = $scanServiceSaved !== '' ? $scanServiceSaved : $folderDefault;
 if ($scanServiceActive === '') {
     $scanServiceLabel = 'Catalog scan';
 } else {
@@ -118,7 +122,7 @@ render_header(['section' => 'video']);
       <input type="hidden" name="action" value="save_scan_service">
       <section class="detail-section">
         <h2>Lookup service</h2>
-        <p class="hint">Re-scan uses the service you save here for every movie in this folder, and Match title on one of those movies uses the same service. A folder named RiffTrax uses RiffTrax until you save a different one. Clear Matches first when a new service should replace titles that are already matched.</p>
+        <p class="hint">Re-scan uses the service you save here for every movie in this folder, and Match title on one of those movies uses the same service. A folder named RiffTrax uses RiffTrax until you save a different one. A folder named MST3K or Mystery Science Theater 3000 uses MST3K until you save a different one. A file named “MST3K - Title” or “MST3K: Title” uses MST3K when the folder has no saved service. Clear Matches first when a new service should replace titles that are already matched.</p>
         <?php if ($scanServices === []): ?>
         <p class="hint">No lookup services are available.</p>
         <?php else: ?>

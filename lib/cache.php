@@ -508,7 +508,7 @@ function library_normalize_match_source(string $source): string
     if ($source === 'tmdb' || $source === 'auto') {
         return 'direct';
     }
-    if ($source === 'direct' || $source === 'grok' || $source === 'manual' || $source === 'rifftrax' || $source === 'none') {
+    if ($source === 'direct' || $source === 'grok' || $source === 'manual' || $source === 'rifftrax' || $source === 'mst3k' || $source === 'none') {
         return $source;
     }
     return 'none';
@@ -534,6 +534,7 @@ function library_match_source_label(string $source): string
         'direct' => 'Direct',
         'manual' => 'Manual',
         'rifftrax' => 'RiffTrax',
+        'mst3k' => 'MST3K',
         default => 'None',
     };
 }

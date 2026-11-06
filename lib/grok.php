@@ -387,8 +387,14 @@ function grok_compact_candidates(array $candidates): array
         }
         $seen[$seenKey] = true;
         $year = $row['year'] ?? null;
+        $canonical = 'TMDB';
+        if (strcasecmp($source, 'RiffTrax') === 0) {
+            $canonical = 'RiffTrax';
+        } elseif (strcasecmp($source, 'MST3K') === 0) {
+            $canonical = 'MST3K';
+        }
         $one = [
-            'source' => strcasecmp($source, 'RiffTrax') === 0 ? 'RiffTrax' : 'TMDB',
+            'source' => $canonical,
             'id' => $id,
             'title' => (string) ($row['title'] ?? ''),
             'year' => is_numeric($year) ? (int) $year : null,
@@ -470,11 +476,12 @@ function grok_resolve_choice(array $allowed, ?array $row): array
 
 function grok_apply_resolved(array $item, string $source, int $id): array
 {
-    if (strcasecmp($source, 'RiffTrax') === 0) {
-        $service = function_exists('lookup_service') ? lookup_service('RiffTrax') : null;
+    if (strcasecmp($source, 'RiffTrax') === 0 || strcasecmp($source, 'MST3K') === 0) {
+        $site = strcasecmp($source, 'MST3K') === 0 ? 'MST3K' : 'RiffTrax';
+        $service = function_exists('lookup_service') ? lookup_service($site) : null;
         $meta = $service ? $service->fetch((string) $id) : null;
         if (!$meta instanceof VideoMetadata || !function_exists('lookup_apply_metadata')) {
-            throw new RuntimeException('Could not load RiffTrax title ' . $id . '.');
+            throw new RuntimeException('Could not load ' . $site . ' title ' . $id . '.');
         }
         return lookup_apply_metadata($item, $meta, 'grok');
     }
@@ -485,7 +492,8 @@ function grok_ensure_candidates(array &$item): array
 {
     $existing = grok_item_candidates($item);
     if ($existing !== []) {
-        if (($existing[0]['source'] ?? '') === 'RiffTrax') {
+        $lead = (string) ($existing[0]['source'] ?? '');
+        if (strcasecmp($lead, 'RiffTrax') === 0 || strcasecmp($lead, 'MST3K') === 0) {
             $item['lookup_candidates'] = $existing;
         } else {
             $item['tmdb_candidates'] = $existing;
@@ -499,11 +507,29 @@ function grok_ensure_candidates(array &$item): array
     $filename = (string) ($item['filename'] ?? '');
     $path = (string) ($item['path'] ?? '');
     $root = (string) ($item['root'] ?? '');
+    $scanService = trim((string) ($item['scan_service'] ?? ''));
+    $explicitRiff = strcasecmp($scanService, 'RiffTrax') === 0;
+    $explicitTmdb = strcasecmp($scanService, 'TMDB') === 0;
+    $identifiedMst = !$explicitRiff && !$explicitTmdb && ($item['lookup_source'] ?? '') === 'MST3K';
+    if (!$identifiedMst && !$explicitRiff && !$explicitTmdb && function_exists('mst3k_identify')) {
+        $identifiedMst = !empty(mst3k_identify($root, $path, $filename)['match']);
+    }
     $identified = ($item['lookup_source'] ?? '') === 'RiffTrax';
-    if (!$identified && function_exists('rifftrax_identify')) {
+    if (!$identified && !$identifiedMst && function_exists('rifftrax_identify')) {
         $identified = !empty(rifftrax_identify($root, $path, $filename)['match']);
     }
     $limit = function_exists('tmdb_shortlist_limit') ? tmdb_shortlist_limit() : 6;
+    if ($identifiedMst && function_exists('lookup_service')) {
+        $service = lookup_service('MST3K');
+        $hits = $service ? $service->search($title, null, $limit, [
+            'filename' => $filename,
+            'path' => $path,
+            'official_only' => true,
+        ]) : [];
+        $item['lookup_source'] = 'MST3K';
+        $item['lookup_candidates'] = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+        return grok_compact_candidates($item['lookup_candidates']);
+    }
     if ($identified && function_exists('lookup_service')) {
         $service = lookup_service('RiffTrax');
         $hits = $service ? $service->search($title, null, $limit, [
@@ -521,6 +547,23 @@ function grok_ensure_candidates(array &$item): array
         'meta' => function_exists('tmdb_search_meta_from_item') ? tmdb_search_meta_from_item($item) : [],
     ]) : [];
     $found = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+    if (!$explicitTmdb && !$explicitRiff && $found === [] && function_exists('mst3k_identify') && function_exists('lookup_service')) {
+        $mstHint = mst3k_identify($root, $path, $filename);
+        if (!empty($mstHint['fallback'])) {
+            $mst = lookup_service('MST3K');
+            $mstHits = $mst ? $mst->search($title, null, $limit, [
+                'filename' => $filename,
+                'path' => $path,
+                'official_only' => true,
+            ]) : [];
+            $mstRows = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($mstHits) : [];
+            if ($mstRows !== []) {
+                $item['lookup_source'] = 'MST3K';
+                $item['lookup_candidates'] = $mstRows;
+                return grok_compact_candidates($mstRows);
+            }
+        }
+    }
     if ($found === [] && function_exists('rifftrax_identify') && function_exists('lookup_service')) {
         $hint = rifftrax_identify($root, $path, $filename);
         if (!empty($hint['fallback'])) {

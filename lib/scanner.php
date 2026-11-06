@@ -871,6 +871,9 @@ function scan_lookup_skip_reason(array $item, array $targets): string
         if ($source === 'rifftrax') {
             return 'matched_rifftrax';
         }
+        if ($source === 'mst3k') {
+            return 'matched_mst3k';
+        }
         return 'manual';
     }
     return !empty($targets['unidentified']) ? '' : 'unidentified';
@@ -904,6 +907,7 @@ function scan_empty_lookup_message(string $scopeLabel, string $noun, array $targ
         'matched_grok' => 'matched by Grok',
         'matched_direct' => 'matched directly',
         'matched_rifftrax' => 'matched from RiffTrax',
+        'matched_mst3k' => 'matched from MST3K',
         'manual' => 'matched by you',
         'absent' => 'on an absent source',
         'missing' => 'missing from disk',
@@ -930,7 +934,7 @@ function scan_empty_lookup_message(string $scopeLabel, string $noun, array $targ
     if (!empty($skipped['matched_direct'])) {
         $hints[] = 'Turn on Matched (Direct) in Scan options to look those up again.';
     }
-    if (!empty($skipped['matched_rifftrax']) || !empty($skipped['manual'])) {
+    if (!empty($skipped['matched_rifftrax']) || !empty($skipped['matched_mst3k']) || !empty($skipped['manual'])) {
         $hints[] = 'Clear Matches to look up titles that are already matched. Scan options do not include those.';
     }
     if (!empty($skipped['absent'])) {
@@ -1029,10 +1033,11 @@ function scan_index_library(array $library): array
                 $oldByPath[$item['path']] = $item;
             }
         }
-        $riffKnown = ($item['status'] ?? '') === 'matched'
-            && ($item['lookup_source'] ?? '') === 'RiffTrax'
+        $lookupKnown = (string) ($item['lookup_source'] ?? '');
+        $siteKnown = ($item['status'] ?? '') === 'matched'
+            && ($lookupKnown === 'RiffTrax' || $lookupKnown === 'MST3K')
             && (string) ($item['lookup_id'] ?? '') !== '';
-        if ((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) || $riffKnown) && !empty($item['title'])) {
+        if ((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id']) || $siteKnown) && !empty($item['title'])) {
             $known[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
             if (!empty($item['display_title'])) {
                 $known[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
@@ -1163,28 +1168,30 @@ function scan_part_apply_bundle(array $item, array $bundle): array
         $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
         return $item;
     }
-    $riffBundle = ($bundle['lookup_source'] ?? '') === 'RiffTrax' && (string) ($bundle['lookup_id'] ?? '') !== '';
-    if (!empty($bundle['pending']) || ((int) ($bundle['tmdb_id'] ?? 0) < 1 && !$riffBundle)) {
+    $bundleLookup = (string) ($bundle['lookup_source'] ?? '');
+    $siteBundle = ($bundleLookup === 'RiffTrax' || $bundleLookup === 'MST3K')
+        && (string) ($bundle['lookup_id'] ?? '') !== '';
+    if (!empty($bundle['pending']) || ((int) ($bundle['tmdb_id'] ?? 0) < 1 && !$siteBundle)) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         $item['tmdb_candidates'] = is_array($bundle['candidates'] ?? null) ? $bundle['candidates'] : [];
         if (is_array($bundle['lookup_candidates'] ?? null) && $bundle['lookup_candidates'] !== []) {
             $item['lookup_candidates'] = $bundle['lookup_candidates'];
-            $item['lookup_source'] = 'RiffTrax';
+            $item['lookup_source'] = $bundleLookup === 'MST3K' ? 'MST3K' : 'RiffTrax';
         }
         $item['part_bundle'] = scan_part_bundle_key($item);
         return $item;
     }
-    if ($riffBundle) {
+    if ($siteBundle) {
         $item['tmdb_id'] = null;
-        $item['lookup_source'] = 'RiffTrax';
+        $item['lookup_source'] = $bundleLookup === 'MST3K' ? 'MST3K' : 'RiffTrax';
         $item['lookup_id'] = (string) $bundle['lookup_id'];
         $item['detail_url'] = (string) ($bundle['detail_url'] ?? '');
         if (isset($bundle['original_year']) && is_numeric($bundle['original_year'])) {
             $item['original_year'] = (int) $bundle['original_year'];
         }
     }
-    $item['tmdb_id'] = $riffBundle ? null : (int) $bundle['tmdb_id'];
+    $item['tmdb_id'] = $siteBundle ? null : (int) $bundle['tmdb_id'];
     $item['status'] = 'matched';
     $item['poster_path'] = $bundle['poster_path'] ?? null;
     $item['genres'] = function_exists('cache_string_list') ? cache_string_list($bundle['genres'] ?? []) : ($bundle['genres'] ?? []);
@@ -1736,6 +1743,8 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
         $folderScanService = catalog_folder_scan_service_for_rescan($groupKey, $scopeLabel);
     } elseif (str_starts_with($groupKey, 'folder:') && strcasecmp($scopeLabel, 'RiffTrax') === 0) {
         $folderScanService = 'RiffTrax';
+    } elseif (str_starts_with($groupKey, 'folder:') && function_exists('mst3k_folder_name') && mst3k_folder_name($scopeLabel)) {
+        $folderScanService = 'MST3K';
     }
 
     $job = [
@@ -1787,6 +1796,8 @@ function scan_job_begin(string $mode = 'retry', string $catalog = 'video', strin
         ]);
         if (strcasecmp($folderScanService, 'RiffTrax') === 0) {
             app_log('scan', $scopeLabel . ' re-scan uses the RiffTrax lookup service. A file that does not resolve is logged and left unmatched.');
+        } elseif (strcasecmp($folderScanService, 'MST3K') === 0) {
+            app_log('scan', $scopeLabel . ' re-scan uses the MST3K lookup service. A file that does not resolve is logged and left unmatched.');
         } elseif ($folderScanService !== '') {
             app_log('scan', $scopeLabel . ' re-scan uses the ' . $folderScanService . ' lookup service.');
         }
@@ -2031,6 +2042,222 @@ function scan_rifftrax_group_fail(array &$job, array $item, array $rows, string 
     return $item;
 }
 
+/**
+ * Look up one identified file on MST3K.
+ * A direct /mst3k-{slug} hit is stored immediately. Catalog hits are queued
+ * for Grok only when the scan toggle is on. With Grok off, a close catalog
+ * title is still stored and a partial hit stays unmatched.
+ * Returns null when MST3K has nothing, so the caller can try another source.
+ *
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param array<string, mixed> $knownMatches
+ */
+function scan_take_mst3k(array &$job, array $item, int $itemNo, string $filename, string $key, array &$knownMatches): ?array
+{
+    if (!function_exists('lookup_mst3k_resolve')) {
+        return null;
+    }
+    $title = trim((string) ($item['title'] ?? ''));
+    $resolved = lookup_mst3k_resolve($title, [
+        'filename' => (string) ($item['filename'] ?? $filename),
+        'path' => (string) ($item['path'] ?? ''),
+        'official_only' => true,
+    ]);
+    $job['lookups'] = (int) ($job['lookups'] ?? 0) + 1;
+    $status = (string) ($resolved['status'] ?? 'miss');
+    $via = (string) ($resolved['via'] ?? 'none');
+    $candidates = is_array($resolved['candidates'] ?? null) ? $resolved['candidates'] : [];
+    if ($via === 'catalog' && $candidates !== [] && scan_grok_on()) {
+        $item['status'] = 'unmatched';
+        $item['match_source'] = 'none';
+        $item['lookup_source'] = 'MST3K';
+        $item['lookup_candidates'] = $candidates;
+        $item['tmdb_candidates'] = [];
+        $item['catalog_query'] = $title;
+        $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+        $item['part_bundle'] = scan_part_bundle_key($item);
+        scan_part_remember($job, $item, true);
+        scan_queue_grok($job, $item, 'choose');
+        if (function_exists('app_log')) {
+            app_log('mst3k', 'MST3K item ' . $itemNo . ' catalog search queued for Grok. file=' . $filename);
+        }
+        return $item;
+    }
+    if ($status === 'matched' && ($resolved['metadata'] ?? null) instanceof VideoMetadata) {
+        $item = lookup_apply_metadata($item, $resolved['metadata'], 'mst3k');
+        if (function_exists('app_log')) {
+            $storedYear = isset($item['year']) && is_numeric($item['year']) ? (string) (int) $item['year'] : '-';
+            app_log(
+                'mst3k',
+                'MST3K item ' . $itemNo . ' stored ' . (string) ($item['lookup_id'] ?? '')
+                . ' "' . (string) ($item['display_title'] ?? $item['title'] ?? '') . '"'
+                . ' year=' . $storedYear
+                . ' file=' . $filename
+            );
+        }
+        $knownMatches[$key] = $item;
+        if (!empty($item['display_title'])) {
+            $knownMatches[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
+        }
+        scan_part_remember($job, $item);
+        $job['found'] = (int) ($job['found'] ?? 0) + 1;
+        return $item;
+    }
+    if ($status === 'ambiguous') {
+        $item['status'] = 'unmatched';
+        $item['match_source'] = 'none';
+        $item['lookup_source'] = 'MST3K';
+        $item['lookup_candidates'] = $candidates;
+        $item['tmdb_candidates'] = [];
+        $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+        $item['part_bundle'] = scan_part_bundle_key($item);
+        scan_part_remember($job, $item, true);
+        if ($via === 'catalog') {
+            if (function_exists('app_log')) {
+                app_log('mst3k', 'MST3K item ' . $itemNo . ' catalog search left unmatched; Grok is off. file=' . $filename);
+            }
+            return $item;
+        }
+        scan_queue_grok($job, $item, 'choose');
+        if (function_exists('app_log')) {
+            app_log('mst3k', 'MST3K item ' . $itemNo . ' has several matches; queued for Grok. file=' . $filename);
+        }
+        return $item;
+    }
+    if (function_exists('app_log')) {
+        app_log('mst3k', 'MST3K item ' . $itemNo . ' no match for "' . $title . '" file=' . $filename);
+    }
+    return null;
+}
+
+/**
+ * Match one file during an MST3K folder re-scan.
+ * Search matches Match title. One exact or title-close hit is stored.
+ * Otherwise Grok chooses when it is configured. A file that still has no
+ * title is left unmatched and logged. This does not open the match page,
+ * queue a Grok batch, or try TMDB.
+ *
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param array<string, mixed> $knownMatches
+ * @return array<string, mixed>
+ */
+function scan_take_mst3k_group(array &$job, array $item, int $itemNo, string $filename, string $key, array &$knownMatches): array
+{
+    $title = trim((string) ($item['title'] ?? ''));
+    $service = function_exists('lookup_service') ? lookup_service('MST3K') : null;
+    $context = [
+        'filename' => (string) ($item['filename'] ?? $filename),
+        'path' => (string) ($item['path'] ?? ''),
+    ];
+    $hits = [];
+    $via = 'none';
+    if ($service instanceof Mst3kVideoLookupService && $title !== '') {
+        $hits = $service->search($title, null, 12, $context);
+        $via = $service->lastVia();
+    }
+    $rows = function_exists('lookup_candidate_rows') ? lookup_candidate_rows($hits) : [];
+    $job['lookups'] = (int) ($job['lookups'] ?? 0) + 1;
+    if (function_exists('app_log')) {
+        app_log('mst3k', 'MST3K search for "' . $title . '" via ' . $via
+            . ' returned ' . count($rows) . ' title(s). file=' . $filename);
+    }
+
+    if ($service instanceof Mst3kVideoLookupService && $hits !== []) {
+        $directContext = $context;
+        $directContext['hits'] = $hits;
+        $direct = $service->lookup($title, null, $directContext);
+        if ($direct instanceof VideoMetadata && function_exists('lookup_apply_metadata')) {
+            $item = lookup_apply_metadata($item, $direct, 'mst3k');
+            if (function_exists('app_log')) {
+                $storedYear = isset($item['year']) && is_numeric($item['year']) ? (string) (int) $item['year'] : '-';
+                app_log(
+                    'mst3k',
+                    'MST3K item ' . $itemNo . ' stored ' . (string) ($item['lookup_id'] ?? '')
+                    . ' "' . (string) ($item['display_title'] ?? $item['title'] ?? '') . '"'
+                    . ' year=' . $storedYear
+                    . ' file=' . $filename
+                );
+            }
+            return scan_rifftrax_group_keep($job, $item, $key, $knownMatches);
+        }
+    }
+
+    if ($rows === []) {
+        return scan_mst3k_group_fail($job, $item, $rows, $filename, 'no MST3K title for "' . $title . '"');
+    }
+
+    if (!function_exists('grok_resolve_available')) {
+        require_once __DIR__ . '/grok.php';
+    }
+    if (!function_exists('grok_resolve_available') || !grok_resolve_available()) {
+        return scan_mst3k_group_fail(
+            $job,
+            $item,
+            $rows,
+            $filename,
+            'Grok is not configured, so ' . count($rows) . ' title(s) for "' . $title . '" were not sent'
+        );
+    }
+
+    if (function_exists('app_log')) {
+        app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' MST3K title(s) for "' . $title . '" via ' . $via . '. file=' . $filename);
+    }
+    $job['grok_attempted'] = (int) ($job['grok_attempted'] ?? 0) + 1;
+    $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $title) : null;
+    if (is_array($choice) && $service instanceof Mst3kVideoLookupService) {
+        $picked = $service->fetch((string) $choice['id']);
+        if ($picked instanceof VideoMetadata && function_exists('lookup_apply_metadata')) {
+            $item = lookup_apply_metadata($item, $picked, 'grok');
+            if (function_exists('app_log')) {
+                app_log('grok', 'Grok chose MST3K "' . $picked->title . '" for ' . $filename . '.', [
+                    'lookup_id' => $picked->lookupId,
+                    'item' => $itemNo,
+                ]);
+            }
+            return scan_rifftrax_group_keep($job, $item, $key, $knownMatches);
+        }
+        return scan_mst3k_group_fail(
+            $job,
+            $item,
+            $rows,
+            $filename,
+            'Grok chose a title for "' . $title . '" but the MST3K record could not be loaded'
+        );
+    }
+
+    return scan_mst3k_group_fail(
+        $job,
+        $item,
+        $rows,
+        $filename,
+        'Grok could not choose among ' . count($rows) . ' title(s) for "' . $title . '"'
+    );
+}
+
+/**
+ * @param array<string, mixed> $job
+ * @param array<string, mixed> $item
+ * @param list<array<string, mixed>> $rows
+ * @return array<string, mixed>
+ */
+function scan_mst3k_group_fail(array &$job, array $item, array $rows, string $filename, string $reason): array
+{
+    if (function_exists('app_log')) {
+        app_log('mst3k', 'MST3K group match failed for ' . $filename . ': ' . $reason . '.', [], 'warn');
+    }
+    $item['status'] = 'unmatched';
+    $item['match_source'] = 'none';
+    $item['lookup_source'] = 'MST3K';
+    $item['lookup_candidates'] = $rows;
+    $item['tmdb_candidates'] = [];
+    $job['unmatched'] = (int) ($job['unmatched'] ?? 0) + 1;
+    $item['part_bundle'] = scan_part_bundle_key($item);
+    scan_part_remember($job, $item, true);
+    return $item;
+}
+
 function scan_job_process_file(array &$job, array $file, array $oldByPath, array &$knownMatches, bool $skipLookup): bool
 {
     $path = (string) ($file['path'] ?? '');
@@ -2086,8 +2313,8 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         'match_source' => 'none',
         'genres' => [],
     ];
-    if (($parsed['lookup_source'] ?? '') === 'RiffTrax') {
-        $item['lookup_source'] = 'RiffTrax';
+    if (($parsed['lookup_source'] ?? '') === 'RiffTrax' || ($parsed['lookup_source'] ?? '') === 'MST3K') {
+        $item['lookup_source'] = (string) $parsed['lookup_source'];
     }
     if ($prev) {
         if (array_key_exists('overview', $prev) && is_string($prev['overview'])) {
@@ -2132,6 +2359,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
 
     $groupService = trim((string) ($job['group_scan_service'] ?? ''));
     $groupRiff = strcasecmp($groupService, 'RiffTrax') === 0;
+    $groupMst = strcasecmp($groupService, 'MST3K') === 0;
     if ($groupService !== '') {
         $item['scan_service'] = $groupService;
     } elseif (function_exists('catalog_item_scan_service')) {
@@ -2159,18 +2387,28 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         ? catalog_scan_service_keep_value($item['scan_service'] ?? '')
         : trim((string) ($item['scan_service'] ?? ''));
     $fileRiff = strcasecmp($fileService, 'RiffTrax') === 0;
+    $fileMst = strcasecmp($fileService, 'MST3K') === 0;
     $fileForceTmdb = strcasecmp($fileService, 'TMDB') === 0
         && function_exists('catalog_file_folder_saved_service')
         && strcasecmp(catalog_file_folder_saved_service($item), 'TMDB') === 0;
-    $useFileRiff = $fileRiff && !$groupRiff && ($item['lookup_source'] ?? '') !== 'RiffTrax';
+    $parsedLookup = (string) ($item['lookup_source'] ?? '');
+    $useFileRiff = $fileRiff && !$groupRiff && !$groupMst && $parsedLookup !== 'RiffTrax';
+    $useFileMst = $fileMst && !$groupMst && !$groupRiff && $parsedLookup !== 'MST3K';
+    $isMst = $parsedLookup === 'MST3K';
+    $isRiff = $parsedLookup === 'RiffTrax';
+    if (strcasecmp($groupService, 'TMDB') === 0 || $fileForceTmdb) {
+        unset($item['lookup_source']);
+        $isMst = false;
+        $isRiff = false;
+    }
     $source = null;
-    if ($sameParse && !$groupRiff && !$useFileRiff) {
+    if ($sameParse && !$groupRiff && !$useFileRiff && !$groupMst && !$useFileMst && !$isMst) {
         $source = $prev;
     } elseif (isset($knownMatches[$key])) {
         $source = $knownMatches[$key];
     }
 
-    if (!$groupRiff && !$useFileRiff && $source && !empty($source['tmdb_id'])) {
+    if (!$groupRiff && !$useFileRiff && !$groupMst && !$useFileMst && !$isMst && $source && !empty($source['tmdb_id'])) {
         $tmdbId = (int) $source['tmdb_id'];
         $meta = scan_cached_title($item, $source, $tmdbId);
         if ($meta === null && ($source['status'] ?? '') === 'matched') {
@@ -2247,10 +2485,13 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         }
     }
 
+    $copiedLookup = is_array($source) ? (string) ($source['lookup_source'] ?? '') : '';
+    $copyRiff = $copiedLookup === 'RiffTrax' && !$groupMst && !$fileMst && !$isMst;
+    $copyMst = $copiedLookup === 'MST3K' && ($groupMst || $fileMst || $isMst) && !$groupRiff && !$fileRiff;
     if (!$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0
-        && $source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
-        && function_exists('lookup_copy_rifftrax_item')) {
-        $item = lookup_copy_rifftrax_item($item, $source);
+        && is_array($source) && ($copyRiff || $copyMst) && (string) ($source['lookup_id'] ?? '') !== ''
+        && function_exists('lookup_copy_site_item')) {
+        $item = lookup_copy_site_item($item, $source);
         $knownMatches[$key] = $item;
         scan_part_remember($job, $item);
         $job['items'][] = $item;
@@ -2261,12 +2502,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         return false;
     }
 
-    $isRiff = ($item['lookup_source'] ?? '') === 'RiffTrax';
-    if (strcasecmp($groupService, 'TMDB') === 0 || $fileForceTmdb) {
-        unset($item['lookup_source']);
-        $isRiff = false;
-    }
-    if ($skipLookup || !$needsLookup || !function_exists('curl_init') || (!$isRiff && !$groupRiff && !tmdb_has_key())) {
+    if ($skipLookup || !$needsLookup || !function_exists('curl_init') || (!$isRiff && !$groupRiff && !$isMst && !$groupMst && !$fileMst && !tmdb_has_key())) {
         $item['status'] = 'unidentified';
         $item['match_source'] = 'none';
         scan_tally_status($job, 'unidentified');
@@ -2285,7 +2521,9 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         tmdb_scan_item_begin($itemNo, $filename, $path);
     }
     if (function_exists('app_log')) {
-        if ($isRiff || $groupRiff || $useFileRiff) {
+        if ($isMst || $groupMst || $useFileMst) {
+            app_log('mst3k', 'MST3K item ' . $itemNo . ': ' . $filename);
+        } elseif ($isRiff || $groupRiff || $useFileRiff) {
             app_log('rifftrax', 'RiffTrax item ' . $itemNo . ': ' . $filename);
         } else {
             app_log('tmdb', 'TMDB item ' . $itemNo . ': ' . $filename);
@@ -2345,7 +2583,11 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $job['items'][] = scan_take_rifftrax_group($job, $item, $itemNo, $filename, $key, $knownMatches);
             return true;
         }
-        if ($groupService === '' && $fileService !== '' && !$fileRiff && strcasecmp($fileService, 'TMDB') !== 0) {
+        if ($groupMst || $useFileMst) {
+            $job['items'][] = scan_take_mst3k_group($job, $item, $itemNo, $filename, $key, $knownMatches);
+            return true;
+        }
+        if ($groupService === '' && $fileService !== '' && !$fileRiff && !$fileMst && strcasecmp($fileService, 'TMDB') !== 0) {
             if (function_exists('app_log')) {
                 app_log('scan', 'Scan service "' . $fileService . '" has no lookup yet. file=' . $filename, [], 'warn');
             }
@@ -2356,7 +2598,7 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $job['items'][] = $item;
             return true;
         }
-        if ($groupService !== '' && strcasecmp($groupService, 'TMDB') !== 0) {
+        if ($groupService !== '' && strcasecmp($groupService, 'TMDB') !== 0 && !$groupRiff && !$groupMst) {
             if (function_exists('app_log')) {
                 app_log('scan', 'Folder scan service "' . $groupService . '" has no group lookup yet. file=' . $filename, [], 'warn');
             }
@@ -2366,6 +2608,14 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $job['lookups'] = (int) $job['lookups'] + 1;
             $job['items'][] = $item;
             return true;
+        }
+        if ($isMst) {
+            $taken = scan_take_mst3k($job, $item, $itemNo, $filename, $key, $knownMatches);
+            if ($taken !== null) {
+                $job['items'][] = $taken;
+                return true;
+            }
+            unset($item['lookup_source']);
         }
         if ($isRiff) {
             $taken = scan_take_rifftrax($job, $item, $itemNo, $filename, $key, $knownMatches);
@@ -2413,7 +2663,22 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
         $item['tmdb_candidates'] = $usable;
 
         if ($usable === []) {
-            if (!$isRiff && !$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0 && $showFolder === '' && function_exists('rifftrax_identify')) {
+            if (!$isRiff && !$isMst && !$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0 && $showFolder === '' && function_exists('mst3k_identify')) {
+                $mstHint = mst3k_identify($root, $path, $filename);
+                if (!empty($mstHint['fallback'])) {
+                    $item['lookup_source'] = 'MST3K';
+                    if (($mstHint['title'] ?? '') !== '') {
+                        $item['title'] = (string) $mstHint['title'];
+                    }
+                    $taken = scan_take_mst3k($job, $item, $itemNo, $filename, $key, $knownMatches);
+                    if ($taken !== null) {
+                        $job['items'][] = $taken;
+                        return true;
+                    }
+                    unset($item['lookup_source']);
+                }
+            }
+            if (!$isRiff && !$isMst && !$fileForceTmdb && strcasecmp($groupService, 'TMDB') !== 0 && $showFolder === '' && function_exists('rifftrax_identify')) {
                 $hint = rifftrax_identify($root, $path, $filename);
                 if (!empty($hint['fallback'])) {
                     $item['lookup_source'] = 'RiffTrax';
@@ -2628,8 +2893,10 @@ function scan_job_finalize(array $job, bool $cancelled): array
         if (!is_array($item) || ($item['status'] ?? '') !== 'matched' || empty($item['title'])) {
             continue;
         }
-        $riffJob = ($item['lookup_source'] ?? '') === 'RiffTrax' && (string) ($item['lookup_id'] ?? '') !== '';
-        if (empty($item['tmdb_id']) && !$riffJob) {
+        $jobLookup = (string) ($item['lookup_source'] ?? '');
+        $siteJob = ($jobLookup === 'RiffTrax' || $jobLookup === 'MST3K')
+            && (string) ($item['lookup_id'] ?? '') !== '';
+        if (empty($item['tmdb_id']) && !$siteJob) {
             continue;
         }
         $known[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
@@ -3090,10 +3357,11 @@ function library_sync_video_catalog(): array
         if ($root !== '' && $path !== '') {
             $oldByKey[$root . "\n" . $path] = $item;
         }
-        $riffKnown = ($item['status'] ?? '') === 'matched'
-            && ($item['lookup_source'] ?? '') === 'RiffTrax'
+        $lookupKnown = (string) ($item['lookup_source'] ?? '');
+        $siteKnown = ($item['status'] ?? '') === 'matched'
+            && ($lookupKnown === 'RiffTrax' || $lookupKnown === 'MST3K')
             && (string) ($item['lookup_id'] ?? '') !== '';
-        if (((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id'])) || $riffKnown) && !empty($item['title'])) {
+        if (((($item['status'] ?? '') === 'matched' && !empty($item['tmdb_id'])) || $siteKnown) && !empty($item['title'])) {
             $knownMatches[scan_match_key((string) $item['title'], $item['year'] ?? null)] = $item;
             if (!empty($item['display_title'])) {
                 $knownMatches[scan_match_key((string) $item['display_title'], $item['year'] ?? null)] = $item;
@@ -3185,9 +3453,14 @@ function library_sync_video_catalog(): array
                     }
                 }
                 $item['match_source'] = 'direct';
-            } elseif ($source && ($source['lookup_source'] ?? '') === 'RiffTrax' && (string) ($source['lookup_id'] ?? '') !== ''
-                && function_exists('lookup_copy_rifftrax_item')) {
-                $item = lookup_copy_rifftrax_item($item, $source);
+            } elseif ($source && (string) ($source['lookup_id'] ?? '') !== '' && function_exists('lookup_copy_site_item')) {
+                $sourceLookup = (string) ($source['lookup_source'] ?? '');
+                $parsedLookup = (string) ($parsed['lookup_source'] ?? '');
+                $copyRiff = $sourceLookup === 'RiffTrax' && $parsedLookup !== 'MST3K';
+                $copyMst = $sourceLookup === 'MST3K' && $parsedLookup === 'MST3K';
+                if ($copyRiff || $copyMst) {
+                    $item = lookup_copy_site_item($item, $source);
+                }
             }
 
             $items[] = $item;

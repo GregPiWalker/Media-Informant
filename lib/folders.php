@@ -104,6 +104,21 @@ function scan_parse_path(string $root, string $path, string $category = ''): arr
     }
     $parsed['kind'] = $kind;
     $parsed['grouped'] = $grouped;
+    if (function_exists('mst3k_identify')) {
+        $mst = mst3k_identify($root, $path);
+        if (!empty($mst['match'])) {
+            $parsed['lookup_source'] = 'MST3K';
+            $parsed['mst3k_via'] = (string) ($mst['via'] ?? '');
+            if (($mst['title'] ?? '') !== '') {
+                $parsed['title'] = (string) $mst['title'];
+            }
+            $parsed['kind'] = 'movie';
+            if (!function_exists('parse_named_part') || parse_named_part(basename(str_replace('\\', '/', $path))) === null) {
+                $parsed['grouped'] = false;
+            }
+            return $parsed;
+        }
+    }
     if (function_exists('rifftrax_identify')) {
         $riff = rifftrax_identify($root, $path);
         if (!empty($riff['match'])) {

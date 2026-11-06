@@ -61,12 +61,18 @@ $error = '';
 if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
     $postedSource = (string) ($_POST['lookup_source'] ?? 'TMDB');
-    if ($action === 'choose' && strcasecmp($postedSource, 'RiffTrax') === 0) {
+    $postedSite = '';
+    if (strcasecmp($postedSource, 'RiffTrax') === 0) {
+        $postedSite = 'RiffTrax';
+    } elseif (strcasecmp($postedSource, 'MST3K') === 0) {
+        $postedSite = 'MST3K';
+    }
+    if ($action === 'choose' && $postedSite !== '') {
         $nid = trim((string) ($_POST['lookup_id'] ?? ''));
-        $service = function_exists('lookup_service') ? lookup_service('RiffTrax') : null;
+        $service = function_exists('lookup_service') ? lookup_service($postedSite) : null;
         $picked = ($service && function_exists('curl_init')) ? $service->fetch($nid) : null;
         if (!$picked instanceof VideoMetadata) {
-            $error = 'Could not load that title from RiffTrax. Try another result.';
+            $error = 'Could not load that title from ' . $postedSite . '. Try another result.';
         } else {
             $updated = cache_update_item($id, static function (array $row) use ($picked): array {
                 return lookup_apply_metadata($row, $picked, 'manual');
@@ -75,7 +81,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 $error = 'Could not update the catalog. Check cache/ permissions.';
             } else {
                 if (function_exists('app_log')) {
-                    app_log('match', 'Manual RiffTrax match: ' . (string) $picked->title . '.', [
+                    app_log('match', 'Manual ' . $postedSite . ' match: ' . (string) $picked->title . '.', [
                         'id' => $id,
                         'lookup_id' => $picked->lookupId,
                     ]);
@@ -170,6 +176,9 @@ $titleInFile = match_filename_contains_title($filename, $storedTitle);
 $riffFile = ($item !== null && function_exists('rifftrax_identify'))
     ? rifftrax_identify((string) ($item['root'] ?? ''), (string) ($item['path'] ?? ''), $filename)
     : ['match' => false, 'title' => '', 'via' => '', 'fallback' => false];
+$mstFile = ($item !== null && function_exists('mst3k_identify'))
+    ? mst3k_identify((string) ($item['root'] ?? ''), (string) ($item['path'] ?? ''), $filename)
+    : ['match' => false, 'title' => '', 'via' => '', 'fallback' => false];
 $itemService = 'TMDB';
 if (is_array($item) && function_exists('catalog_item_scan_service')) {
     $resolvedService = catalog_item_scan_service($item);
@@ -179,9 +188,11 @@ if (is_array($item) && function_exists('catalog_item_scan_service')) {
 }
 $sourceRaw = isset($_GET['source']) ? strtolower(trim((string) $_GET['source'])) : '';
 $scanServiceNote = '';
-if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax') {
+if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax' && $sourceRaw !== 'mst3k') {
     if (strcasecmp($itemService, 'RiffTrax') === 0) {
         $sourceRaw = 'rifftrax';
+    } elseif (strcasecmp($itemService, 'MST3K') === 0) {
+        $sourceRaw = 'mst3k';
     } elseif (strcasecmp($itemService, 'TMDB') === 0) {
         $sourceRaw = 'tmdb';
     } else {
@@ -189,7 +200,7 @@ if ($sourceRaw !== 'tmdb' && $sourceRaw !== 'rifftrax') {
         $scanServiceNote = 'Scan service "' . $itemService . '" has no match page yet.';
     }
 }
-$searchSource = $sourceRaw === 'rifftrax' ? 'RiffTrax' : ($sourceRaw === 'tmdb' ? 'TMDB' : $itemService);
+$searchSource = $sourceRaw === 'rifftrax' ? 'RiffTrax' : ($sourceRaw === 'mst3k' ? 'MST3K' : ($sourceRaw === 'tmdb' ? 'TMDB' : $itemService));
 
 $browse = (string) ($_GET['browse'] ?? '') === 'popular';
 if ($browse) {
@@ -197,7 +208,9 @@ if ($browse) {
     $scanServiceNote = '';
 }
 $q = isset($_GET['q']) ? trim((string) $_GET['q']) : (($browse || !$titleInFile) ? '' : $storedTitle);
-if ($searchSource === 'RiffTrax' && !isset($_GET['q']) && !empty($riffFile['title'])) {
+if ($searchSource === 'MST3K' && !isset($_GET['q']) && !empty($mstFile['title'])) {
+    $q = (string) $mstFile['title'];
+} elseif ($searchSource === 'RiffTrax' && !isset($_GET['q']) && !empty($riffFile['title'])) {
     $q = (string) $riffFile['title'];
 }
 $yearRaw = isset($_GET['year']) ? trim((string) $_GET['year']) : '';
@@ -214,24 +227,27 @@ $payload = ['results' => [], 'page' => 1, 'total_pages' => 1];
 $relaxedYear = false;
 $grokNote = '';
 $hasKey = tmdb_has_key();
+$siteSearch = $searchSource === 'RiffTrax' || $searchSource === 'MST3K';
 $canSearch = $scanServiceNote !== ''
     ? false
-    : ($searchSource === 'RiffTrax' ? function_exists('curl_init') : $hasKey);
+    : ($siteSearch ? function_exists('curl_init') : $hasKey);
 
-if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
-    $queryText = $q !== '' ? $q : (string) ($riffFile['title'] ?? '');
+if ($item !== null && $siteSearch && $canSearch) {
+    $prefFile = $searchSource === 'MST3K' ? $mstFile : $riffFile;
+    $queryText = $q !== '' ? $q : (string) ($prefFile['title'] ?? '');
     if ($queryText === '') {
         $queryText = $parsedTitle;
     }
-    $service = lookup_service('RiffTrax');
+    $service = lookup_service($searchSource);
     $hits = ($service && $queryText !== '') ? $service->search($queryText, null, 12, [
         'filename' => $filename,
         'path' => (string) ($item['path'] ?? ''),
     ]) : [];
     $rows = lookup_candidate_rows($hits);
-    $via = $service instanceof RiffTraxVideoLookupService ? $service->lastVia() : 'none';
+    $via = is_object($service) && method_exists($service, 'lastVia') ? $service->lastVia() : 'none';
+    $logTopic = $searchSource === 'MST3K' ? 'mst3k' : 'rifftrax';
     if (function_exists('app_log')) {
-        app_log('rifftrax', 'RiffTrax search for "' . $queryText . '" via ' . $via
+        app_log($logTopic, $searchSource . ' search for "' . $queryText . '" via ' . $via
             . ' returned ' . count($rows) . ' title(s). file=' . $filename);
     }
     if ($rows !== []) {
@@ -239,14 +255,14 @@ if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
         $grokOn = function_exists('grok_resolve_available') && grok_resolve_available();
         if (!$grokOn) {
             if (function_exists('app_log')) {
-                app_log('grok', 'Grok is not configured, so ' . count($rows) . ' RiffTrax title(s) for "' . $queryText . '" were not sent. file=' . $filename);
+                app_log('grok', 'Grok is not configured, so ' . count($rows) . ' ' . $searchSource . ' title(s) for "' . $queryText . '" were not sent. file=' . $filename);
             }
         } else {
             if (function_exists('app_log')) {
-                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' RiffTrax title(s) for "' . $queryText . '" via ' . $via . '. file=' . $filename);
+                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' ' . $searchSource . ' title(s) for "' . $queryText . '" via ' . $via . '. file=' . $filename);
             }
             $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $queryText) : null;
-            if (is_array($choice) && $service instanceof RiffTraxVideoLookupService) {
+            if (is_array($choice) && $service instanceof VideoLookupService) {
                 $picked = $service->fetch((string) $choice['id']);
                 if ($picked instanceof VideoMetadata) {
                     $updated = cache_update_item($id, static function (array $row) use ($picked): array {
@@ -254,7 +270,7 @@ if ($item !== null && $searchSource === 'RiffTrax' && $canSearch) {
                     });
                     if ($updated !== null) {
                         if (function_exists('app_log')) {
-                            app_log('grok', 'Grok chose RiffTrax "' . $picked->title . '" for ' . $filename . '.', [
+                            app_log('grok', 'Grok chose ' . $searchSource . ' "' . $picked->title . '" for ' . $filename . '.', [
                                 'id' => $id,
                                 'lookup_id' => $picked->lookupId,
                             ]);

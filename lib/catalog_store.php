@@ -45,7 +45,7 @@ function catalog_db_match_source(?string $appSource): ?string
     if ($s === 'direct') {
         return 'tmdb';
     }
-    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax') {
+    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax' || $s === 'mst3k') {
         return $s;
     }
     return null;
@@ -57,7 +57,7 @@ function catalog_app_match_source(?string $dbSource): string
     if ($s === 'tmdb' || $s === 'direct' || $s === 'auto') {
         return 'direct';
     }
-    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax') {
+    if ($s === 'grok' || $s === 'manual' || $s === 'rifftrax' || $s === 'mst3k') {
         return $s;
     }
     return 'none';
@@ -472,13 +472,32 @@ function catalog_file_folder_saved_service(array $item): string
 /**
  * Service Match title, the detail status line, and a file lookup should use.
  * A saved choice on the movie's folder wins, including over an older stored default.
+ * When nothing is saved, an MST3K folder or filename wins over a stored default.
  * Otherwise a stored value wins. Otherwise the folder's effective service, then TMDB.
  */
+function catalog_item_detected_scan_service(array $item): string
+{
+    $kind = function_exists('library_item_kind') ? library_item_kind($item) : (string) ($item['kind'] ?? 'movie');
+    if ($kind !== 'movie' || !function_exists('mst3k_identify')) {
+        return '';
+    }
+    $found = mst3k_identify(
+        (string) ($item['root'] ?? ''),
+        (string) ($item['path'] ?? ''),
+        (string) ($item['filename'] ?? '')
+    );
+    return !empty($found['match']) ? 'MST3K' : '';
+}
+
 function catalog_item_scan_service(array $item): string
 {
     $saved = catalog_file_folder_saved_service($item);
     if ($saved !== '') {
         return $saved;
+    }
+    $detected = catalog_item_detected_scan_service($item);
+    if ($detected !== '') {
+        return $detected;
     }
     $kept = catalog_scan_service_keep_value($item['scan_service'] ?? '');
     if ($kept !== '') {
@@ -497,6 +516,10 @@ function catalog_file_scan_service_for_store(string $catalog, array $item): stri
         $saved = catalog_file_folder_saved_service($item);
         if ($saved !== '') {
             return $saved;
+        }
+        $detected = catalog_item_detected_scan_service($item);
+        if ($detected !== '') {
+            return $detected;
         }
     }
     $kept = catalog_scan_service_keep_value($item['scan_service'] ?? '');
@@ -575,8 +598,9 @@ function catalog_folder_scan_service_saved(string $folderId): string
 
 /**
  * Service a folder Re-scan should use.
- * A saved choice wins. A folder named RiffTrax uses RiffTrax until one is saved.
- * Any other folder with no choice returns an empty string and keeps the usual scan.
+ * A saved choice wins. Until one is saved, a folder named MST3K or
+ * Mystery Science Theater 3000 uses MST3K, and a folder named RiffTrax uses
+ * RiffTrax. Any other folder with no choice returns an empty string.
  */
 function catalog_folder_scan_service_for_rescan(string $folderId, string $label): string
 {
@@ -584,7 +608,14 @@ function catalog_folder_scan_service_for_rescan(string $folderId, string $label)
     if ($saved !== '') {
         return $saved;
     }
-    if (strcasecmp(trim($label), 'RiffTrax') === 0) {
+    $label = trim($label);
+    $mst = function_exists('mst3k_folder_name')
+        ? mst3k_folder_name($label)
+        : (strcasecmp($label, 'MST3K') === 0 || strcasecmp($label, 'Mystery Science Theater 3000') === 0);
+    if ($mst) {
+        return 'MST3K';
+    }
+    if (strcasecmp($label, 'RiffTrax') === 0) {
         return 'RiffTrax';
     }
     return '';

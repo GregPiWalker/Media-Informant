@@ -566,7 +566,8 @@ function catalog_poster_bucket(CatalogGroup $group, string $sort): string
  * The first directory under the video root wins, so RiffTrax/Cool as Ice.mp4
  * and RiffTrax/Shorts/Something.mp4 both use "RiffTrax". A file stored in the
  * root itself has no folder, except a "RiffTrax - Title" filename, which
- * still joins the RiffTrax parent.
+ * still joins the RiffTrax parent, or an "MST3K - Title" / "MST3K: Title"
+ * filename, which joins the MST3K parent.
  */
 function catalog_movie_folder(string $root, string $path, string $filename = ''): string
 {
@@ -589,6 +590,9 @@ function catalog_movie_folder(string $root, string $path, string $filename = '')
     $stem = pathinfo($base, PATHINFO_FILENAME);
     if (preg_match('/^rifftrax\s+-\s+/i', $stem) === 1) {
         return 'RiffTrax';
+    }
+    if (preg_match('/^mst3k\s+-\s+/i', $stem) === 1 || preg_match('/^mst3k\s*:/i', $stem) === 1) {
+        return 'MST3K';
     }
     return '';
 }

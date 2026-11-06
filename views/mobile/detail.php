@@ -144,36 +144,51 @@ if ($found && function_exists('catalog_item_scan_service')) {
     }
 }
 $scanIsRiff = strcasecmp($scanService, 'RiffTrax') === 0;
+$scanIsMst = strcasecmp($scanService, 'MST3K') === 0;
 $filmYear = null;
-if ($found && $lookupSource === 'RiffTrax' && isset($item['original_year']) && is_numeric($item['original_year'])) {
+if ($found && ($lookupSource === 'RiffTrax' || $lookupSource === 'MST3K') && isset($item['original_year']) && is_numeric($item['original_year'])) {
     $originalYear = (int) $item['original_year'];
     $shownYear = is_numeric($year) ? (int) $year : null;
     if ($shownYear === null || $originalYear !== $shownYear) {
         $filmYear = $originalYear;
     }
 }
-$riffPage = ($found && $lookupSource === 'RiffTrax' && function_exists('rifftrax_page_url'))
+$riffPage = ($found && ($lookupSource === 'RiffTrax' || $lookupSource === 'MST3K') && function_exists('rifftrax_page_url'))
     ? rifftrax_page_url((string) ($item['detail_url'] ?? ''))
     : '';
 $matchNote = '';
 $matchClass = 'hint';
 if ($found) {
     if ($status === 'unidentified') {
-        $matchNote = $scanIsRiff
-            ? 'Not looked up yet. Scan unidentified titles to search RiffTrax, or match it from the menu.'
-            : 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
+        if ($scanIsMst) {
+            $matchNote = 'Not looked up yet. Scan unidentified titles to search MST3K, or match it from the menu.';
+        } elseif ($scanIsRiff) {
+            $matchNote = 'Not looked up yet. Scan unidentified titles to search RiffTrax, or match it from the menu.';
+        } else {
+            $matchNote = 'Not looked up yet. Scan unidentified titles to search TMDB, or match it from the menu.';
+        }
         $matchClass = 'unmatched-note';
     } elseif ($status !== 'matched') {
-        $matchNote = $scanIsRiff
-            ? 'No confident RiffTrax match. Showing the title parsed from the folder or filename.'
-            : 'No confident TMDB match. Showing the title parsed from the folder or filename.';
+        if ($scanIsMst) {
+            $matchNote = 'No confident MST3K match. Showing the title parsed from the folder or filename.';
+        } elseif ($scanIsRiff) {
+            $matchNote = 'No confident RiffTrax match. Showing the title parsed from the folder or filename.';
+        } else {
+            $matchNote = 'No confident TMDB match. Showing the title parsed from the folder or filename.';
+        }
         $matchClass = 'unmatched-note';
+    } elseif ($matchSource === 'mst3k') {
+        $matchNote = 'Matched from MST3K.';
     } elseif ($matchSource === 'rifftrax') {
         $matchNote = 'Matched from RiffTrax.';
+    } elseif ($matchSource === 'manual' && $lookupSource === 'MST3K') {
+        $matchNote = 'Matched by you from MST3K.';
     } elseif ($matchSource === 'manual' && $lookupSource === 'RiffTrax') {
         $matchNote = 'Matched by you from RiffTrax.';
     } elseif ($matchSource === 'manual') {
         $matchNote = 'Matched by you. Scan will keep this title.';
+    } elseif ($matchSource === 'grok' && $lookupSource === 'MST3K') {
+        $matchNote = 'Matched by Grok from MST3K. Scan will keep this title.';
     } elseif ($matchSource === 'grok' && $lookupSource === 'RiffTrax') {
         $matchNote = 'Matched by Grok from RiffTrax. Scan will keep this title.';
     } elseif ($matchSource === 'grok') {

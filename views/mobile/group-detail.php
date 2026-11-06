@@ -110,7 +110,8 @@ if ($found) {
     }
     $filmYear = null;
     $riffPage = '';
-    if (is_array($headItem) && ($headItem['lookup_source'] ?? '') === 'RiffTrax') {
+    $headLookup = is_array($headItem) ? (string) ($headItem['lookup_source'] ?? '') : '';
+    if (is_array($headItem) && ($headLookup === 'RiffTrax' || $headLookup === 'MST3K')) {
         if (isset($headItem['original_year']) && is_numeric($headItem['original_year'])) {
             $originalYear = (int) $headItem['original_year'];
             $shownYear = is_numeric($year) ? (int) $year : null;

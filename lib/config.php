@@ -317,7 +317,7 @@ function render_header(array $opts = []): void
         <span class="visually-hidden">Scan running</span>
       </button>
       <a class="btn btn-icon<?= $section === 'scan' ? ' is-active' : '' ?>" href="<?= h(app_href('video/scan.php')) ?>" aria-label="Scan"<?= $section === 'scan' ? ' aria-current="page"' : '' ?>>
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
           <path fill="currentColor" d="M7 9H2V7h5v2zm0 3H2v2h5v-2zm13.59 7-3.83-3.83A4.96 4.96 0 0 0 18 12a5 5 0 1 0-5 5c1.02 0 1.96-.3 2.75-.83L19 19.59 20.59 19zM13 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM2 19h10v-2H2v2z"/>
         </svg>
       </a>

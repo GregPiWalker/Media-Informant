@@ -4,10 +4,10 @@ declare(strict_types=1);
 /**
  * Video lookup abstraction.
  *
- * Resolution talks to VideoLookupService. TMDB and RiffTrax each implement
- * that interface and are registered in lookup_services(). A later source is
- * a new class plus one lookup_register() call. TV episode lists stay on the
- * TMDB season APIs; those are not a second catalog.
+ * Resolution talks to VideoLookupService. TMDB, RiffTrax, and MST3K each
+ * implement that interface and are registered in lookup_services(). A later
+ * source is a new class plus one lookup_register() call. TV episode lists
+ * stay on the TMDB season APIs; those are not a second catalog.
  *
  * RiffTrax detail is the JSON document at /api/dante/product_display/{nid}.
  * A title is turned into a few slug variants (apostrophes removed, then
@@ -23,6 +23,15 @@ declare(strict_types=1);
  * The equal-length check stays on direct slug pages.
  * The site average_rating is a 0–100 score; it is stored on the 0–10 catalog
  * scale. The payload has no vote count, so vote_count is left unset.
+ *
+ * MST3K episodes live on the same site. A direct guess tries
+ * /mst3k-{slug} for each RiffTrax slug variant before the plain /{slug}.
+ * The first page with a node id and a close title wins. If every direct URL
+ * misses, lookup uses /catalog/mst3k?search= and then the same product index,
+ * limited to MST3K rows. Detail JSON is read with the RiffTrax extractor and
+ * stored with source MST3K. A file is MST3K when its first folder under the
+ * video root is "MST3K" or "Mystery Science Theater 3000", or its filename
+ * starts with "MST3K - " or "MST3K:".
  */
 
 require_once __DIR__ . '/parser.php';
@@ -218,8 +227,9 @@ function lookup_register(VideoLookupService $service): void
 }
 
 /**
- * Built-in sources. Add a third by implementing VideoLookupService and
- * calling lookup_register() here.
+ * Built-in sources, in the order Configure Scan and Match title list them.
+ * Add another by implementing VideoLookupService and calling lookup_register()
+ * here.
  *
  * @return array<string, VideoLookupService>
  */
@@ -229,6 +239,7 @@ function lookup_services(): array
         $GLOBALS['lookup_services'] = [];
         lookup_register(new TmdbVideoLookupService());
         lookup_register(new RiffTraxVideoLookupService());
+        lookup_register(new Mst3kVideoLookupService());
     }
     return $GLOBALS['lookup_services'];
 }
@@ -261,9 +272,10 @@ function lookup_candidate_rows(array $hits): array
 
 /**
  * Write a confident match onto a library item.
- * A RiffTrax auto match uses match_source "rifftrax". Grok and manual keep
- * those sources and still record lookup_source so the page can name the site.
- * A RiffTrax year replaces a previous year the same way a TMDB match does.
+ * A RiffTrax auto match uses match_source "rifftrax". An MST3K auto match
+ * uses "mst3k". Grok and manual keep those sources and still record
+ * lookup_source so the page can name the site. A site year replaces a
+ * previous year the same way a TMDB match does.
  */
 function lookup_apply_metadata(array $item, VideoMetadata $meta, string $matchSource = 'direct'): array
 {
@@ -280,7 +292,7 @@ function lookup_apply_metadata(array $item, VideoMetadata $meta, string $matchSo
         ? library_normalize_match_source($matchSource)
         : $matchSource;
     if ($item['match_source'] === 'none' || $item['match_source'] === 'direct') {
-        $item['match_source'] = 'rifftrax';
+        $item['match_source'] = strcasecmp($meta->source, 'MST3K') === 0 ? 'mst3k' : 'rifftrax';
     }
     $item['lookup_source'] = $meta->source;
     $item['lookup_id'] = $meta->lookupId;
@@ -378,6 +390,25 @@ function lookup_copy_rifftrax_item(array $item, array $source): array
 }
 
 /**
+ * Copy a RiffTrax or MST3K match already stored on another file. No network.
+ * The stored lookup_source decides which catalog the copy belongs to.
+ *
+ * @param array<string, mixed> $source
+ */
+function lookup_copy_site_item(array $item, array $source): array
+{
+    $lookup = (string) ($source['lookup_source'] ?? '');
+    $item = lookup_copy_rifftrax_item($item, $source);
+    if (strcasecmp($lookup, 'MST3K') === 0) {
+        $item['lookup_source'] = 'MST3K';
+        if (($item['match_source'] ?? '') === 'rifftrax') {
+            $item['match_source'] = 'mst3k';
+        }
+    }
+    return $item;
+}
+
+/**
  * Search RiffTrax and classify the outcome.
  *
  * via is slug, catalog, or none. It says where search() found the hits.
@@ -391,6 +422,44 @@ function lookup_rifftrax_resolve(string $title, array $context = []): array
     $empty = ['status' => 'miss', 'metadata' => null, 'candidates' => [], 'via' => 'none'];
     $service = lookup_service('RiffTrax');
     if (!$service instanceof RiffTraxVideoLookupService) {
+        return $empty;
+    }
+    $hits = $service->search($title, null, 6, $context);
+    $via = $service->lastVia();
+    $context['hits'] = $hits;
+    $match = $service->lookup($title, null, $context);
+    if ($match !== null) {
+        return [
+            'status' => 'matched',
+            'metadata' => $match,
+            'candidates' => lookup_candidate_rows($hits),
+            'via' => $via,
+        ];
+    }
+    if ($hits === []) {
+        $empty['via'] = $via;
+        return $empty;
+    }
+    return [
+        'status' => 'ambiguous',
+        'metadata' => null,
+        'candidates' => lookup_candidate_rows($hits),
+        'via' => $via,
+    ];
+}
+
+/**
+ * Search MST3K and classify the outcome. Same statuses as the RiffTrax helper.
+ * This function does not call Grok.
+ *
+ * @param array<string, mixed> $context
+ * @return array{status:string, metadata:?VideoMetadata, candidates:list<array<string, mixed>>, via:string}
+ */
+function lookup_mst3k_resolve(string $title, array $context = []): array
+{
+    $empty = ['status' => 'miss', 'metadata' => null, 'candidates' => [], 'via' => 'none'];
+    $service = lookup_service('MST3K');
+    if (!$service instanceof Mst3kVideoLookupService) {
         return $empty;
     }
     $hits = $service->search($title, null, 6, $context);
@@ -755,6 +824,192 @@ final class RiffTraxVideoLookupService implements VideoLookupService
 }
 
 /**
+ * MST3K episodes on www.rifftrax.com.
+ *
+ * Direct URLs use the same slug list as RiffTrax. Every /mst3k-{slug} is
+ * tried before any plain /{slug}, and the first valid detail page stops the
+ * list. A miss falls through to /catalog/mst3k?search=, which filters like
+ * the main catalog. Product JSON is the RiffTrax detail document with
+ * source set to MST3K.
+ */
+final class Mst3kVideoLookupService implements VideoLookupService
+{
+    /** slug, catalog, or none. Set by the latest search(). */
+    private string $lastVia = 'none';
+
+    public function source(): string
+    {
+        return 'MST3K';
+    }
+
+    public function lastVia(): string
+    {
+        return $this->lastVia;
+    }
+
+    public function lookup(string $title, ?int $year = null, array $context = []): ?VideoMetadata
+    {
+        unset($year);
+        $hits = isset($context['hits']) && is_array($context['hits'])
+            ? $context['hits']
+            : $this->search($title, null, 6, $context);
+        $norm = mst3k_match_key($title);
+        $exact = [];
+        $all = [];
+        foreach ($hits as $hit) {
+            if (!$hit instanceof VideoMetadata) {
+                continue;
+            }
+            $all[] = $hit;
+            if ($norm === '' || mst3k_match_key($hit->title) !== $norm) {
+                continue;
+            }
+            $exact[] = $hit;
+        }
+        if (count($exact) === 1) {
+            return $exact[0];
+        }
+        // One partial catalog title is not an automatic match.
+        if (count($all) === 1 && mst3k_title_close($title, $all[0]->title)) {
+            return $all[0];
+        }
+        return null;
+    }
+
+    public function search(string $query, ?int $year = null, int $limit = 6, array $context = []): array
+    {
+        unset($year, $context);
+        $this->lastVia = 'none';
+        $query = trim($query);
+        if ($query === '' || $limit < 1) {
+            return [];
+        }
+        if (!function_exists('curl_init')) {
+            rifftrax_log('MST3K lookup skipped: curl is not available.');
+            return [];
+        }
+        $slugs = rifftrax_slug_variants($query);
+        foreach (mst3k_direct_urls($query) as $url) {
+            $meta = mst3k_detail_from_url($url, $query);
+            if ($meta === null) {
+                continue;
+            }
+            $this->lastVia = 'slug';
+            return [$meta];
+        }
+        $catalogUrl = mst3k_catalog_url($query);
+        $tried = mst3k_direct_urls($query);
+        $list = $tried === [] ? '(none)' : implode(', ', $tried);
+        rifftrax_log('MST3K slugs tried for "' . $query . '": ' . $list . '. No matching detail page; falling back to ' . $catalogUrl . '.');
+        $found = [];
+        $seen = [];
+        foreach ($this->productsFromCatalog($query, $slugs, $limit, $catalogUrl) as $hit) {
+            if (isset($seen[$hit->lookupId])) {
+                continue;
+            }
+            $seen[$hit->lookupId] = true;
+            $found[] = $hit;
+        }
+        if ($found === []) {
+            rifftrax_log('MST3K has no match for "' . $query . '" after direct URLs and ' . $catalogUrl . '.');
+            return [];
+        }
+        $this->lastVia = 'catalog';
+        return array_slice($found, 0, $limit);
+    }
+
+    public function fetch(string $id, array $context = []): ?VideoMetadata
+    {
+        unset($context);
+        if (!preg_match('/^\d+$/', $id)) {
+            return null;
+        }
+        $data = rifftrax_product($id);
+        return is_array($data) ? mst3k_metadata_from_product($data) : null;
+    }
+
+    /**
+     * @param list<string> $slugs
+     * @return list<VideoMetadata>
+     */
+    private function productsFromCatalog(string $query, array $slugs, int $limit, string $catalogUrl): array
+    {
+        $page = rifftrax_http($catalogUrl, false);
+        $fromPage = [];
+        if ($page['code'] === 200 && $page['body'] !== '') {
+            $fromPage = $this->productsFromCatalogHtml($page['body'], $query, $slugs, $limit);
+        } else {
+            rifftrax_log('MST3K catalog search failed for "' . $query . '" at ' . $catalogUrl . '.');
+        }
+        if ($fromPage !== []) {
+            return $fromPage;
+        }
+        if ($page['code'] === 200) {
+            rifftrax_log('MST3K catalog page has no matching product links for "' . $query . '"; searching the MST3K catalog index.');
+        }
+        return $this->productsFromIndex($query, $slugs, $limit);
+    }
+
+    /**
+     * @param list<string> $slugs
+     * @return list<VideoMetadata>
+     */
+    private function productsFromCatalogHtml(string $html, string $query, array $slugs, int $limit): array
+    {
+        $out = [];
+        $seen = [];
+        foreach (mst3k_catalog_picks($html, $query, $slugs) as $choice) {
+            $url = rifftrax_base() . '/' . rawurlencode($choice['slug']);
+            $meta = mst3k_detail_from_url($url, $query, false);
+            if ($meta === null || isset($seen[$meta->lookupId])) {
+                continue;
+            }
+            $seen[$meta->lookupId] = true;
+            $out[] = $meta;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<string> $slugs
+     * @return list<VideoMetadata>
+     */
+    private function productsFromIndex(string $query, array $slugs, int $limit): array
+    {
+        if (rifftrax_match_key($query) === '' && $slugs === []) {
+            return [];
+        }
+        $index = mst3k_index_rows(rifftrax_index());
+        $out = [];
+        $seen = [];
+        foreach (rifftrax_index_picks($index, $query, $slugs) as $pick) {
+            if (isset($seen[$pick['nid']])) {
+                continue;
+            }
+            $seen[$pick['nid']] = true;
+            $data = rifftrax_product($pick['nid']);
+            $meta = is_array($data) ? mst3k_metadata_from_product($data) : null;
+            if ($meta === null) {
+                continue;
+            }
+            $out[] = $meta;
+            if (count($out) >= $limit) {
+                break;
+            }
+        }
+        if ($out === [] && $index !== []) {
+            rifftrax_log('MST3K catalog index has no match for "' . $query . '".');
+        } elseif ($out !== []) {
+            rifftrax_log('MST3K catalog index returned ' . count($out) . ' title(s) for "' . $query . '".');
+        }
+        return $out;
+    }
+}
+
+/**
  * Movie title with the "RiffTrax - " prefix and extension removed.
  * Returns null when the filename does not use that convention.
  */
@@ -852,6 +1107,284 @@ function rifftrax_identify(string $root, string $path, string $filename = ''): a
         'via' => $via,
         'fallback' => false,
     ];
+}
+
+/**
+ * True for the folder labels that mean MST3K when no scan service is saved.
+ * Comparison is case-insensitive and exact.
+ */
+function mst3k_folder_name(string $label): bool
+{
+    $label = trim($label);
+    return strcasecmp($label, 'MST3K') === 0
+        || strcasecmp($label, 'Mystery Science Theater 3000') === 0;
+}
+
+/**
+ * Episode title with an "MST3K - " or "MST3K:" filename prefix and the
+ * extension removed. Returns null when the filename does not use that
+ * convention. "MST3K:The Crawling Hand" is accepted; the colon may have a
+ * space after it.
+ */
+function mst3k_filename_title(string $filename): ?string
+{
+    $base = basename(str_replace('\\', '/', $filename));
+    $stem = function_exists('strip_extension') ? strip_extension($base) : $base;
+    if (preg_match('/^mst3k\s+-\s+(.+)$/i', $stem, $match) !== 1
+        && preg_match('/^mst3k\s*:\s*(.+)$/i', $stem, $match) !== 1) {
+        return null;
+    }
+    $title = mst3k_clean_title($match[1]);
+    return $title !== '' ? $title : null;
+}
+
+/**
+ * Drop a leading MST3K label, then the same year and "Part N" cleanup used
+ * for RiffTrax titles.
+ */
+function mst3k_clean_title(string $raw): string
+{
+    $title = trim($raw);
+    $title = preg_replace('/^(?:mst3k|mystery science theater 3000)\s*[:\-]\s*/i', '', $title) ?? $title;
+    $title = trim($title);
+    return rifftrax_clean_title($title);
+}
+
+/**
+ * Decide whether a video file is MST3K before any catalog request.
+ *
+ * A file matches when either rule is true:
+ * - the first folder under its video root is "MST3K", "mst3k", or
+ *   "Mystery Science Theater 3000" (any case), or
+ * - the filename starts with "MST3K - " or "MST3K:" (any case).
+ * Both may be true. The lookup title then comes from the filename prefix.
+ *
+ * fallback is true when a deeper folder uses one of those names, or the path
+ * mentions MST3K, so another source can run first. A saved scan service still
+ * wins over this match.
+ *
+ * @return array{match:bool, title:string, via:string, fallback:bool}
+ */
+function mst3k_identify(string $root, string $path, string $filename = ''): array
+{
+    $none = ['match' => false, 'title' => '', 'via' => '', 'fallback' => false];
+    $rel = str_replace('\\', '/', $path);
+    $rootNorm = rtrim(str_replace('\\', '/', $root), '/');
+    if ($rootNorm !== '' && str_starts_with(strtolower($rel), strtolower($rootNorm) . '/')) {
+        $rel = substr($rel, strlen($rootNorm) + 1);
+    }
+    $rel = ltrim($rel, '/');
+    $segments = [];
+    foreach (explode('/', $rel) as $segment) {
+        if ($segment !== '' && $segment !== '.') {
+            $segments[] = $segment;
+        }
+    }
+    $base = $filename !== '' ? basename(str_replace('\\', '/', $filename)) : '';
+    if ($base === '' && $segments !== []) {
+        $base = (string) $segments[count($segments) - 1];
+    }
+    $inFolder = $segments !== [] && mst3k_folder_name($segments[0]) && count($segments) >= 2;
+    $fromName = mst3k_filename_title($base);
+    $deeper = false;
+    foreach ($segments as $i => $segment) {
+        if ($i === 0) {
+            continue;
+        }
+        if (mst3k_folder_name($segment)) {
+            $deeper = true;
+            break;
+        }
+    }
+    $hay = strtolower($base . ' ' . implode(' ', $segments));
+    $word = str_contains($hay, 'mst3k') || str_contains($hay, 'mystery science theater');
+    if (!$inFolder && $fromName === null) {
+        $none['fallback'] = $deeper || $word;
+        return $none;
+    }
+    $via = $inFolder && $fromName !== null ? 'both' : ($inFolder ? 'folder' : 'filename');
+    $title = $fromName ?? '';
+    if ($title === '' && $base !== '') {
+        $stem = function_exists('strip_extension') ? strip_extension($base) : $base;
+        $parsed = function_exists('parse_name') ? parse_name($stem) : ['title' => $stem];
+        $title = mst3k_clean_title((string) ($parsed['title'] ?? $stem));
+    }
+    return [
+        'match' => true,
+        'title' => $title,
+        'via' => $via,
+        'fallback' => false,
+    ];
+}
+
+/**
+ * Direct detail URLs for one title. Prefixed /mst3k-{slug} forms come first,
+ * in the same order as rifftrax_slug_variants(), then the plain /{slug} forms.
+ *
+ * @return list<string>
+ */
+function mst3k_direct_urls(string $title): array
+{
+    $urls = [];
+    $slugs = rifftrax_slug_variants($title);
+    foreach ($slugs as $slug) {
+        $urls[] = rifftrax_base() . '/mst3k-' . rawurlencode($slug);
+    }
+    foreach ($slugs as $slug) {
+        $urls[] = rifftrax_base() . '/' . rawurlencode($slug);
+    }
+    return $urls;
+}
+
+/**
+ * Catalog search scoped to MST3K. The page filters the same way as
+ * /catalog?search=, limited to the MST3K list.
+ */
+function mst3k_catalog_url(string $title): string
+{
+    return rifftrax_base() . '/catalog/mst3k?search=' . rawurlencode(rifftrax_slug_source($title));
+}
+
+/**
+ * Title used when comparing an MST3K product with a filename title.
+ * A leading "MST3K:" or "MST3K -" on the product is not part of the movie name.
+ */
+function mst3k_title_for_match(string $title): string
+{
+    $title = trim($title);
+    $title = preg_replace('/^(?:mst3k|mystery science theater 3000)\s*[:\-]\s*/i', '', $title) ?? $title;
+    return trim($title);
+}
+
+function mst3k_match_key(string $title): string
+{
+    return lookup_norm(mst3k_title_for_match($title));
+}
+
+/**
+ * Close title for a direct MST3K page. The product title may keep an MST3K
+ * prefix that the filename lookup already stripped.
+ */
+function mst3k_title_close(string $query, string $title): bool
+{
+    if (rifftrax_title_close($query, $title) || rifftrax_title_close($query, mst3k_title_for_match($title))) {
+        return true;
+    }
+    $bareQuery = mst3k_title_for_match($query);
+    if ($bareQuery === $query) {
+        return false;
+    }
+    return rifftrax_title_close($bareQuery, $title) || rifftrax_title_close($bareQuery, mst3k_title_for_match($title));
+}
+
+/**
+ * True when an index row or catalog link is an MST3K episode.
+ * Alias slugs use the mst3k- prefix. Some titles keep an MST3K label instead.
+ */
+function mst3k_record_is_episode(string $slug, string $title, string $alias = ''): bool
+{
+    $slug = strtolower(trim($slug, '/'));
+    $alias = strtolower(trim($alias, '/'));
+    if (str_starts_with($slug, 'mst3k-') || str_starts_with($alias, 'mst3k-') || str_starts_with($alias, 'mst3k/')) {
+        return true;
+    }
+    $title = trim($title);
+    return preg_match('/^(?:mst3k|mystery science theater 3000)\b/i', $title) === 1;
+}
+
+/**
+ * Catalog links that belong to MST3K and are close to the query.
+ *
+ * @param list<string> $slugs
+ * @return list<array{slug:string, iriff:bool, distance:float}>
+ */
+function mst3k_catalog_picks(string $html, string $query, array $slugs): array
+{
+    $picks = [];
+    foreach (rifftrax_catalog_links($html) as $link) {
+        if (!mst3k_record_is_episode($link['slug'], $link['title'], $link['path'])) {
+            continue;
+        }
+        $distance = rifftrax_catalog_distance($query, $link['title'], $slugs, $link['slug']);
+        if ($distance === null) {
+            continue;
+        }
+        $picks[] = [
+            'slug' => $link['slug'],
+            'iriff' => $link['iriff'],
+            'distance' => $distance,
+        ];
+    }
+    usort($picks, static function (array $a, array $b): int {
+        $byDistance = $a['distance'] <=> $b['distance'];
+        if ($byDistance !== 0) {
+            return $byDistance;
+        }
+        return ((int) $a['iriff']) <=> ((int) $b['iriff']);
+    });
+    return $picks;
+}
+
+/**
+ * Index rows the MST3K catalog searches. Other RiffTrax titles are left out
+ * so a shared word cannot choose a non-MST3K product.
+ *
+ * @param list<mixed> $index
+ * @return list<array<string, mixed>>
+ */
+function mst3k_index_rows(array $index): array
+{
+    $out = [];
+    foreach ($index as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $alias = (string) ($row['alias'] ?? '');
+        $title = (string) ($row['title'] ?? '');
+        if (mst3k_record_is_episode('', $title, $alias)) {
+            $out[] = $row;
+        }
+    }
+    return $out;
+}
+
+/**
+ * Load one detail page. Direct guesses require a close title. Catalog links
+ * have already been scored, so they can keep a partial title.
+ */
+function mst3k_detail_from_url(string $url, string $query, bool $requireClose = true): ?VideoMetadata
+{
+    $page = rifftrax_http($url, false);
+    if ($page['code'] !== 200 || $page['body'] === '') {
+        return null;
+    }
+    if (preg_match('/node-type-([a-z0-9_-]+)/i', $page['body'], $kindMatch) === 1) {
+        $pageKind = strtolower($kindMatch[1]);
+        // RiffTrax pages use node-type-riff. An MST3K page may use that class
+        // or node-type-mst3k. Another node type is not a detail page.
+        if (!in_array($pageKind, ['riff', 'iriff', 'mst3k'], true)) {
+            rifftrax_log('MST3K page is not a product: ' . $url);
+            return null;
+        }
+    }
+    $nid = rifftrax_node_id($page['body']);
+    if ($nid === null) {
+        rifftrax_log('MST3K page has no node id: ' . $url);
+        return null;
+    }
+    $data = rifftrax_product($nid);
+    if (!is_array($data)) {
+        return null;
+    }
+    $meta = mst3k_metadata_from_product($data);
+    if ($meta === null) {
+        return null;
+    }
+    if ($requireClose && !mst3k_title_close($query, $meta->title)) {
+        rifftrax_log('MST3K URL ' . $url . ' is "' . $meta->title . '", not "' . $query . '".');
+        return null;
+    }
+    return $meta;
 }
 
 function rifftrax_base(): string
@@ -1547,6 +2080,22 @@ function rifftrax_metadata_from_product(array $data): ?VideoMetadata
         $nid,
         $kind
     );
+}
+
+/**
+ * RiffTrax product JSON stored as an MST3K record.
+ * Genres, year, rating, poster, description, and runtime stay on the shared extractor.
+ *
+ * @param array<string, mixed> $data
+ */
+function mst3k_metadata_from_product(array $data): ?VideoMetadata
+{
+    $meta = rifftrax_metadata_from_product($data);
+    if ($meta === null) {
+        return null;
+    }
+    $meta->source = 'MST3K';
+    return $meta;
 }
 
 function rifftrax_absolute_url(string $uri): string
