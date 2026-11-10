@@ -50,7 +50,8 @@
       clear.hidden = input.value === '';
     }
 
-    input.placeholder = 'Search, then press Search';
+    // Hint text lives on the input. Assigning it here used to put the old
+    // hint back when a cached script ran after the page was drawn.
     input.addEventListener('search', function () {
       applyFn();
       input.blur();
@@ -1116,45 +1117,87 @@
       var barDownSinceUp = 0;
       var barTick = false;
       var barHome = 0;
+      var barWidth = window.innerWidth || 0;
+      var barWriting = false;
+      var barPending = false;
+      var barDocked = false;
+      var barStick = '';
+      var barOverlay = false;
+      var barAriaHidden = false;
+      var barHeaderPx = 0;
+      var barFull = 0;
       if (barLastY < 0) barLastY = 0;
 
       function barReadHome() {
         var docked = catalogToolbar.classList.contains('is-scroll-dock');
-        catalogToolbar.classList.remove('is-scroll-dock');
+        // offsetTop while sticky is not the resting position. Drop the class
+        // only for the read, and ignore the scroll events that reflow fires.
+        barWriting = true;
+        if (docked) catalogToolbar.classList.remove('is-scroll-dock');
         barHome = catalogToolbar.offsetTop;
         if (docked) catalogToolbar.classList.add('is-scroll-dock');
-      }
-
-      function barHeaderBottom() {
-        return catalogHeader.getBoundingClientRect().bottom;
+        barWriting = false;
       }
 
       function barScrolledInto(y, headerBottom) {
         return y - (barHome - headerBottom);
       }
 
-      function barPaint(y) {
-        var headerBottom = barHeaderBottom();
+      // Header and toolbar sizes are read here, not while scrolling. A layout
+      // read on each scroll event makes the page hitch.
+      function barMeasure() {
+        var bottom = catalogHeader.getBoundingClientRect().bottom;
+        if (bottom > 0) barHeaderPx = bottom;
         var full = catalogToolbar.offsetHeight;
+        if (full > 0) barFull = full;
+      }
+
+      function barPaint(y) {
+        var headerBottom = barHeaderPx;
+        var full = barFull;
         if (full < 1) return;
         if (barHide < 0) barHide = 0;
         if (barHide > full) barHide = full;
         var into = barScrolledInto(y, headerBottom);
         var shown = full - barHide;
-        catalogToolbar.style.setProperty('--catalog-toolbar-stick', (headerBottom - barHide) + 'px');
-        catalogToolbar.classList.add('is-scroll-dock');
-        catalogToolbar.classList.toggle('is-overlay', shown > 0.5 && into > full);
-        if (barHide >= full - 0.5) catalogToolbar.setAttribute('aria-hidden', 'true');
-        else catalogToolbar.removeAttribute('aria-hidden');
+        var stick = (headerBottom - barHide) + 'px';
+        var overlay = shown > 0.5 && into > full;
+        var hidden = barHide >= full - 0.5;
+        // Wake-from-sleep fires a burst of scroll and resize events. Writing
+        // the same sticky top again makes Firefox scroll-anchor, which fires
+        // another scroll. Skip unchanged writes so that burst can end.
+        barWriting = true;
+        if (!barDocked) {
+          catalogToolbar.classList.add('is-scroll-dock');
+          barDocked = true;
+        }
+        if (stick !== barStick) {
+          catalogToolbar.style.setProperty('--catalog-toolbar-stick', stick);
+          barStick = stick;
+        }
+        if (overlay !== barOverlay) {
+          catalogToolbar.classList.toggle('is-overlay', overlay);
+          barOverlay = overlay;
+        }
+        if (hidden !== barAriaHidden) {
+          if (hidden) catalogToolbar.setAttribute('aria-hidden', 'true');
+          else catalogToolbar.removeAttribute('aria-hidden');
+          barAriaHidden = hidden;
+        }
+        barWriting = false;
+        if (!barPending) return;
+        barPending = false;
+        barSchedule();
       }
 
       function barUpdate() {
         var y = window.scrollY || window.pageYOffset || 0;
         if (y < 0) y = 0;
         var delta = y - barLastY;
+        if (delta === 0) return;
         barLastY = y;
-        var headerBottom = barHeaderBottom();
-        var full = catalogToolbar.offsetHeight;
+        var headerBottom = barHeaderPx;
+        var full = barFull;
         var into = barScrolledInto(y, headerBottom);
         var offset = window.innerHeight || 0;
 
@@ -1209,23 +1252,44 @@
         barPaint(y);
       }
 
-      function barOnScroll() {
-        if (barTick) return;
+      function barSchedule() {
+        if (barTick || barWriting) return;
         barTick = true;
         window.requestAnimationFrame(function () {
           barTick = false;
+          if (barWriting || document.hidden) return;
           barUpdate();
         });
       }
 
       barReadHome();
+      barMeasure();
       barPaint(barLastY);
-      window.addEventListener('scroll', barOnScroll, { passive: true });
+      window.addEventListener('scroll', function () {
+        if (barWriting) {
+          barPending = true;
+          return;
+        }
+        barSchedule();
+      }, { passive: true });
       window.addEventListener('resize', function () {
-        var yNow = window.scrollY || window.pageYOffset || 0;
-        if (yNow < 2) barReadHome();
-        barHide = Math.min(barHide, catalogToolbar.offsetHeight);
-        barPaint(yNow);
+        var w = window.innerWidth || 0;
+        // A scrollbar appearing is a few pixels. Measuring on that resize
+        // toggles sticky and can queue another resize forever.
+        if (Math.abs(w - barWidth) < 24) return;
+        barWidth = w;
+        if (barTick || barWriting) return;
+        barTick = true;
+        window.requestAnimationFrame(function () {
+          barTick = false;
+          barReadHome();
+          barMeasure();
+          var yNow = window.scrollY || window.pageYOffset || 0;
+          if (yNow < 0) yNow = 0;
+          barLastY = yNow;
+          if (barFull > 0 && barHide > barFull) barHide = barFull;
+          barPaint(yNow);
+        });
       });
     }
 
@@ -1533,6 +1597,11 @@
   var grokStopRequested = false;
   var scanGroupKey = '';
   var detailReloadAfterScan = false;
+  var scanPollTimer = 0;
+  var scanPollBusy = false;
+  var scanPollQueued = false;
+  var scanWatchActive = false;
+  var scanChannel = null;
 
   function scanRunUrl() {
     if (scanLive && scanLive.getAttribute('data-scan-run-url')) {
@@ -1565,11 +1634,47 @@
     el.classList.add('is-spinning');
   }
 
+  function scanPollStop() {
+    if (!scanPollTimer) return;
+    clearTimeout(scanPollTimer);
+    scanPollTimer = 0;
+  }
+
+  function scanPollAgain(ms) {
+    if (document.hidden || scanPollTimer) return;
+    scanPollTimer = setTimeout(function () {
+      scanPollTimer = 0;
+      pollScan();
+    }, ms);
+  }
+
+  function scanBroadcast(active) {
+    if (!scanChannel) return;
+    try { scanChannel.postMessage({ active: !!active }); } catch (e) {}
+  }
+
+  // Idle pages ask once. A one-second check continues only while a scan is
+  // running, and stops when the tab is hidden. Other tabs hear the change
+  // instead of polling on their own.
+  function scanWatchSet(active) {
+    active = !!active;
+    var changed = active !== scanWatchActive;
+    scanWatchActive = active;
+    if (!active) {
+      scanPollStop();
+      if (changed) scanBroadcast(false);
+      return;
+    }
+    if (changed) scanBroadcast(true);
+    scanPollAgain(1000);
+  }
+
   function setLiveActive(active, message) {
     if (scanLive) {
       scanLive.hidden = !active;
       scanLive.setAttribute('aria-label', active ? (message || 'Scan in progress') : 'Scan idle');
     }
+    scanWatchSet(active);
     document.body.classList.toggle('scan-running', active);
     var barSpin = document.querySelector('[data-scan-bar-spin]');
     if (barSpin) barSpin.hidden = !active;
@@ -1966,15 +2071,26 @@
   }
 
   function pollScan() {
-    if (!scanLive) return;
+    if (!scanLive || document.hidden) return;
     var url = scanLive.getAttribute('data-scan-status-url');
     if (!url) return;
+    if (scanPollBusy) {
+      scanPollQueued = true;
+      return;
+    }
+    scanPollBusy = true;
     var epoch = scanEpoch;
     fetch(url, { cache: 'no-store', credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (epoch !== scanEpoch) return;
-        if (scanStartPending && (!data || data.state !== 'running')) return;
+        if (epoch !== scanEpoch) {
+          if (scanWatchActive) scanPollAgain(1000);
+          return;
+        }
+        if (scanStartPending && (!data || data.state !== 'running')) {
+          scanPollAgain(1000);
+          return;
+        }
         paintLive(data);
         if (!data || data.state !== 'running') return;
         if (data.paused || scanStopRequested) return;
@@ -1984,17 +2100,35 @@
           pumpScan();
         }
       })
-      .catch(function () {});
+      .catch(function () {
+        if (scanWatchActive || scanStartPending) scanPollAgain(3000);
+      })
+      .then(function () {
+        scanPollBusy = false;
+        if (!scanPollQueued) return;
+        scanPollQueued = false;
+        pollScan();
+      });
   }
 
   if (scanLive) {
+    try {
+      scanChannel = new BroadcastChannel('media-informant-scan');
+      scanChannel.onmessage = function () {
+        if (!document.hidden) pollScan();
+      };
+    } catch (e) {}
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) pollScan();
+    });
+    window.addEventListener('pageshow', function (event) {
+      if (event.persisted && !document.hidden) pollScan();
+    });
     pollScan();
-    setInterval(pollScan, 1000);
   }
 
   if (scanPanel && scanPanel.getAttribute('data-scan-start')) {
-    if (scanLive) scanLive.hidden = false;
-    document.body.classList.add('scan-running');
+    setLiveActive(true, 'Scan in progress');
     lastScanState = 'running';
     pumpScan(scanPanel.getAttribute('data-scan-start'));
   }

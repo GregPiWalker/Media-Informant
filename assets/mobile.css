@@ -718,6 +718,7 @@ html[data-theme="dark"] .brand-logo-dark {
   display: grid;
   gap: 0.65rem;
   padding: 0.85rem 1rem 0.35rem;
+  overflow-anchor: none;
 }
 
 .catalog-toolbar.is-scroll-dock {
