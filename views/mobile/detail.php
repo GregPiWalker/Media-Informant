@@ -205,10 +205,19 @@ $backHref = $gkey !== ''
     : app_href('video/index.php');
 $titleQs = $itemId !== '' ? ('id=' . rawurlencode($itemId) . ($gkey !== '' ? '&gkey=' . rawurlencode($gkey) : '')) : '';
 $kodiFile = '';
+$kodiPlayLabel = 'Play on Kodi';
 if ($found && !$editing && $itemId !== '' && function_exists('kodi_enabled') && kodi_enabled()) {
     $kodiRel = trim(str_replace('\\', '/', (string) ($item['path'] ?? '')));
     if ($kodiRel !== '' && $kodiRel !== '.' && $kodiRel !== '/') {
         $kodiFile = $itemId;
+        $kodiPlayHost = function_exists('kodi_selected_host') ? kodi_selected_host() : null;
+        $kodiPlayName = is_array($kodiPlayHost) ? trim((string) ($kodiPlayHost['name'] ?? '')) : '';
+        if ($kodiPlayName === '' && is_array($kodiPlayHost)) {
+            $kodiPlayName = trim((string) ($kodiPlayHost['host'] ?? ''));
+        }
+        if ($kodiPlayName !== '') {
+            $kodiPlayLabel = 'Play on ' . $kodiPlayName;
+        }
     }
 }
 
@@ -320,12 +329,7 @@ render_header(['section' => 'video']);
     <?php if ($error !== ''): ?>
     <p class="form-banner is-error" role="alert"><?= h($error) ?></p>
     <?php endif; ?>
-    <?php if ($kodiFile !== ''): ?>
-    <div class="detail-kodi">
-      <button type="button" class="btn btn-accent btn-block" data-kodi-play data-kodi-id="<?= h($kodiFile) ?>" data-kodi-url="<?= h(app_href('video/play-kodi.php')) ?>">Play on Kodi</button>
-      <p class="form-banner" data-kodi-status hidden role="status"></p>
-    </div>
-    <?php endif; ?>
+    <div class="detail-stage<?= $kodiFile !== '' ? ' has-kodi' : '' ?>">
     <div class="detail-poster poster">
       <?php if ($poster): ?>
       <img src="<?= h($poster) ?>" alt="" width="342" height="513" decoding="async">
@@ -334,6 +338,13 @@ render_header(['section' => 'video']);
         <span><?= h(initial($display)) ?></span>
       </div>
       <?php endif; ?>
+    </div>
+    <?php if ($kodiFile !== ''): ?>
+    <div class="detail-kodi">
+      <button type="button" class="btn btn-accent detail-kodi-play" data-kodi-play data-kodi-id="<?= h($kodiFile) ?>" data-kodi-url="<?= h(app_href('video/play-kodi.php')) ?>"><?= h($kodiPlayLabel) ?></button>
+    </div>
+    <p class="form-banner detail-kodi-status" data-kodi-status hidden role="status"></p>
+    <?php endif; ?>
     </div>
 
     <header class="detail-header">

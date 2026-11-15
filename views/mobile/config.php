@@ -197,7 +197,8 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <?php endforeach; ?>
       </div>
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="video">Add video folder</button>
-      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-video">Refresh Source Folders</button>
+      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-video" data-refresh-sources>Refresh Source Folders</button>
+      <p class="refresh-status" data-refresh-status="video" hidden role="status">Refreshing video folders. This can take a while.</p>
       <p class="hint">Uses the saved video folders and excluded paths. Save settings first if you changed them.</p>
     </section>
 
@@ -257,7 +258,8 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <?php endforeach; ?>
       </div>
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="music">Add music folder</button>
-      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-music">Refresh Source Folders</button>
+      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-music" data-refresh-sources>Refresh Source Folders</button>
+      <p class="refresh-status" data-refresh-status="music" hidden role="status">Refreshing music folders. This can take a while.</p>
       <p class="hint">Uses the saved music folders and excluded paths. Save settings first if you changed them. An unplugged drive is skipped.</p>
     </section>
 

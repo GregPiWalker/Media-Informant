@@ -601,6 +601,9 @@
       toggle.setAttribute('aria-expanded', 'false');
       toggle.classList.remove('is-active');
     }
+    var play = document.querySelector('[data-kodi-play]');
+    var playName = (pick.textContent || '').replace(/^\s+|\s+$/g, '');
+    if (play && playName) play.textContent = 'Play on ' + playName;
   });
 
   document.addEventListener('click', function (event) {
@@ -3310,4 +3313,78 @@
       });
     }
   }
+
+  var refreshBusy = false;
+
+  function refreshButtonLabel(button) {
+    if (!button.getAttribute('data-refresh-label')) {
+      button.setAttribute('data-refresh-label', button.textContent);
+    }
+    return button.getAttribute('data-refresh-label') || 'Refresh Source Folders';
+  }
+
+  function refreshMarkBusy(button) {
+    button.classList.add('is-busy', 'is-refreshing');
+    button.setAttribute('aria-busy', 'true');
+    refreshButtonLabel(button);
+    button.textContent = '';
+    var spin = document.createElement('span');
+    spin.className = 'refresh-spin';
+    spin.setAttribute('aria-hidden', 'true');
+    var label = document.createElement('span');
+    label.textContent = 'Refreshing source folders\u2026';
+    button.appendChild(spin);
+    button.appendChild(label);
+  }
+
+  function refreshReset() {
+    refreshBusy = false;
+    document.querySelectorAll('[data-refresh-sources]').forEach(function (button) {
+      button.classList.remove('is-busy', 'is-refreshing');
+      button.removeAttribute('aria-busy');
+      button.disabled = false;
+      button.textContent = refreshButtonLabel(button);
+    });
+    document.querySelectorAll('[data-refresh-status]').forEach(function (status) {
+      status.hidden = true;
+    });
+    var save = document.querySelector('.config-form button[type="submit"]');
+    if (save) {
+      save.classList.remove('is-busy');
+      save.disabled = false;
+    }
+  }
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form || !form.id || form.id.indexOf('refresh-sources-') !== 0) {
+      if (refreshBusy) event.preventDefault();
+      return;
+    }
+    if (refreshBusy) {
+      event.preventDefault();
+      return;
+    }
+    refreshBusy = true;
+    document.querySelectorAll('[data-refresh-sources]').forEach(function (button) {
+      if (button.getAttribute('form') === form.id) {
+        refreshMarkBusy(button);
+        return;
+      }
+      button.classList.add('is-busy');
+      button.disabled = true;
+    });
+    var catalog = form.id === 'refresh-sources-music' ? 'music' : 'video';
+    var status = document.querySelector('[data-refresh-status="' + catalog + '"]');
+    if (status) status.hidden = false;
+    var save = document.querySelector('.config-form button[type="submit"]');
+    if (save) {
+      save.classList.add('is-busy');
+      save.disabled = true;
+    }
+  });
+
+  window.addEventListener('pageshow', function (event) {
+    if (event.persisted) refreshReset();
+  });
 })();
