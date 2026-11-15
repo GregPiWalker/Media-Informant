@@ -168,10 +168,24 @@ html[data-theme="dark"] .brand-logo-dark {
 }
 
 .header-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.45rem;
   flex-shrink: 0;
+}
+
+.header-actions .header-kodi.page-menu {
+  position: static;
+  display: flex;
+  align-items: center;
+}
+
+.header-kodi .page-menu-panel {
+  left: auto;
+  right: 0;
+  min-width: 12rem;
+  max-width: min(18rem, 70vw);
 }
 
 .scan-live-btn {
@@ -1507,6 +1521,18 @@ button.col-option,
   margin-right: auto;
 }
 
+.detail-kodi .btn-block {
+  margin-top: 0.15rem;
+}
+
+.detail-kodi .form-banner {
+  margin: 0.55rem 0 0.85rem;
+}
+
+.detail-kodi .form-banner[hidden] {
+  display: none !important;
+}
+
 .page-menu {
   position: relative;
   flex-shrink: 0;
@@ -1548,6 +1574,11 @@ button.col-option,
 }
 
 .page-menu-item:active {
+  background: var(--card-bg);
+}
+
+.page-menu-item.is-selected {
+  color: var(--accent);
   background: var(--card-bg);
 }
 
@@ -2117,6 +2148,14 @@ button.col-option,
   min-width: 0;
   display: grid;
   gap: 0.45rem;
+}
+
+.kodi-field {
+  display: block;
+}
+
+.kodi-field .field-label {
+  margin-bottom: 0.2rem;
 }
 
 .folder-input {

@@ -78,6 +78,7 @@ require_once __DIR__ . '/view.php';
 require_once __DIR__ . '/log.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/settings.php';
+require_once __DIR__ . '/kodi.php';
 settings_enforce_catalog();
 define('VIDEO_EXTENSIONS', ['mkv', 'mp4', 'avi', 'm4v', 'mov', 'wmv', 'ts', 'm2ts']);
 define('AUDIO_EXTENSIONS', ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wma', 'wav', 'aiff']);
@@ -285,7 +286,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=68">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=69">
 </head>
 <body>
 <?php
@@ -301,6 +302,13 @@ function render_header(array $opts = []): void
     $section = (string) ($opts['section'] ?? 'home');
     $logoLightSm = app_href('images/' . rawurlencode('informant logo - light theme_160.png'));
     $logoDarkSm = app_href('images/' . rawurlencode('informant logo - dark theme_160.png'));
+    $kodiChoices = function_exists('kodi_hosts') ? kodi_hosts() : [];
+    $kodiPick = count($kodiChoices) >= 2;
+    $kodiSelectedId = '';
+    if ($kodiPick && function_exists('kodi_selected_host')) {
+        $kodiSelected = kodi_selected_host();
+        $kodiSelectedId = is_array($kodiSelected) ? (string) ($kodiSelected['id'] ?? '') : '';
+    }
     ?>
 <header class="site-header">
   <div class="header-row">
@@ -312,6 +320,23 @@ function render_header(array $opts = []): void
       <a class="brand-text" href="<?= h(app_href('index.php')) ?>">Media Informant</a>
     </div>
     <div class="header-actions">
+      <?php if ($kodiPick): ?>
+      <div class="page-menu header-kodi" data-menu>
+        <button type="button" class="btn btn-icon" data-menu-btn aria-expanded="false" aria-controls="kodi-host-menu" aria-haspopup="menu" aria-label="Choose Kodi player">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            <path fill="currentColor" fill-rule="evenodd" d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm5.15 2.35 5.7 3.65-5.7 3.65V7.35ZM8 18.15h8V19.8H8Z"/>
+          </svg>
+        </button>
+        <div class="page-menu-panel" id="kodi-host-menu" data-menu-panel hidden role="menu" aria-label="Kodi player">
+          <?php foreach ($kodiChoices as $kodiHost):
+              $kodiId = (string) ($kodiHost['id'] ?? '');
+              $kodiOn = $kodiId !== '' && $kodiId === $kodiSelectedId;
+              ?>
+          <button type="button" class="page-menu-item<?= $kodiOn ? ' is-selected' : '' ?>" role="menuitemradio" data-kodi-host="<?= h($kodiId) ?>" aria-checked="<?= $kodiOn ? 'true' : 'false' ?>"><?= h((string) ($kodiHost['name'] ?? 'Kodi')) ?></button>
+          <?php endforeach; ?>
+        </div>
+      </div>
+      <?php endif; ?>
       <button type="button" class="btn btn-icon scan-live-btn" data-scan-live hidden data-scan-status-url="<?= h(app_href('video/scan-status.php')) ?>" data-scan-run-url="<?= h(app_href('video/scan-run.php')) ?>" data-scan-page-url="<?= h(app_href('video/scan.php')) ?>" data-music-scan-page-url="<?= h(app_href('music/scan.php')) ?>" data-grok-run-url="<?= h(app_href('video/resolve-run.php')) ?>" data-grok-page-url="<?= h(app_href('video/scan.php')) ?>" aria-label="Scan in progress" aria-haspopup="dialog" aria-controls="scan-overlay">
         <span class="scan-live-ring" aria-hidden="true"></span>
         <span class="visually-hidden">Scan running</span>
@@ -457,7 +482,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=69" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=71" defer></script>
 </body>
 </html>
 <?php

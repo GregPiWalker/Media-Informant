@@ -417,8 +417,8 @@
 
   function folderRow(kind) {
     var specs = {
-      video: { name: 'video_roots[]', cat: 'video_root_categories[]', label: 'Video folder', placeholder: '/volume1/video' },
-      music: { name: 'music_roots[]', cat: 'music_root_categories[]', label: 'Music folder', placeholder: '/volume1/music' },
+      video: { name: 'video_roots[]', cat: 'video_root_categories[]', smb: 'video_root_smb[]', smbPlaceholder: 'smb://nas/video', label: 'Video folder', placeholder: '/volume1/video' },
+      music: { name: 'music_roots[]', cat: 'music_root_categories[]', smb: 'music_root_smb[]', smbPlaceholder: 'smb://nas/music', label: 'Music folder', placeholder: '/volume1/music' },
       'video-exclude': { name: 'video_excludes[]', label: 'Excluded video path', placeholder: '/volume1/video/skip-this' },
       'music-exclude': { name: 'music_excludes[]', label: 'Excluded music path', placeholder: '/volume1/music/skip-this' }
     };
@@ -456,6 +456,10 @@
       fields.appendChild(select);
     }
 
+    if (spec.smb && document.querySelector('[data-kodi-smb]')) {
+      fields.appendChild(kodiLabeled('SMB path', kodiText(spec.smb, spec.smbPlaceholder, '')));
+    }
+
     var remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'btn btn-ghost';
@@ -490,13 +494,155 @@
     event.preventDefault();
     var rows = list.querySelectorAll('[data-folder-row]');
     if (rows.length <= 1) {
-      var field = row.querySelector('input');
-      if (field) field.value = '';
+      row.querySelectorAll('input[type="text"]').forEach(function (field) { field.value = ''; });
       var status = row.querySelector('.folder-status');
       if (status) status.remove();
       return;
     }
     row.remove();
+  });
+
+  function kodiText(name, placeholder, mode) {
+    var input = document.createElement('input');
+    input.type = mode === 'password' ? 'password' : 'text';
+    input.name = name;
+    input.className = 'folder-input';
+    if (placeholder) input.placeholder = placeholder;
+    input.spellcheck = false;
+    input.setAttribute('autocapitalize', mode === 'words' ? 'words' : 'off');
+    input.setAttribute('autocomplete', 'off');
+    if (mode === 'numeric') input.setAttribute('inputmode', 'numeric');
+    return input;
+  }
+
+  function kodiLabeled(labelText, input) {
+    var label = document.createElement('label');
+    label.className = 'kodi-field';
+    var span = document.createElement('span');
+    span.className = 'field-label';
+    span.textContent = labelText;
+    label.appendChild(span);
+    label.appendChild(input);
+    return label;
+  }
+
+  function kodiRow() {
+    var row = document.createElement('div');
+    row.className = 'folder-row';
+    row.setAttribute('data-kodi-row', '');
+    var fields = document.createElement('div');
+    fields.className = 'folder-fields';
+    var id = document.createElement('input');
+    id.type = 'hidden';
+    id.name = 'kodi_host_ids[]';
+    fields.appendChild(id);
+    fields.appendChild(kodiLabeled('Name', kodiText('kodi_host_names[]', 'Living room', 'words')));
+    fields.appendChild(kodiLabeled('Host', kodiText('kodi_host_addresses[]', '192.168.1.20', '')));
+    fields.appendChild(kodiLabeled('Port', kodiText('kodi_host_ports[]', '8080', 'numeric')));
+    fields.appendChild(kodiLabeled('Username', kodiText('kodi_host_users[]', '', '')));
+    fields.appendChild(kodiLabeled('Password', kodiText('kodi_host_passes[]', '', 'password')));
+    var remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'btn btn-ghost';
+    remove.setAttribute('data-remove-kodi', '');
+    remove.setAttribute('aria-label', 'Remove Kodi host');
+    remove.textContent = 'Remove';
+    row.appendChild(fields);
+    row.appendChild(remove);
+    return row;
+  }
+
+  document.addEventListener('click', function (event) {
+    var addKodi = event.target.closest('[data-add-kodi]');
+    if (addKodi) {
+      event.preventDefault();
+      var list = document.querySelector('[data-kodi-list]');
+      if (!list) return;
+      var row = kodiRow();
+      list.appendChild(row);
+      var field = row.querySelector('input[type="text"]');
+      if (field) field.focus();
+      return;
+    }
+    var removeKodi = event.target.closest('[data-remove-kodi]');
+    if (!removeKodi) return;
+    var kodiList = removeKodi.closest('[data-kodi-list]');
+    var kodiRowEl = removeKodi.closest('[data-kodi-row]');
+    if (!kodiList || !kodiRowEl) return;
+    event.preventDefault();
+    var kodiRows = kodiList.querySelectorAll('[data-kodi-row]');
+    if (kodiRows.length <= 1) {
+      kodiRowEl.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+      return;
+    }
+    kodiRowEl.remove();
+  });
+
+  document.addEventListener('click', function (event) {
+    var pick = event.target.closest('[data-kodi-host]');
+    if (!pick) return;
+    event.preventDefault();
+    var id = pick.getAttribute('data-kodi-host') || '';
+    if (id) {
+      document.cookie = 'media_kodi_host=' + encodeURIComponent(id) + ';path=/;max-age=31536000;SameSite=Lax';
+    }
+    var menu = pick.closest('[data-menu]');
+    if (!menu) return;
+    var items = menu.querySelectorAll('[data-kodi-host]');
+    for (var i = 0; i < items.length; i++) {
+      var on = items[i] === pick;
+      items[i].classList.toggle('is-selected', on);
+      items[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    var panel = menu.querySelector('[data-menu-panel]');
+    var toggle = menu.querySelector('[data-menu-btn]');
+    if (panel) panel.hidden = true;
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+      toggle.classList.remove('is-active');
+    }
+  });
+
+  document.addEventListener('click', function (event) {
+    var play = event.target.closest('[data-kodi-play]');
+    if (!play || !window.fetch) return;
+    event.preventDefault();
+    if (play.disabled) return;
+    var url = play.getAttribute('data-kodi-url') || '';
+    var id = play.getAttribute('data-kodi-id') || '';
+    var status = document.querySelector('[data-kodi-status]');
+    if (!url || !id) return;
+    play.disabled = true;
+    if (status) {
+      status.hidden = false;
+      status.className = 'form-banner';
+      status.setAttribute('role', 'status');
+      status.textContent = 'Sending to Kodi…';
+    }
+    var body = new FormData();
+    body.append('id', id);
+    fetch(url, { method: 'POST', body: body, credentials: 'same-origin' })
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!status) return;
+        var ok = !!(data && data.ok);
+        status.hidden = false;
+        status.className = 'form-banner ' + (ok ? 'is-ok' : 'is-error');
+        status.setAttribute('role', ok ? 'status' : 'alert');
+        status.textContent = ok
+          ? ((data && data.message) || 'Playing.')
+          : ((data && data.error) || 'Kodi did not start playback.');
+      })
+      .catch(function () {
+        if (!status) return;
+        status.hidden = false;
+        status.className = 'form-banner is-error';
+        status.setAttribute('role', 'alert');
+        status.textContent = 'Could not reach Kodi.';
+      })
+      .then(function () {
+        play.disabled = false;
+      });
   });
 
   document.addEventListener('click', function (event) {

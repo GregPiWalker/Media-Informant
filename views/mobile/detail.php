@@ -204,6 +204,13 @@ $backHref = $gkey !== ''
     ? app_href('video/group.php?key=' . rawurlencode($gkey))
     : app_href('video/index.php');
 $titleQs = $itemId !== '' ? ('id=' . rawurlencode($itemId) . ($gkey !== '' ? '&gkey=' . rawurlencode($gkey) : '')) : '';
+$kodiFile = '';
+if ($found && !$editing && $itemId !== '' && function_exists('kodi_enabled') && kodi_enabled()) {
+    $kodiRel = trim(str_replace('\\', '/', (string) ($item['path'] ?? '')));
+    if ($kodiRel !== '' && $kodiRel !== '.' && $kodiRel !== '/') {
+        $kodiFile = $itemId;
+    }
+}
 
 render_start($pageTitle);
 render_header(['section' => 'video']);
@@ -312,6 +319,12 @@ render_header(['section' => 'video']);
   <article class="detail<?= $editing ? ' is-editing' : '' ?>">
     <?php if ($error !== ''): ?>
     <p class="form-banner is-error" role="alert"><?= h($error) ?></p>
+    <?php endif; ?>
+    <?php if ($kodiFile !== ''): ?>
+    <div class="detail-kodi">
+      <button type="button" class="btn btn-accent btn-block" data-kodi-play data-kodi-id="<?= h($kodiFile) ?>" data-kodi-url="<?= h(app_href('video/play-kodi.php')) ?>">Play on Kodi</button>
+      <p class="form-banner" data-kodi-status hidden role="status"></p>
+    </div>
     <?php endif; ?>
     <div class="detail-poster poster">
       <?php if ($poster): ?>

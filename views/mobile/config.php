@@ -8,6 +8,8 @@ declare(strict_types=1);
 /** @var list<array{path: string, category: string}> $musicSources */
 /** @var list<string> $videoExcludes */
 /** @var list<string> $musicExcludes */
+/** @var list<array{id: string, name: string, host: string, port: string, user: string, pass: string}> $kodiRows */
+/** @var string $kodiPrefix */
 /** @var bool $saved */
 /** @var string $refreshed */
 /** @var int $refreshAdded */
@@ -43,6 +45,37 @@ function config_source_folder_status(string $presence): void
         ? source_presence_label($presence)
         : settings_path_status_label($presence);
     echo h($label) . '</p>';
+}
+
+function config_kodi_row(array $row): void
+{
+    $id = (string) ($row['id'] ?? '');
+    $name = (string) ($row['name'] ?? '');
+    $host = (string) ($row['host'] ?? '');
+    $port = (string) ($row['port'] ?? '');
+    $user = (string) ($row['user'] ?? '');
+    $pass = (string) ($row['pass'] ?? '');
+    echo '<div class="folder-row" data-kodi-row>';
+    echo '<div class="folder-fields">';
+    echo '<input type="hidden" name="kodi_host_ids[]" value="' . h($id) . '">';
+    echo '<label class="kodi-field"><span class="field-label">Name</span>';
+    echo '<input type="text" name="kodi_host_names[]" class="folder-input" value="' . h($name) . '" maxlength="80" placeholder="Living room" spellcheck="false" autocapitalize="words" autocomplete="off">';
+    echo '</label>';
+    echo '<label class="kodi-field"><span class="field-label">Host</span>';
+    echo '<input type="text" name="kodi_host_addresses[]" class="folder-input" value="' . h($host) . '" placeholder="192.168.1.20" spellcheck="false" autocapitalize="off" autocomplete="off">';
+    echo '</label>';
+    echo '<label class="kodi-field"><span class="field-label">Port</span>';
+    echo '<input type="text" name="kodi_host_ports[]" class="folder-input" value="' . h($port) . '" inputmode="numeric" placeholder="8080" spellcheck="false" autocapitalize="off" autocomplete="off">';
+    echo '</label>';
+    echo '<label class="kodi-field"><span class="field-label">Username</span>';
+    echo '<input type="text" name="kodi_host_users[]" class="folder-input" value="' . h($user) . '" spellcheck="false" autocapitalize="off" autocomplete="off">';
+    echo '</label>';
+    echo '<label class="kodi-field"><span class="field-label">Password</span>';
+    echo '<input type="password" name="kodi_host_passes[]" class="folder-input" value="' . h($pass) . '" spellcheck="false" autocomplete="off">';
+    echo '</label>';
+    echo '</div>';
+    echo '<button type="button" class="btn btn-ghost" data-remove-kodi aria-label="Remove Kodi host">Remove</button>';
+    echo '</div>';
 }
 
 function config_category_select(string $fieldName, string $selected, array $categories, string $domain): void
@@ -130,12 +163,15 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <button type="button" class="branch-tab<?= $configTab === 'music' ? ' is-active' : '' ?>" role="tab" id="config-tab-music" data-config-tab="music" aria-controls="config-panel-music" aria-selected="<?= $configTab === 'music' ? 'true' : 'false' ?>">Music</button>
   </nav>
 
-  <form class="config-form" method="post" action="<?= h(app_href('config/index.php')) ?>" autocomplete="off">
+  <form class="config-form" method="post" action="<?= h(app_href('config/index.php')) ?>" autocomplete="off"<?= function_exists('kodi_enabled') && kodi_enabled() ? ' data-kodi-smb' : '' ?>>
     <input type="hidden" name="config_tab" value="<?= h($configTab) ?>" data-config-tab-field>
     <div id="config-panel-video" class="config-panel" data-config-panel="video" role="tabpanel" aria-labelledby="config-tab-video"<?= $configTab === 'video' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Video folders</h2>
       <p class="hint">Absolute paths to video shares, one per row. Save settings to keep this list. Refresh Source Folders reads each saved source that is Present, adds new video files, and removes files that are gone. An Absent source, such as an unplugged drive, is skipped and its catalog files stay. Scan looks up posters and overviews.</p>
+      <?php if (function_exists('kodi_enabled') && kodi_enabled()): ?>
+      <p class="hint">SMB path is how Kodi reaches that share. It replaces the NAS folder when a file is played. Folder /volume1/video and SMB path smb://nas/video opens /volume1/video/Movies/Foo.mkv as smb://nas/video/Movies/Foo.mkv.</p>
+      <?php endif; ?>
       <div class="folder-list" data-folder-list="video">
         <?php foreach ($videoSources as $source):
             $root = (string) ($source['path'] ?? '');
@@ -146,6 +182,12 @@ if ($configTab !== 'music' && $configTab !== 'general') {
             <label class="visually-hidden">Video folder</label>
             <input type="text" name="video_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/video" spellcheck="false" autocapitalize="off">
             <?php config_category_select('video_root_categories[]', (string) ($source['category'] ?? ''), $videoCategories, 'video'); ?>
+            <?php if (function_exists('kodi_enabled') && kodi_enabled()): ?>
+            <label class="kodi-field">
+              <span class="field-label">SMB path</span>
+              <input type="text" name="video_root_smb[]" class="folder-input" value="<?= h((string) ($source['smb'] ?? '')) ?>" placeholder="smb://nas/video" spellcheck="false" autocapitalize="off" autocomplete="off">
+            </label>
+            <?php endif; ?>
             <?php if ($presence !== ''): ?>
             <?php config_source_folder_status($presence); ?>
             <?php endif; ?>
@@ -187,6 +229,9 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <section class="form-section">
       <h2>Music folders</h2>
       <p class="hint">Absolute paths to music shares. Save settings to keep this list. Refresh Source Folders reads each saved source that is Present, adds new music files, and removes files that are gone. An Absent source, such as a USB drive that is not mounted, is skipped and its catalog files stay.</p>
+      <?php if (function_exists('kodi_enabled') && kodi_enabled()): ?>
+      <p class="hint">SMB path is how Kodi reaches that share. It replaces the NAS folder when a file is played. Folder /volume1/music and SMB path smb://nas/music opens a track under that folder from the SMB share.</p>
+      <?php endif; ?>
       <div class="folder-list" data-folder-list="music">
         <?php foreach ($musicSources as $source):
             $root = (string) ($source['path'] ?? '');
@@ -197,6 +242,12 @@ if ($configTab !== 'music' && $configTab !== 'general') {
             <label class="visually-hidden">Music folder</label>
             <input type="text" name="music_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/music" spellcheck="false" autocapitalize="off">
             <?php config_category_select('music_root_categories[]', (string) ($source['category'] ?? ''), $musicCategories, 'music'); ?>
+            <?php if (function_exists('kodi_enabled') && kodi_enabled()): ?>
+            <label class="kodi-field">
+              <span class="field-label">SMB path</span>
+              <input type="text" name="music_root_smb[]" class="folder-input" value="<?= h((string) ($source['smb'] ?? '')) ?>" placeholder="smb://nas/music" spellcheck="false" autocapitalize="off" autocomplete="off">
+            </label>
+            <?php endif; ?>
             <?php if ($presence !== ''): ?>
             <?php config_source_folder_status($presence); ?>
             <?php endif; ?>
@@ -301,6 +352,22 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <span class="field-label">API key</span>
         <input type="password" name="xai_api_key" class="folder-input" value="<?= h((string) ($settings['xai_api_key'] ?? '')) ?>" spellcheck="false" autocapitalize="off" autocomplete="off">
       </label>
+    </section>
+
+    <section class="form-section">
+      <h2>Kodi</h2>
+      <p class="hint">Optional. Add each Kodi player, such as an NVIDIA Shield, that should be able to play a file from a title page. Leave every row blank to hide Play on Kodi. Name is the label you pick. Host is an IP address or hostname, without http://. Port defaults to 8080. Username and password are optional and are sent only as Basic Auth to that player.</p>
+      <div class="folder-list" data-kodi-list>
+        <?php foreach ($kodiRows as $kodiRow): ?>
+        <?php config_kodi_row($kodiRow); ?>
+        <?php endforeach; ?>
+      </div>
+      <button type="button" class="btn btn-ghost btn-block" data-add-kodi>Add Kodi host</button>
+      <label class="field">
+        <span class="field-label">Path prefix</span>
+        <input type="text" name="kodi_path_prefix" class="folder-input" value="<?= h($kodiPrefix) ?>" placeholder="smb://nas/Video" spellcheck="false" autocapitalize="off" autocomplete="off">
+      </label>
+      <p class="hint">Optional fallback for a source that has no SMB path. The matching NAS folder is removed and this prefix is put in front. A source SMB path on the Video or Music tab is used instead. Leave this empty and a source with no SMB path sends smb:// plus this site’s host and the full NAS path. The log records the path Kodi was asked to open.</p>
     </section>
     </div>
 

@@ -16,6 +16,8 @@ $refreshFiles = isset($_GET['files']) ? (int) $_GET['files'] : 0;
 $refreshSkipped = isset($_GET['skipped']) ? (int) $_GET['skipped'] : 0;
 $refreshWalked = isset($_GET['walked']) ? (int) $_GET['walked'] : 0;
 $error = '';
+$kodiCheck = null;
+$payload = null;
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'refresh_sources') {
     $refreshCatalog = (string) ($_POST['catalog'] ?? '') === 'music' ? 'music' : 'video';
@@ -74,6 +76,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] 
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $current = settings_get();
+    $hasKodiForm = isset($_POST['kodi_host_names']) || isset($_POST['kodi_host_addresses']) || array_key_exists('kodi_path_prefix', $_POST);
     $payload = [
         'video_categories' => $current['video_categories'] ?? settings_default_categories(),
         'music_categories' => $current['music_categories'] ?? [],
@@ -89,6 +92,18 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         'show_hidden' => isset($_POST['show_hidden']),
         'catalog_mode' => $_POST['catalog_mode'] ?? ($current['catalog_mode'] ?? 'both'),
     ];
+    if ($hasKodiForm) {
+        $payload['kodi_host_ids'] = $_POST['kodi_host_ids'] ?? [];
+        $payload['kodi_host_names'] = $_POST['kodi_host_names'] ?? [];
+        $payload['kodi_host_addresses'] = $_POST['kodi_host_addresses'] ?? [];
+        $payload['kodi_host_ports'] = $_POST['kodi_host_ports'] ?? [];
+        $payload['kodi_host_users'] = $_POST['kodi_host_users'] ?? [];
+        $payload['kodi_host_passes'] = $_POST['kodi_host_passes'] ?? [];
+        $payload['kodi_path_prefix'] = $_POST['kodi_path_prefix'] ?? '';
+    } else {
+        $payload['kodi_hosts'] = $current['kodi_hosts'] ?? [];
+        $payload['kodi_path_prefix'] = $current['kodi_path_prefix'] ?? '';
+    }
     if (!is_array($payload['video_root_categories'])) {
         $payload['video_root_categories'] = [];
     }
@@ -107,9 +122,31 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     if (!is_array($payload['music_excludes'])) {
         $payload['music_excludes'] = [];
     }
+    $payload['video_root_smb'] = settings_posted_smb(
+        $payload['video_roots'],
+        array_key_exists('video_root_smb', $_POST) ? $_POST['video_root_smb'] : null,
+        is_array($current['video_roots'] ?? null) ? $current['video_roots'] : []
+    );
+    $payload['music_root_smb'] = settings_posted_smb(
+        $payload['music_roots'],
+        array_key_exists('music_root_smb', $_POST) ? $_POST['music_root_smb'] : null,
+        is_array($current['music_roots'] ?? null) ? $current['music_roots'] : []
+    );
+    if ($hasKodiForm) {
+        foreach (['kodi_host_ids', 'kodi_host_names', 'kodi_host_addresses', 'kodi_host_ports', 'kodi_host_users', 'kodi_host_passes'] as $kodiKey) {
+            if (!is_array($payload[$kodiKey] ?? null)) {
+                $payload[$kodiKey] = [];
+            }
+        }
+    }
 
+    $kodiCheck = $hasKodiForm ? settings_parse_kodi($payload, true) : null;
     if (!cache_writable()) {
         $error = 'cache/ is not writable. Grant the http user write access so settings can be saved.';
+    } elseif (is_array($kodiCheck) && ($kodiCheck['error'] ?? '') !== '') {
+        $error = (string) $kodiCheck['error'];
+    } elseif (($smbError = settings_smb_paths_error([$payload['video_root_smb'], $payload['music_root_smb']])) !== '') {
+        $error = $smbError;
     } elseif (!settings_save($payload)) {
         $error = 'Could not write settings.json. Check cache/ permissions.';
     } else {
@@ -146,7 +183,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     }
 }
 
-$settings = settings_get(true);
+$settings = ($error !== '' && is_array($payload)) ? settings_normalize($payload) : settings_get(true);
 if (function_exists('source_presence_refresh')) {
     source_presence_refresh('video', settings_source_paths(is_array($settings['video_roots'] ?? null) ? $settings['video_roots'] : []));
     source_presence_refresh('music', settings_source_paths(is_array($settings['music_roots'] ?? null) ? $settings['music_roots'] : []));
@@ -168,6 +205,32 @@ if ($videoExcludes === []) {
 }
 if ($musicExcludes === []) {
     $musicExcludes = [''];
+}
+$kodiPrefix = (string) ($settings['kodi_path_prefix'] ?? '');
+$kodiRows = [];
+$storedKodi = $settings['kodi_hosts'] ?? [];
+if (is_array($storedKodi)) {
+    foreach ($storedKodi as $kodiHost) {
+        if (!is_array($kodiHost)) {
+            continue;
+        }
+        $kodiRows[] = [
+            'id' => (string) ($kodiHost['id'] ?? ''),
+            'name' => (string) ($kodiHost['name'] ?? ''),
+            'host' => (string) ($kodiHost['host'] ?? ''),
+            'port' => (string) ($kodiHost['port'] ?? ''),
+            'user' => (string) ($kodiHost['user'] ?? ''),
+            'pass' => (string) ($kodiHost['pass'] ?? ''),
+        ];
+    }
+}
+if (is_array($kodiCheck) && $error !== '') {
+    $postedRows = $kodiCheck['rows'] ?? [];
+    $kodiRows = is_array($postedRows) ? $postedRows : [];
+    $kodiPrefix = (string) ($kodiCheck['prefix'] ?? $kodiPrefix);
+}
+if ($kodiRows === []) {
+    $kodiRows[] = ['id' => '', 'name' => '', 'host' => '', 'port' => '', 'user' => '', 'pass' => ''];
 }
 
 $configTab = (string) ($_GET['tab'] ?? $_POST['config_tab'] ?? 'video');

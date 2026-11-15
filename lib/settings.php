@@ -55,6 +55,8 @@ function settings_defaults(): array
         'xai_api_key' => XAI_API_KEY,
         'show_hidden' => false,
         'catalog_mode' => 'both',
+        'kodi_hosts' => [],
+        'kodi_path_prefix' => '',
     ];
 }
 
@@ -196,7 +198,76 @@ function settings_read_category_list(array $data, string $key, string $idKey, st
     return settings_clean_categories($ids, $labels, $useDefaults);
 }
 
-function settings_clean_sources(array $roots, array $categoryIds, array $validIds): array
+function settings_clean_smb(string $smb): string
+{
+    $smb = str_replace(["\r", "\n"], '', trim($smb));
+    if (strlen($smb) > 300) {
+        $smb = substr($smb, 0, 300);
+    }
+    return $smb;
+}
+
+/**
+ * Empty is allowed. A value must be an smb:// URL Kodi can open.
+ *
+ * @param list<mixed> $lists
+ */
+function settings_smb_paths_error(array $lists): string
+{
+    foreach ($lists as $list) {
+        if (!is_array($list)) {
+            continue;
+        }
+        foreach ($list as $smb) {
+            $smb = settings_clean_smb((string) $smb);
+            if ($smb === '') {
+                continue;
+            }
+            if (!preg_match('#^smb://[^/\s]+#i', $smb)) {
+                return 'Each SMB path must start with smb:// and the server name, such as smb://nas/video.';
+            }
+        }
+    }
+    return '';
+}
+
+/**
+ * SMB values aligned with posted folder paths.
+ * A missing form field keeps the SMB path already saved for that folder.
+ *
+ * @param list<mixed> $paths
+ * @param list<array<string, mixed>> $storedSources
+ * @return list<string>
+ */
+function settings_posted_smb(array $paths, mixed $posted, array $storedSources): array
+{
+    if (is_array($posted)) {
+        $out = [];
+        $count = count($paths);
+        for ($i = 0; $i < $count; $i++) {
+            $out[] = is_string($posted[$i] ?? null) ? $posted[$i] : '';
+        }
+        return $out;
+    }
+    $byPath = [];
+    foreach ($storedSources as $source) {
+        if (!is_array($source)) {
+            continue;
+        }
+        $path = settings_normalize_path((string) ($source['path'] ?? ''));
+        if ($path !== '') {
+            $byPath[$path] = (string) ($source['smb'] ?? '');
+        }
+    }
+    $out = [];
+    foreach ($paths as $path) {
+        $norm = settings_normalize_path(is_string($path) ? $path : '');
+        $out[] = $norm !== '' && isset($byPath[$norm]) ? $byPath[$norm] : '';
+    }
+    return $out;
+}
+
+function settings_clean_sources(array $roots, array $categoryIds, array $validIds, array $smbPaths = []): array
 {
     $valid = array_fill_keys($validIds, true);
     $out = [];
@@ -204,12 +275,18 @@ function settings_clean_sources(array $roots, array $categoryIds, array $validId
     foreach ($roots as $i => $root) {
         $path = '';
         $category = '';
+        $smb = '';
         if (is_array($root)) {
             $path = (string) ($root['path'] ?? '');
             $category = (string) ($root['category'] ?? '');
+            $smb = (string) ($root['smb'] ?? '');
+            if (array_key_exists($i, $smbPaths)) {
+                $smb = (string) $smbPaths[$i];
+            }
         } elseif (is_string($root)) {
             $path = $root;
             $category = (string) ($categoryIds[$i] ?? '');
+            $smb = (string) ($smbPaths[$i] ?? '');
         }
         $path = settings_normalize_path($path);
         if ($path === '' || settings_path_blocked($path) || isset($seen[$path])) {
@@ -220,7 +297,7 @@ function settings_clean_sources(array $roots, array $categoryIds, array $validId
             $category = '';
         }
         $seen[$path] = true;
-        $out[] = ['path' => $path, 'category' => $category];
+        $out[] = ['path' => $path, 'category' => $category, 'smb' => settings_clean_smb($smb)];
     }
     return $out;
 }
@@ -238,6 +315,158 @@ function settings_source_paths(array $sources): array
         }
     }
     return $paths;
+}
+
+function settings_kodi_new_id(array $seen): string
+{
+    do {
+        try {
+            $id = bin2hex(random_bytes(6));
+        } catch (Throwable $e) {
+            $id = substr(hash('sha256', uniqid('kodi', true)), 0, 12);
+        }
+    } while (isset($seen[$id]));
+    return $id;
+}
+
+function settings_kodi_host_ok(string $host): bool
+{
+    if ($host === '' || strlen($host) > 253) {
+        return false;
+    }
+    if (str_contains($host, ' ') || str_contains($host, '/') || str_contains($host, '\\') || str_contains($host, '@')) {
+        return false;
+    }
+    if (preg_match('/^\[[0-9A-Fa-f:.]+\]$/', $host)) {
+        return true;
+    }
+    // One colon is host:port. The port has its own field. Two or more colons are an IPv6 address.
+    if (substr_count($host, ':') === 1) {
+        return false;
+    }
+    return (bool) preg_match('/^[A-Za-z0-9._:-]+$/', $host);
+}
+
+/**
+ * @param array<string, mixed> $data
+ * @return array{hosts: list<array{id: string, name: string, host: string, port: int, user: string, pass: string}>, rows: list<array{id: string, name: string, host: string, port: string, user: string, pass: string}>, prefix: string, error: string}
+ */
+function settings_parse_kodi(array $data, bool $strict): array
+{
+    $prefix = str_replace(["\r", "\n"], '', trim((string) ($data['kodi_path_prefix'] ?? '')));
+    if (strlen($prefix) > 300) {
+        $prefix = substr($prefix, 0, 300);
+    }
+    $names = $data['kodi_host_names'] ?? null;
+    $addresses = $data['kodi_host_addresses'] ?? null;
+    $fromForm = is_array($names) || is_array($addresses);
+    $rawRows = [];
+    if ($fromForm) {
+        if (!is_array($names)) {
+            $names = [];
+        }
+        if (!is_array($addresses)) {
+            $addresses = [];
+        }
+        $ids = is_array($data['kodi_host_ids'] ?? null) ? $data['kodi_host_ids'] : [];
+        $ports = is_array($data['kodi_host_ports'] ?? null) ? $data['kodi_host_ports'] : [];
+        $users = is_array($data['kodi_host_users'] ?? null) ? $data['kodi_host_users'] : [];
+        $passes = is_array($data['kodi_host_passes'] ?? null) ? $data['kodi_host_passes'] : [];
+        $count = max(count($names), count($addresses), count($ports), count($users), count($passes));
+        for ($i = 0; $i < $count; $i++) {
+            $rawRows[] = [
+                'id' => trim((string) ($ids[$i] ?? '')),
+                'name' => trim((string) ($names[$i] ?? '')),
+                'host' => trim((string) ($addresses[$i] ?? '')),
+                'port' => trim((string) ($ports[$i] ?? '')),
+                'user' => trim((string) ($users[$i] ?? '')),
+                'pass' => str_replace(["\r", "\n"], '', (string) ($passes[$i] ?? '')),
+            ];
+        }
+    } else {
+        $stored = $data['kodi_hosts'] ?? [];
+        if (!is_array($stored)) {
+            $stored = [];
+        }
+        foreach ($stored as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $rawRows[] = [
+                'id' => trim((string) ($row['id'] ?? '')),
+                'name' => trim((string) ($row['name'] ?? '')),
+                'host' => trim((string) ($row['host'] ?? '')),
+                'port' => trim((string) ($row['port'] ?? '')),
+                'user' => trim((string) ($row['user'] ?? '')),
+                'pass' => str_replace(["\r", "\n"], '', (string) ($row['pass'] ?? '')),
+            ];
+        }
+    }
+
+    $display = [];
+    foreach ($rawRows as $row) {
+        $blank = $row['name'] === '' && $row['host'] === '' && $row['user'] === '' && $row['pass'] === '' && ($row['port'] === '' || $row['port'] === '8080');
+        if (!$blank) {
+            $display[] = $row;
+        }
+    }
+    $hosts = [];
+    $seenNames = [];
+    $seenIds = [];
+    foreach ($display as $row) {
+        if ($strict && $row['name'] === '') {
+            return ['hosts' => [], 'rows' => $display, 'prefix' => $prefix, 'error' => 'Each Kodi host needs a name.'];
+        }
+        if ($strict && $row['host'] === '') {
+            return ['hosts' => [], 'rows' => $display, 'prefix' => $prefix, 'error' => 'Each Kodi host needs an IP address or hostname.'];
+        }
+        if ($row['host'] === '' || !settings_kodi_host_ok($row['host'])) {
+            if ($strict) {
+                return ['hosts' => [], 'rows' => $display, 'prefix' => $prefix, 'error' => 'Kodi host must be an IP address or hostname. Put the port in the Port field, and leave off http://.'];
+            }
+            continue;
+        }
+        $port = $row['port'] === '' ? 8080 : (int) $row['port'];
+        if ($row['port'] !== '' && (!ctype_digit($row['port']) || $port < 1 || $port > 65535)) {
+            if ($strict) {
+                return ['hosts' => [], 'rows' => $display, 'prefix' => $prefix, 'error' => 'Kodi port must be a number from 1 to 65535.'];
+            }
+            $port = 8080;
+        }
+        $name = $row['name'] !== '' ? $row['name'] : $row['host'];
+        if (strlen($name) > 80) {
+            $name = substr($name, 0, 80);
+        }
+        $nameKey = strtolower($name);
+        if (isset($seenNames[$nameKey])) {
+            if ($strict) {
+                return ['hosts' => [], 'rows' => $display, 'prefix' => $prefix, 'error' => 'Each Kodi host name must be unique.'];
+            }
+            $n = 2;
+            $base = $name;
+            while (isset($seenNames[strtolower($base . ' ' . $n)])) {
+                $n++;
+            }
+            $name = $base . ' ' . $n;
+            $nameKey = strtolower($name);
+        }
+        $seenNames[$nameKey] = true;
+        $id = $row['id'];
+        if (!preg_match('/^[a-f0-9]{12}$/', $id) || isset($seenIds[$id])) {
+            $id = settings_kodi_new_id($seenIds);
+        }
+        $seenIds[$id] = true;
+        $hosts[] = [
+            'id' => $id,
+            'name' => $name,
+            'host' => $row['host'],
+            'port' => $port,
+            'user' => $row['user'],
+            'pass' => $row['pass'],
+        ];
+    }
+
+    return ['hosts' => $hosts, 'rows' => $display, 'prefix' => $prefix, 'error' => ''];
 }
 
 function settings_normalize(array $data): array
@@ -300,13 +529,22 @@ function settings_normalize(array $data): array
     if (!is_array($musicEx)) {
         $musicEx = [];
     }
+    $videoSmb = $data['video_root_smb'] ?? [];
+    $musicSmb = $data['music_root_smb'] ?? [];
+    if (!is_array($videoSmb)) {
+        $videoSmb = [];
+    }
+    if (!is_array($musicSmb)) {
+        $musicSmb = [];
+    }
+    $kodi = settings_parse_kodi($data, false);
 
     return [
         'version' => 1,
         'video_categories' => $videoCategories,
         'music_categories' => $musicCategories,
-        'video_roots' => settings_clean_sources($video, $videoCats, $videoValidIds),
-        'music_roots' => settings_clean_sources($music, $musicCats, $musicValidIds),
+        'video_roots' => settings_clean_sources($video, $videoCats, $videoValidIds, $videoSmb),
+        'music_roots' => settings_clean_sources($music, $musicCats, $musicValidIds, $musicSmb),
         'video_excludes' => settings_clean_roots($videoEx),
         'music_excludes' => settings_clean_roots($musicEx),
         'tmdb_api_key' => trim((string) ($data['tmdb_api_key'] ?? $defaults['tmdb_api_key'])),
@@ -314,6 +552,8 @@ function settings_normalize(array $data): array
         'xai_api_key' => trim((string) ($data['xai_api_key'] ?? $defaults['xai_api_key'])),
         'show_hidden' => settings_bool($data['show_hidden'] ?? $defaults['show_hidden']),
         'catalog_mode' => settings_catalog_mode_value($data['catalog_mode'] ?? $defaults['catalog_mode']),
+        'kodi_hosts' => $kodi['hosts'],
+        'kodi_path_prefix' => $kodi['prefix'],
     ];
 }
 
