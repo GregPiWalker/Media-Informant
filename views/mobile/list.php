@@ -202,7 +202,7 @@ $view = $prefs->view;
       </svg>
     </div>
     <h1>Your library is empty</h1>
-    <p>Set video folders in Config, then scan the library from there. Browsing never walks the disk on its own.</p>
+    <p>Set video folders in Config, save them, then choose Refresh Source Folders. Browsing never walks the disk on its own.</p>
     <a class="btn btn-accent" href="<?= h(app_href('config/index.php')) ?>">Open Config</a>
   </section>
   <?php else: ?>
@@ -223,7 +223,7 @@ $view = $prefs->view;
       <p class="form-banner" role="status">
         Present source<?= count($unscannedRoots) === 1 ? '' : 's' ?> with no video files in the catalog:
         <?= h(implode(', ', $unscannedRoots)) ?>.
-        Save Config while the folder is Present to index files, then Scan to look up titles.
+        Use Refresh Source Folders on the Video tab in Config while the folder is Present, then Scan to look up titles.
       </p>
       <a class="btn btn-accent" href="<?= h(app_href('config/index.php?tab=video')) ?>">Open Config</a>
     </div>

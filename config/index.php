@@ -9,11 +9,68 @@ require dirname(__DIR__) . '/lib/scanner.php';
 cache_init();
 
 $saved = isset($_GET['saved']);
-$discoverAdded = isset($_GET['added']) ? (int) $_GET['added'] : null;
-$discoverFiles = isset($_GET['files']) ? (int) $_GET['files'] : null;
-$discoverBusy = (string) ($_GET['discover'] ?? '') === 'busy';
-$discoverError = (string) ($_GET['discover'] ?? '') === 'error';
+$refreshed = (string) ($_GET['refreshed'] ?? '');
+$refreshAdded = isset($_GET['added']) ? (int) $_GET['added'] : 0;
+$refreshDropped = isset($_GET['dropped']) ? (int) $_GET['dropped'] : 0;
+$refreshFiles = isset($_GET['files']) ? (int) $_GET['files'] : 0;
+$refreshSkipped = isset($_GET['skipped']) ? (int) $_GET['skipped'] : 0;
+$refreshWalked = isset($_GET['walked']) ? (int) $_GET['walked'] : 0;
 $error = '';
+
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'refresh_sources') {
+    $refreshCatalog = (string) ($_POST['catalog'] ?? '') === 'music' ? 'music' : 'video';
+    $refreshRoots = $refreshCatalog === 'music' ? settings_music_roots() : settings_video_roots();
+    if ($refreshRoots === []) {
+        header('Location: index.php?tab=' . rawurlencode($refreshCatalog) . '&refreshed=empty', true, 303);
+        exit;
+    }
+    if (function_exists('source_presence_refresh')) {
+        source_presence_refresh($refreshCatalog, $refreshRoots);
+    }
+    $lock = function_exists('scan_lock_open') ? scan_lock_open() : false;
+    if (function_exists('scan_lock_try') && !scan_lock_try($lock)) {
+        if (is_resource($lock)) {
+            fclose($lock);
+        }
+        header('Location: index.php?tab=' . rawurlencode($refreshCatalog) . '&refreshed=busy', true, 303);
+        exit;
+    }
+    try {
+        @set_time_limit(180);
+        $result = catalog_discover_roots($refreshRoots, $refreshCatalog);
+    } catch (Throwable $e) {
+        $result = ['ok' => false, 'error' => $e->getMessage()];
+        if (function_exists('app_log')) {
+            app_log('scan', 'Refresh source folders failed.', [
+                'catalog' => $refreshCatalog,
+                'error' => $e->getMessage(),
+            ], 'error');
+        }
+    } finally {
+        if (function_exists('scan_lock_release')) {
+            scan_lock_release($lock);
+        } elseif (is_resource($lock)) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+    if (empty($result['ok'])) {
+        header('Location: index.php?tab=' . rawurlencode($refreshCatalog) . '&refreshed=error', true, 303);
+        exit;
+    }
+    $query = http_build_query([
+        'tab' => $refreshCatalog,
+        'refreshed' => $refreshCatalog,
+        'added' => (int) ($result['added'] ?? 0),
+        'dropped' => (int) ($result['dropped'] ?? 0),
+        'kept' => (int) ($result['kept'] ?? 0),
+        'files' => (int) ($result['files'] ?? 0),
+        'skipped' => (int) ($result['skipped'] ?? 0),
+        'walked' => count(is_array($result['roots'] ?? null) ? $result['roots'] : []),
+    ]);
+    header('Location: index.php?' . $query, true, 303);
+    exit;
+}
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $current = settings_get();
@@ -74,54 +131,6 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 }
             }
         }
-        $discoverQuery = '';
-        $newVideo = settings_video_roots();
-        if (function_exists('source_presence_refresh')) {
-            source_presence_refresh('video', $newVideo);
-        }
-        $toDiscover = [];
-        $emptyRoots = [];
-        if (function_exists('source_roots_without_titles')) {
-            $lib = function_exists('cache_read_library') ? cache_read_library() : ['items' => []];
-            $emptyRoots = array_fill_keys(source_roots_without_titles($newVideo, $lib['items'] ?? []), true);
-        }
-        foreach ($newVideo as $root) {
-            $present = function_exists('source_is_present') ? source_is_present($root) : (is_dir($root) && is_readable($root));
-            if (!$present) {
-                continue;
-            }
-            $wasConfigured = in_array($root, $oldVideo, true);
-            if (!$wasConfigured || isset($emptyRoots[$root])) {
-                $toDiscover[] = $root;
-            }
-        }
-        if ($toDiscover !== [] && function_exists('catalog_discover_roots')) {
-            $lock = function_exists('scan_lock_open') ? scan_lock_open() : false;
-            if (function_exists('scan_lock_try') && !scan_lock_try($lock)) {
-                if (is_resource($lock)) {
-                    fclose($lock);
-                }
-                $discoverQuery = '&discover=busy';
-            } else {
-                try {
-                    @set_time_limit(180);
-                    $result = catalog_discover_roots($toDiscover, 'video');
-                    $discoverQuery = '&added=' . (int) ($result['added'] ?? 0)
-                        . '&kept=' . (int) ($result['kept'] ?? 0)
-                        . '&files=' . (int) ($result['files'] ?? 0);
-                    if (empty($result['ok'])) {
-                        $discoverQuery .= '&discover=error';
-                    }
-                } finally {
-                    if (function_exists('scan_lock_release')) {
-                        scan_lock_release($lock);
-                    } elseif (is_resource($lock)) {
-                        flock($lock, LOCK_UN);
-                        fclose($lock);
-                    }
-                }
-            }
-        }
         if (function_exists('app_log')) {
             app_log('config', 'Settings saved.', [
                 'video_roots' => is_array($payload['video_roots']) ? count($payload['video_roots']) : 0,
@@ -132,7 +141,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         if ($tab !== 'music' && $tab !== 'general') {
             $tab = 'video';
         }
-        header('Location: index.php?saved=1&tab=' . rawurlencode($tab) . $discoverQuery, true, 303);
+        header('Location: index.php?saved=1&tab=' . rawurlencode($tab), true, 303);
         exit;
     }
 }

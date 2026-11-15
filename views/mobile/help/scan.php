@@ -1,6 +1,6 @@
 <p class="help-kicker">Help</p>
 <h1>Scan</h1>
-<p>A video scan looks up titles on TMDB, then Grok if Grok is enabled, for files already in the catalog. Save new folders in Config first so they can be indexed. The scan then runs in stages. Each stage can stop early, and the settings below change which files move forward and which service is asked. Open it from the scan icon in the header, beside the wrench.</p>
+<p>A video scan looks up titles on TMDB, then Grok if Grok is enabled, for files already in the catalog. Use Refresh Source Folders on the Video tab in Config to index new and removed files first. The scan then runs in stages. Each stage can stop early, and the settings below change which files move forward and which service is asked. Open it from the scan icon in the header, beside the wrench.</p>
 <nav class="help-onpage" aria-label="On this page">
   <a href="#scan-start">How a scan starts</a>
   <a href="#scan-files">Which files are included</a>
@@ -15,7 +15,7 @@
 <h2 id="scan-start">How a scan starts</h2>
 <p>Indexing and scanning are different steps.</p>
 <ul>
-  <li>Saving video folders in Config walks the disk and adds new files. A new file is unidentified until a scan looks it up. Excluded paths are left out. A source that is not mounted stays in the catalog and is skipped until the drive is back.</li>
+  <li>Refresh Source Folders on the Video or Music tab walks each saved source that is present. It adds new files and removes files that are gone from that source. A new video file is unidentified until a scan looks it up. Excluded paths are left out. A source that is not mounted, such as an unplugged USB drive, is skipped. Files already stored for that source stay until the drive is back and you refresh again, or until you remove the source and save.</li>
   <li>Start a Video scan on the Scan page looks up files that are already indexed. It does not walk the disk for new files.</li>
   <li>Re-scan on a TV show, a season or episode group, or a movie folder runs the same lookup, limited to the files in that group.</li>
 </ul>
@@ -89,7 +89,7 @@
 <dl class="help-defs">
   <div>
     <dt>Video folders and categories</dt>
-    <dd>Decide which directories are indexed and whether a tree is treated as movies or as a TV show with seasons. Saving Config is what adds new unidentified files.</dd>
+    <dd>Decide which directories are indexed and whether a tree is treated as movies or as a TV show with seasons. Save the list, then use Refresh Source Folders to add new files and remove files that are gone. Saving Config does not walk the disk. Removing a source and saving drops that source from the catalog immediately.</dd>
   </div>
   <div>
     <dt>Excluded paths</dt>

@@ -16,6 +16,7 @@ declare(strict_types=1);
 /** @var string $searchSource */
 /** @var bool $hasKey */
 /** @var bool $canSearch */
+/** @var bool $fileBlocked */
 /** @var bool $relaxedYear */
 /** @var string $parsedTitle */
 /** @var string $grokNote */
@@ -25,6 +26,7 @@ $scanServiceNote = isset($scanServiceNote) ? (string) $scanServiceNote : '';
 
 $searchSource = isset($searchSource) ? (string) $searchSource : 'TMDB';
 $canSearch = isset($canSearch) ? (bool) $canSearch : (bool) ($hasKey ?? false);
+$fileBlocked = !empty($fileBlocked);
 $currentLookup = isset($currentLookup) ? (string) $currentLookup : '';
 $onRiff = $searchSource === 'RiffTrax';
 $onMst = $searchSource === 'MST3K';
@@ -86,7 +88,8 @@ if ($mode === 'popular') {
   <p class="form-banner is-error" role="alert"><?= h($error) ?></p>
   <?php endif; ?>
 
-  <?php if (!$canSearch): ?>
+  <?php if ($fileBlocked): ?>
+  <?php elseif (!$canSearch): ?>
   <section class="panel">
     <h1><?php
       if ($onSite) {

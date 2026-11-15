@@ -20,7 +20,7 @@ $grokOn = false;
 $showGrokUi = false;
 $scanEnabled = false;
 $scanOptions = scan_options_read($catalog);
-$idleCopy = 'Music scanning is not available yet. You can set music folders in Config and review options here. A video scan and a music scan cannot run at the same time.';
+$idleCopy = 'Music title lookup is not available yet. Refresh Source Folders on the Music tab in Config records new and removed files. An unplugged drive is skipped. A video scan and a music scan cannot run at the same time.';
 
 render_start('Music scan · Media Informant');
 render_header(['section' => 'config', 'branches' => true]);

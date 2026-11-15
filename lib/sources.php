@@ -99,6 +99,84 @@ function source_is_absent_for_item(array $item): bool
     return source_presence_live($root) === 'absent';
 }
 
+/**
+ * ready: the catalog file is on disk.
+ * missing_file: its source root is present and the file is not.
+ * missing_source: the source root is not present.
+ */
+function source_file_availability(array $item): string
+{
+    $full = function_exists('format_source_path') ? format_source_path($item) : '';
+    if (function_exists('settings_normalize_path')) {
+        $full = settings_normalize_path($full);
+    }
+    if ($full !== '') {
+        clearstatcache(true, $full);
+        if (is_file($full)) {
+            return 'ready';
+        }
+    }
+    $root = function_exists('settings_item_root')
+        ? settings_item_root($item)
+        : (string) ($item['root'] ?? '');
+    if ($root !== '' && source_presence_live($root) === 'present') {
+        return 'missing_file';
+    }
+    return 'missing_source';
+}
+
+function source_command_label(string $action): string
+{
+    return match ($action) {
+        'clear_match' => 'Clear Match',
+        'treat_individual' => 'Treat Individually',
+        'treat_series' => 'Treat as Series',
+        'folder_as_movie' => 'Treat Folder as Movies',
+        'folder_as_show' => 'Treat Folder as TV Show',
+        'exclude_parent' => 'Exclude Parent Dir',
+        'hide' => 'Hide',
+        'unhide' => 'Unhide',
+        'edit', 'save_data' => 'Edit Data',
+        'match' => 'Match title',
+        'change_match' => 'Change match',
+        default => 'This command',
+    };
+}
+
+/**
+ * Null when the file is on disk. Otherwise the notice to show, and the command must not run.
+ * A missing file on a present source is also written to the log.
+ */
+function source_command_block(array $item, string $action): ?string
+{
+    $state = source_file_availability($item);
+    if ($state === 'ready') {
+        return null;
+    }
+    $label = source_command_label($action);
+    if ($state === 'missing_file') {
+        $message = $label . ' could not execute because the file is missing.';
+        if (function_exists('app_log')) {
+            $path = function_exists('format_source_path') ? format_source_path($item) : '';
+            $filename = trim((string) ($item['filename'] ?? ''));
+            if ($filename === '') {
+                $filename = $path !== '' ? basename(str_replace('\\', '/', $path)) : '';
+            }
+            $log = $filename !== ''
+                ? ($label . ' could not execute because ' . $filename . ' is missing.')
+                : $message;
+            app_log('title', $log, [
+                'id' => (string) ($item['id'] ?? ''),
+                'action' => $action,
+                'path' => $path,
+                'filename' => $filename,
+            ], 'warn');
+        }
+        return $message;
+    }
+    return $label . ' cannot execute until the source is present.';
+}
+
 function source_presence_label(string $presence): string
 {
     return match ($presence) {

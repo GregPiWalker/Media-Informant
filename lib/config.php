@@ -285,7 +285,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=67">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=68">
 </head>
 <body>
 <?php
@@ -419,7 +419,7 @@ function render_end(): void
     </div>
     <h2 id="about-overlay-title">Media Informant</h2>
     <p class="about-lead">A quiet catalog for the movies, shows, and music on this NAS.</p>
-    <p>Browse posters and details without waiting on a folder scan. When files change, Scan matches titles, fetches artwork, and keeps the catalog ready.</p>
+    <p>Browse posters and details without waiting on a folder scan. Refresh Source Folders picks up new and removed files. Scan then matches titles, fetches artwork, and keeps the catalog ready.</p>
     <p class="about-credit">Movie and TV details come from TMDB. Optional Grok help can identify titles TMDB couldn’t. Built for Synology Web Station.</p>
   </div>
 </div>

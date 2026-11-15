@@ -9,6 +9,12 @@ declare(strict_types=1);
 /** @var list<string> $videoExcludes */
 /** @var list<string> $musicExcludes */
 /** @var bool $saved */
+/** @var string $refreshed */
+/** @var int $refreshAdded */
+/** @var int $refreshDropped */
+/** @var int $refreshFiles */
+/** @var int $refreshSkipped */
+/** @var int $refreshWalked */
 /** @var string $error */
 
 function config_category_list(array $categories): string
@@ -21,6 +27,22 @@ function config_category_list(array $categories): string
         }
     }
     return $labels === [] ? 'None' : implode(', ', $labels);
+}
+
+function config_source_folder_status(string $presence): void
+{
+    $ok = $presence === 'present' || $presence === 'ok';
+    echo '<p class="folder-status' . ($ok ? '' : ' is-absent') . '">';
+    if ($presence === 'absent') {
+        $guide = app_href(rawurlencode('Media-Informant Install Guide.pdf'));
+        echo 'Absent (<a href="' . h($guide) . '" target="_blank" rel="noopener noreferrer">missing PHP \'open_basedir\' value?</a>)';
+        echo '</p>';
+        return;
+    }
+    $label = function_exists('source_presence_label')
+        ? source_presence_label($presence)
+        : settings_path_status_label($presence);
+    echo h($label) . '</p>';
 }
 
 function config_category_select(string $fieldName, string $selected, array $categories, string $domain): void
@@ -52,21 +74,55 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <p>Point this install at the shares on this NAS. Assign a category to each source; everything inside inherits it.</p>
   </header>
 
-  <?php if ($saved): ?>
-  <?php if (!empty($discoverBusy)): ?>
-  <p class="form-banner is-ok" role="status">Settings saved. A scan is running, so new folders were not indexed. Save again after the scan finishes.</p>
-  <?php elseif (!empty($discoverError)): ?>
-  <p class="form-banner is-error" role="alert">Settings saved, but the new folder could not be indexed. Check cache/ permissions.</p>
-  <?php elseif ($discoverAdded !== null): ?>
-  <p class="form-banner is-ok" role="status">Settings saved. Indexed <?= (int) $discoverAdded ?> new file<?= (int) $discoverAdded === 1 ? '' : 's' ?><?= $discoverFiles !== null ? ' (' . (int) $discoverFiles . ' video file' . ((int) $discoverFiles === 1 ? '' : 's') . ' on disk)' : '' ?>. They appear in Video as unidentified until you Scan for metadata.</p>
+  <?php if ($refreshed === 'busy'): ?>
+  <p class="form-banner is-ok" role="status">A scan is running, so source folders were not refreshed. Try again after it finishes.</p>
+  <?php elseif ($refreshed === 'error'): ?>
+  <p class="form-banner is-error" role="alert">Source folders could not be refreshed. Check cache/ permissions.</p>
+  <?php elseif ($refreshed === 'empty'): ?>
+  <p class="form-banner is-ok" role="status">Add a folder on this tab and save settings before refreshing source folders.</p>
+  <?php elseif ($refreshed === 'video' || $refreshed === 'music'): ?>
+  <p class="form-banner is-ok" role="status"><?php
+    $refreshNoun = $refreshed === 'music' ? 'music' : 'video';
+    if ($refreshWalked < 1) {
+        echo 'No ' . h($refreshNoun) . ' sources are present. '
+            . (int) $refreshSkipped . ' absent source' . ($refreshSkipped === 1 ? ' was' : 's were')
+            . ' skipped, so catalog files on ' . ($refreshSkipped === 1 ? 'that source were' : 'those sources were')
+            . ' left in place.';
+    } else {
+        echo 'Refreshed ' . h($refreshNoun) . ' sources. Added ' . (int) $refreshAdded
+            . ' new file' . ($refreshAdded === 1 ? '' : 's')
+            . ' and removed ' . (int) $refreshDropped
+            . ' missing file' . ($refreshDropped === 1 ? '' : 's')
+            . '. ' . (int) $refreshFiles . ' ' . h($refreshNoun)
+            . ' file' . ($refreshFiles === 1 ? '' : 's')
+            . ' on the sources that were read.';
+        if ($refreshSkipped > 0) {
+            echo ' ' . (int) $refreshSkipped . ' absent source' . ($refreshSkipped === 1 ? ' was' : 's were')
+                . ' skipped, so ' . ($refreshSkipped === 1 ? 'its' : 'their') . ' catalog files were left in place.';
+        }
+        if ($refreshed === 'video' && $refreshAdded > 0) {
+            echo ' New files stay unidentified until you scan for titles.';
+        }
+    }
+  ?></p>
+  <?php if ($refreshed === 'video' && $refreshWalked > 0): ?>
   <a class="btn btn-accent btn-block" href="<?= h(app_href('video/scan.php')) ?>">Look up titles</a>
-  <?php else: ?>
-  <p class="form-banner is-ok" role="status">Settings saved. Removed sources leave the catalog immediately. New present folders are indexed on save; Scan looks up titles.</p>
   <?php endif; ?>
+  <?php elseif ($saved): ?>
+  <p class="form-banner is-ok" role="status">Settings saved. Removed sources leave the catalog immediately. Use Refresh Source Folders to add new files and drop files that are gone. Scan looks up titles.</p>
   <?php endif; ?>
   <?php if ($error !== ''): ?>
   <p class="form-banner is-error" role="alert"><?= h($error) ?></p>
   <?php endif; ?>
+
+  <form id="refresh-sources-video" method="post" action="<?= h(app_href('config/index.php')) ?>">
+    <input type="hidden" name="action" value="refresh_sources">
+    <input type="hidden" name="catalog" value="video">
+  </form>
+  <form id="refresh-sources-music" method="post" action="<?= h(app_href('config/index.php')) ?>">
+    <input type="hidden" name="action" value="refresh_sources">
+    <input type="hidden" name="catalog" value="music">
+  </form>
 
   <nav class="branch-nav config-tabs" role="tablist" aria-label="Settings sections">
     <button type="button" class="branch-tab<?= $configTab === 'general' ? ' is-active' : '' ?>" role="tab" id="config-tab-general" data-config-tab="general" aria-controls="config-panel-general" aria-selected="<?= $configTab === 'general' ? 'true' : 'false' ?>">General</button>
@@ -79,7 +135,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <div id="config-panel-video" class="config-panel" data-config-panel="video" role="tabpanel" aria-labelledby="config-tab-video"<?= $configTab === 'video' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Video folders</h2>
-      <p class="hint">Absolute paths to video shares, one per row. Saving a Present source indexes its video files into the catalog (names only). Scan looks up posters and overviews. Removable drives can be Absent until they are plugged in again; titles already in the catalog stay until you remove the source.</p>
+      <p class="hint">Absolute paths to video shares, one per row. Save settings to keep this list. Refresh Source Folders reads each saved source that is Present, adds new video files, and removes files that are gone. An Absent source, such as an unplugged drive, is skipped and its catalog files stay. Scan looks up posters and overviews.</p>
       <div class="folder-list" data-folder-list="video">
         <?php foreach ($videoSources as $source):
             $root = (string) ($source['path'] ?? '');
@@ -91,7 +147,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
             <input type="text" name="video_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/video" spellcheck="false" autocapitalize="off">
             <?php config_category_select('video_root_categories[]', (string) ($source['category'] ?? ''), $videoCategories, 'video'); ?>
             <?php if ($presence !== ''): ?>
-            <p class="folder-status<?= $presence === 'present' || $presence === 'ok' ? '' : ' is-absent' ?>"><?= h(function_exists('source_presence_label') ? source_presence_label($presence) : settings_path_status_label($presence)) ?></p>
+            <?php config_source_folder_status($presence); ?>
             <?php endif; ?>
           </div>
           <button type="button" class="btn btn-ghost" data-remove-folder aria-label="Remove video folder">Remove</button>
@@ -99,6 +155,8 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <?php endforeach; ?>
       </div>
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="video">Add video folder</button>
+      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-video">Refresh Source Folders</button>
+      <p class="hint">Uses the saved video folders and excluded paths. Save settings first if you changed them.</p>
     </section>
 
     <section class="form-section">
@@ -128,7 +186,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
     <div id="config-panel-music" class="config-panel" data-config-panel="music" role="tabpanel" aria-labelledby="config-tab-music"<?= $configTab === 'music' ? '' : ' hidden' ?>>
     <section class="form-section">
       <h2>Music folders</h2>
-      <p class="hint">Absolute paths to music shares. Removable drives can be Absent until they are plugged in again; catalog entries stay until you remove the source.</p>
+      <p class="hint">Absolute paths to music shares. Save settings to keep this list. Refresh Source Folders reads each saved source that is Present, adds new music files, and removes files that are gone. An Absent source, such as a USB drive that is not mounted, is skipped and its catalog files stay.</p>
       <div class="folder-list" data-folder-list="music">
         <?php foreach ($musicSources as $source):
             $root = (string) ($source['path'] ?? '');
@@ -140,7 +198,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
             <input type="text" name="music_roots[]" class="folder-input" value="<?= h($root) ?>" placeholder="/volume1/music" spellcheck="false" autocapitalize="off">
             <?php config_category_select('music_root_categories[]', (string) ($source['category'] ?? ''), $musicCategories, 'music'); ?>
             <?php if ($presence !== ''): ?>
-            <p class="folder-status<?= $presence === 'present' || $presence === 'ok' ? '' : ' is-absent' ?>"><?= h(function_exists('source_presence_label') ? source_presence_label($presence) : settings_path_status_label($presence)) ?></p>
+            <?php config_source_folder_status($presence); ?>
             <?php endif; ?>
           </div>
           <button type="button" class="btn btn-ghost" data-remove-folder aria-label="Remove music folder">Remove</button>
@@ -148,6 +206,8 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <?php endforeach; ?>
       </div>
       <button type="button" class="btn btn-ghost btn-block" data-add-folder="music">Add music folder</button>
+      <button type="submit" class="btn btn-accent btn-block" form="refresh-sources-music">Refresh Source Folders</button>
+      <p class="hint">Uses the saved music folders and excluded paths. Save settings first if you changed them. An unplugged drive is skipped.</p>
     </section>
 
     <section class="form-section">
@@ -174,7 +234,7 @@ if ($configTab !== 'music' && $configTab !== 'general') {
 
     <section class="form-section">
       <h2>Music library</h2>
-      <p class="hint">Music scanning is not available yet. You can open the page to review options. A music scan cannot run at the same time as a video scan.</p>
+      <p class="hint">Refresh Source Folders records the music files. Looking up artist and album is not available yet. A music scan cannot run at the same time as a video scan.</p>
       <a class="btn btn-accent btn-block" href="<?= h(app_href('music/scan.php')) ?>">Open music scan page</a>
     </section>
     </div>

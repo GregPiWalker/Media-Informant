@@ -41,13 +41,33 @@ if ($item !== null && !settings_item_in_roots($item, settings_video_roots(), $li
 $error = '';
 $editing = isset($_GET['edit']);
 $editDraft = null;
+$sourceBlocked = false;
+if ($item !== null) {
+    $pendingCommand = '';
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+        $pendingCommand = (string) ($_POST['action'] ?? '');
+        if ($pendingCommand === '' && $_POST === [] && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+            $pendingCommand = 'save_data';
+        }
+    } elseif ($editing) {
+        $pendingCommand = 'edit';
+    }
+    if ($pendingCommand !== '') {
+        $sourceNotice = source_command_block($item, $pendingCommand);
+        if ($sourceNotice !== null) {
+            $error = $sourceNotice;
+            $editing = false;
+            $sourceBlocked = true;
+        }
+    }
+}
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $_POST === [] && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && $_POST === [] && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
     $error = 'That image is too large to upload.';
     $editing = true;
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'treat_individual' || (string) ($_POST['action'] ?? '') === 'treat_series')) {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'treat_individual' || (string) ($_POST['action'] ?? '') === 'treat_series')) {
     $grouped = (string) ($_POST['action'] ?? '') === 'treat_series';
     $updated = cache_update_item($id, static function (array $row) use ($grouped): array {
         return library_set_item_grouped($row, $grouped);
@@ -65,7 +85,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string)
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'folder_as_show' || (string) ($_POST['action'] ?? '') === 'folder_as_movie')) {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string) ($_POST['action'] ?? '') === 'folder_as_show' || (string) ($_POST['action'] ?? '') === 'folder_as_movie')) {
     $home = folder_home_for_file((string) ($item['path'] ?? ''));
     $root = (string) ($item['root'] ?? '');
     $kind = (string) ($_POST['action'] ?? '') === 'folder_as_movie' ? 'movie' : 'show';
@@ -86,7 +106,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ((string)
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'exclude_parent') {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'exclude_parent') {
     $parent = settings_item_parent_dir($item);
     $fail = settings_add_video_exclude($parent);
     if ($fail !== null) {
@@ -108,7 +128,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'hide') {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'hide') {
     $updated = cache_update_item($id, static function (array $row): array {
         return library_set_hidden($row, true);
     });
@@ -128,7 +148,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'unhide') {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'unhide') {
     $updated = cache_update_item($id, static function (array $row): array {
         return library_set_hidden($row, false);
     });
@@ -144,7 +164,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_match') {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'clear_match') {
     $updated = cache_update_item($id, static function (array $row): array {
         return library_clear_match($row);
     });
@@ -160,7 +180,7 @@ if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) 
     }
 }
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'save_data') {
+if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'save_data') {
     $displayTitle = trim((string) ($_POST['display_title'] ?? ''));
     if (strlen($displayTitle) > 200) {
         $displayTitle = substr($displayTitle, 0, 200);

@@ -2142,6 +2142,7 @@ select.folder-input {
   color: var(--dim-fg);
   font-size: 0.8rem;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .folder-status.is-warn {

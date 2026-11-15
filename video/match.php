@@ -57,8 +57,19 @@ if ($item !== null && !settings_item_in_roots($item, settings_video_roots(), $li
 }
 
 $error = '';
+$fileBlocked = false;
+if (is_array($item)) {
+    $matchAction = function_exists('library_item_status') && library_item_status($item) === 'matched'
+        ? 'change_match'
+        : 'match';
+    $sourceNotice = function_exists('source_command_block') ? source_command_block($item, $matchAction) : null;
+    if ($sourceNotice !== null) {
+        $error = $sourceNotice;
+        $fileBlocked = true;
+    }
+}
 
-if ($item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
+if (!$fileBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $action = (string) ($_POST['action'] ?? '');
     $postedSource = (string) ($_POST['lookup_source'] ?? 'TMDB');
     $postedSite = '';
@@ -232,7 +243,7 @@ $canSearch = $scanServiceNote !== ''
     ? false
     : ($siteSearch ? function_exists('curl_init') : $hasKey);
 
-if ($item !== null && $siteSearch && $canSearch) {
+if (!$fileBlocked && $item !== null && $siteSearch && $canSearch) {
     $prefFile = $searchSource === 'MST3K' ? $mstFile : $riffFile;
     $queryText = $q !== '' ? $q : (string) ($prefFile['title'] ?? '');
     if ($queryText === '') {
@@ -291,7 +302,7 @@ if ($item !== null && $siteSearch && $canSearch) {
         'page' => 1,
         'total_pages' => 1,
     ];
-} elseif ($item !== null && $hasKey && $scanServiceNote === '' && $searchSource === 'TMDB') {
+} elseif (!$fileBlocked && $item !== null && $hasKey && $scanServiceNote === '' && $searchSource === 'TMDB') {
     if ($q !== '') {
         $payload = tmdb_search_results($q, $year, $page, $searchMedia);
         $relaxedYear = !empty($payload['relaxed_year']);

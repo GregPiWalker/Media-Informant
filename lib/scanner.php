@@ -69,13 +69,26 @@ function scanner_is_video(string $filename): bool
     return in_array($ext, VIDEO_EXTENSIONS, true);
 }
 
-function scan_files(string $root, ?array $excludes = null, ?callable $progress = null): array
+function scan_files(string $root, ?array $excludes = null, ?callable $progress = null, ?array $extensions = null): array
 {
     $files = [];
     if (!is_dir($root) || !is_readable($root)) {
         return $files;
     }
-    $excludes ??= settings_video_excludes();
+    $useVideo = $extensions === null;
+    if ($useVideo) {
+        $extensions = defined('VIDEO_EXTENSIONS') ? VIDEO_EXTENSIONS : ['mkv', 'mp4', 'avi', 'm4v', 'mov', 'wmv', 'ts', 'm2ts'];
+        $excludes ??= settings_video_excludes();
+    } else {
+        $excludes ??= [];
+    }
+    $allowedExt = [];
+    foreach ($extensions as $ext) {
+        $ext = strtolower(ltrim((string) $ext, '.'));
+        if ($ext !== '') {
+            $allowedExt[$ext] = true;
+        }
+    }
 
     try {
         $inner = new RecursiveDirectoryIterator(
@@ -104,7 +117,8 @@ function scan_files(string $root, ?array $excludes = null, ?callable $progress =
         if ($name === '' || $name[0] === '.') {
             continue;
         }
-        if (!scanner_is_video($name)) {
+        $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+        if ($ext === '' || !isset($allowedExt[$ext])) {
             continue;
         }
 
@@ -423,26 +437,85 @@ function scan_discovered_item(array $file, ?array $prev): array
 }
 
 /**
- * Walk present roots and merge files into the catalog with no TMDB/Grok lookups.
+ * Keep a music file that is still on disk. A new file is an unidentified track.
+ *
+ * @param array<string, mixed> $file
+ * @param array<string, mixed>|null $prev
+ * @return array<string, mixed>
+ */
+function scan_discovered_music_item(array $file, ?array $prev): array
+{
+    $root = (string) ($file['root'] ?? '');
+    $path = (string) ($file['path'] ?? '');
+    $filename = (string) ($file['filename'] ?? basename(str_replace('\\', '/', $path)));
+    $category = function_exists('settings_category_for_root') ? settings_category_for_root($root) : '';
+    if ($prev !== null) {
+        $item = $prev;
+        $item['root'] = $root;
+        $item['path'] = $path;
+        $item['filename'] = $filename;
+        $item['mtime'] = (int) ($file['mtime'] ?? 0);
+        $item['size'] = (int) ($file['size'] ?? 0);
+        $item['category'] = $category;
+        $item['kind'] = 'track';
+        $item['grouped'] = false;
+        return $item;
+    }
+    $title = function_exists('strip_extension') ? strip_extension($filename) : $filename;
+    return [
+        'id' => cache_item_id($path, $root),
+        'root' => $root,
+        'path' => $path,
+        'filename' => $filename,
+        'mtime' => (int) ($file['mtime'] ?? 0),
+        'size' => (int) ($file['size'] ?? 0),
+        'title' => $title,
+        'year' => null,
+        'season' => null,
+        'episode' => null,
+        'kind' => 'track',
+        'grouped' => false,
+        'episode_title' => '',
+        'part' => '',
+        'category' => $category,
+        'tmdb_id' => null,
+        'status' => 'unidentified',
+        'poster_path' => null,
+        'display_title' => $title,
+        'match_source' => 'none',
+        'genres' => [],
+    ];
+}
+
+/**
+ * Walk present roots and merge files into one catalog with no title lookups.
+ * A root that is not mounted is omitted. Files already stored for that root stay.
  *
  * @param list<string> $roots
- * @return array{ok: bool, added: int, kept: int, dropped: int, files: int, roots: list<string>, error?: string}
+ * @return array{ok: bool, added: int, kept: int, dropped: int, files: int, skipped: int, roots: list<string>, error?: string}
  */
 function catalog_discover_roots(array $roots, string $catalog = 'video'): array
 {
-    unset($catalog);
+    $catalog = function_exists('db_normalize_catalog') ? db_normalize_catalog($catalog) : ($catalog === 'music' ? 'music' : 'video');
+    $isMusic = $catalog === 'music';
     $stats = [
         'ok' => true,
         'added' => 0,
         'kept' => 0,
         'dropped' => 0,
         'files' => 0,
+        'skipped' => 0,
         'roots' => [],
     ];
+    $requested = [];
     $walk = [];
     foreach ($roots as $root) {
         $root = settings_normalize_path((string) $root);
-        if ($root === '' || !is_dir($root) || !is_readable($root)) {
+        if ($root === '' || isset($requested[$root])) {
+            continue;
+        }
+        $requested[$root] = true;
+        if (!is_dir($root) || !is_readable($root)) {
             continue;
         }
         if (function_exists('source_is_present') && !source_is_present($root)) {
@@ -450,13 +523,26 @@ function catalog_discover_roots(array $roots, string $catalog = 'video'): array
         }
         $walk[] = $root;
     }
-    $walk = array_values(array_unique($walk));
+    $stats['skipped'] = count($requested) - count($walk);
     if ($walk === []) {
+        if ($requested !== [] && function_exists('app_log')) {
+            $label = $isMusic ? 'music' : 'video';
+            app_log('scan', 'Refresh skipped ' . $stats['skipped'] . ' absent ' . $label . ' source' . ($stats['skipped'] === 1 ? '' : 's') . '. Catalog unchanged.', [
+                'catalog' => $catalog,
+                'skipped' => $stats['skipped'],
+            ]);
+        }
         return $stats;
     }
 
-    $old = cache_read_library();
-    $oldItems = is_array($old['items'] ?? null) ? $old['items'] : [];
+    if ($isMusic) {
+        $oldItems = function_exists('catalog_store_load') ? catalog_store_load('music') : [];
+        $old = ['items' => $oldItems, 'scanned_at' => null];
+    } else {
+        $old = cache_read_library();
+        $oldItems = is_array($old['items'] ?? null) ? $old['items'] : [];
+    }
+    $oldItems = is_array($oldItems) ? $oldItems : [];
     [$oldByPath] = scan_index_library($old);
     $absSeen = [];
     foreach ($oldItems as $item) {
@@ -470,19 +556,18 @@ function catalog_discover_roots(array $roots, string $catalog = 'video'): array
         }
     }
 
+    $audioExt = defined('AUDIO_EXTENSIONS') ? AUDIO_EXTENSIONS : ['mp3', 'flac', 'm4a', 'aac', 'ogg', 'wma', 'wav', 'aiff'];
+    $musicExcludes = function_exists('settings_music_excludes') ? settings_music_excludes() : [];
     $foundFiles = [];
     $foundItems = [];
-    $foundKeys = [];
     foreach ($walk as $root) {
-        $batch = scan_files($root);
+        $batch = $isMusic ? scan_files($root, $musicExcludes, null, $audioExt) : scan_files($root);
         $stats['files'] += count($batch);
         foreach ($batch as $file) {
             if (!is_array($file)) {
                 continue;
             }
             $foundFiles[] = $file;
-            $key = scan_item_key($file);
-            $foundKeys[$key] = true;
             $abs = settings_normalize_path(
                 rtrim((string) ($file['root'] ?? ''), '/') . '/' . ltrim((string) ($file['path'] ?? ''), '/')
             );
@@ -497,7 +582,7 @@ function catalog_discover_roots(array $roots, string $catalog = 'video'): array
                 }
                 $prev = $other;
             }
-            $item = scan_discovered_item($file, $prev);
+            $item = $isMusic ? scan_discovered_music_item($file, is_array($prev) ? $prev : null) : scan_discovered_item($file, $prev);
             $foundItems[] = $item;
             if ($prev) {
                 $stats['kept']++;
@@ -532,25 +617,35 @@ function catalog_discover_roots(array $roots, string $catalog = 'video'): array
         $seen[$key] = true;
     }
 
-    if (function_exists('folder_learn_from_files')) {
+    if (!$isMusic && function_exists('folder_learn_from_files')) {
         folder_learn_from_files($foundFiles, $walk);
     }
-    $library = [
-        'version' => 1,
-        'scanned_at' => $old['scanned_at'] ?? null,
-        'video_roots' => settings_video_roots(),
-        'items' => $out,
-    ];
-    if (!cache_write_library($library)) {
-        $stats['ok'] = false;
-        $stats['error'] = 'Could not write the video catalog database.';
-        return $stats;
+    if ($isMusic) {
+        $wrote = function_exists('catalog_store_save') && catalog_store_save('music', $out, time());
+        if (!$wrote) {
+            $stats['ok'] = false;
+            $stats['error'] = 'Could not write the music catalog database.';
+            return $stats;
+        }
+    } else {
+        $library = [
+            'version' => 1,
+            'scanned_at' => $old['scanned_at'] ?? null,
+            'video_roots' => settings_video_roots(),
+            'items' => $out,
+        ];
+        if (!cache_write_library($library)) {
+            $stats['ok'] = false;
+            $stats['error'] = 'Could not write the video catalog database.';
+            return $stats;
+        }
     }
     $stats['roots'] = $walk;
     if (function_exists('app_log')) {
-        app_log('scan', 'Indexed ' . $stats['added'] . ' new file' . ($stats['added'] === 1 ? '' : 's')
-            . ' from ' . count($walk) . ' source' . (count($walk) === 1 ? '' : 's')
-            . ' (kept ' . $stats['kept'] . ', dropped ' . $stats['dropped'] . ').', $stats);
+        $label = $isMusic ? 'music' : 'video';
+        app_log('scan', 'Refreshed ' . count($walk) . ' ' . $label . ' source' . (count($walk) === 1 ? '' : 's')
+            . '. Added ' . $stats['added'] . ', kept ' . $stats['kept'] . ', dropped ' . $stats['dropped']
+            . ', skipped ' . $stats['skipped'] . ' absent.', $stats);
     }
     return $stats;
 }

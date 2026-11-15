@@ -12,7 +12,7 @@ declare(strict_types=1);
     </div>
     <p class="scan-kicker">Coming later</p>
     <h1>Music</h1>
-    <p>This catalog will scan the music folders from Config, read artist and album from folders and tags, and show cover art so you can browse tracks on the NAS. Nothing is scanned or cached here yet. You can already set those folders in Config.</p>
+    <p>Refresh Source Folders on the Music tab in Config records music files from saved folders that are present. An unplugged drive is skipped and those files stay in the catalog. This page does not list tracks yet, and it does not read artist, album, or cover art.</p>
     <a class="btn btn-accent" href="<?= h(app_href('config/index.php')) ?>">Open Config</a>
     <a class="btn btn-ghost" href="<?= h(app_href('music/scan.php')) ?>">Open music scan page</a>
   </section>
