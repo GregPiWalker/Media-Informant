@@ -404,9 +404,10 @@ final class FileEpisodeStrategy implements MediaParseStrategy
 }
 
 /**
- * Episode title and number for one file. Saved values win. Otherwise the
- * number and title are read from the filename (S01E05, 1x05, Episode 5, or a
- * leading number such as "05 Title").
+ * Episode title and number for one file. Saved values win. A title marked
+ * episode_title_source user is shown even when it matches the show name.
+ * Otherwise the number and title are read from the filename (S01E05, 1x05,
+ * Episode 5, or a leading number such as "05 Title").
  *
  * @return array{title: string, episode: ?int}
  */
@@ -414,7 +415,8 @@ function episode_display_identity(array $item): array
 {
     $show = trim((string) ($item['title'] ?? ''));
     $storedTitle = trim((string) ($item['episode_title'] ?? ''));
-    if ($storedTitle !== '' && season_folder_number($storedTitle) !== null) {
+    $userEpisodeTitle = ($item['episode_title_source'] ?? '') === 'user';
+    if (!$userEpisodeTitle && $storedTitle !== '' && season_folder_number($storedTitle) !== null) {
         $storedTitle = '';
     }
     $storedEpisode = null;
@@ -465,7 +467,7 @@ function episode_display_identity(array $item): array
             $candidate = '';
         }
     }
-    $title = ($storedTitle !== '' && ($show === '' || strcasecmp($storedTitle, $show) !== 0))
+    $title = ($storedTitle !== '' && ($userEpisodeTitle || $show === '' || strcasecmp($storedTitle, $show) !== 0))
         ? $storedTitle
         : $candidate;
     $episode = $storedEpisode ?? $parsedEpisode;

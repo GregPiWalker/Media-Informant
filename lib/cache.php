@@ -564,6 +564,11 @@ function library_has_custom_title(array $item): bool
         && trim((string) ($item['display_title'] ?? '')) !== '';
 }
 
+function library_has_custom_episode_title(array $item): bool
+{
+    return ($item['episode_title_source'] ?? '') === 'user';
+}
+
 function library_set_auto_title(array $item, string $title): array
 {
     if (library_has_custom_title($item)) {

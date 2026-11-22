@@ -17,6 +17,7 @@ $refreshSkipped = isset($_GET['skipped']) ? (int) $_GET['skipped'] : 0;
 $refreshWalked = isset($_GET['walked']) ? (int) $_GET['walked'] : 0;
 $error = '';
 $kodiCheck = null;
+$macroCheck = null;
 $payload = null;
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && (string) ($_POST['action'] ?? '') === 'refresh_sources') {
@@ -100,9 +101,17 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $payload['kodi_host_users'] = $_POST['kodi_host_users'] ?? [];
         $payload['kodi_host_passes'] = $_POST['kodi_host_passes'] ?? [];
         $payload['kodi_path_prefix'] = $_POST['kodi_path_prefix'] ?? '';
+        $payload['kodi_macrodroid'] = isset($_POST['kodi_macrodroid']);
+        $payload['kodi_macrodroid_port'] = $_POST['kodi_macrodroid_port'] ?? '';
+        $payload['kodi_macrodroid_path'] = $_POST['kodi_macrodroid_path'] ?? '';
+        $payload['kodi_macrodroid_delay'] = $_POST['kodi_macrodroid_delay'] ?? '';
     } else {
         $payload['kodi_hosts'] = $current['kodi_hosts'] ?? [];
         $payload['kodi_path_prefix'] = $current['kodi_path_prefix'] ?? '';
+        $payload['kodi_macrodroid'] = $current['kodi_macrodroid'] ?? false;
+        $payload['kodi_macrodroid_port'] = $current['kodi_macrodroid_port'] ?? 9091;
+        $payload['kodi_macrodroid_path'] = $current['kodi_macrodroid_path'] ?? '/launch-kodi';
+        $payload['kodi_macrodroid_delay'] = $current['kodi_macrodroid_delay'] ?? 3;
     }
     if (!is_array($payload['video_root_categories'])) {
         $payload['video_root_categories'] = [];
@@ -141,10 +150,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     }
 
     $kodiCheck = $hasKodiForm ? settings_parse_kodi($payload, true) : null;
+    $macroCheck = $hasKodiForm ? settings_kodi_macrodroid($payload, true) : null;
     if (!cache_writable()) {
         $error = 'cache/ is not writable. Grant the http user write access so settings can be saved.';
     } elseif (is_array($kodiCheck) && ($kodiCheck['error'] ?? '') !== '') {
         $error = (string) $kodiCheck['error'];
+    } elseif (is_array($macroCheck) && ($macroCheck['error'] ?? '') !== '') {
+        $error = (string) $macroCheck['error'];
     } elseif (($smbError = settings_smb_paths_error([$payload['video_root_smb'], $payload['music_root_smb']])) !== '') {
         $error = $smbError;
     } elseif (!settings_save($payload)) {
@@ -228,6 +240,12 @@ if (is_array($kodiCheck) && $error !== '') {
     $postedRows = $kodiCheck['rows'] ?? [];
     $kodiRows = is_array($postedRows) ? $postedRows : [];
     $kodiPrefix = (string) ($kodiCheck['prefix'] ?? $kodiPrefix);
+}
+if (is_array($macroCheck) && $error !== '') {
+    $settings['kodi_macrodroid'] = !empty($macroCheck['enabled']);
+    $settings['kodi_macrodroid_port'] = (string) ($macroCheck['port_text'] ?? '');
+    $settings['kodi_macrodroid_path'] = (string) ($macroCheck['path_text'] ?? '');
+    $settings['kodi_macrodroid_delay'] = (string) ($macroCheck['delay_text'] ?? '');
 }
 if ($kodiRows === []) {
     $kodiRows[] = ['id' => '', 'name' => '', 'host' => '', 'port' => '', 'user' => '', 'pass' => ''];

@@ -656,7 +656,9 @@ function library_carry_file(array $item, array $file): array
     $parsed = scan_parse_path((string) ($item['root'] ?? ''), $item['path'], (string) ($item['category'] ?? ''));
     $item['season'] = $parsed['season'];
     $item['episode'] = $parsed['episode'];
-    $item['episode_title'] = (string) ($parsed['episode_title'] ?? '');
+    if (!library_has_custom_episode_title($item)) {
+        $item['episode_title'] = (string) ($parsed['episode_title'] ?? '');
+    }
     $item['part'] = (string) ($parsed['part'] ?? '');
     if (!library_has_user_kind($item)) {
         $item['kind'] = (string) ($parsed['kind'] ?? $item['kind'] ?? 'movie');
@@ -1300,7 +1302,8 @@ function scan_part_apply_bundle(array $item, array $bundle): array
     if (function_exists('tmdb_copy_runtime')) {
         $item = tmdb_copy_runtime($item, $bundle);
     }
-    if (!empty($bundle['episode_title'])) {
+    if (!empty($bundle['episode_title'])
+        && (!function_exists('library_has_custom_episode_title') || !library_has_custom_episode_title($item))) {
         $item['episode_title'] = (string) $bundle['episode_title'];
     }
     if (isset($bundle['season']) && $bundle['season'] !== null && $bundle['season'] !== '') {
@@ -2431,6 +2434,10 @@ function scan_job_process_file(array &$job, array $file, array $oldByPath, array
             $item['display_title'] = (string) $prev['display_title'];
             $item['title_source'] = 'user';
         }
+        if (library_has_custom_episode_title($prev)) {
+            $item['episode_title'] = (string) ($prev['episode_title'] ?? '');
+            $item['episode_title_source'] = 'user';
+        }
         if (library_item_hidden($prev)) {
             $item['hidden'] = true;
         }
@@ -3516,6 +3523,10 @@ function library_sync_video_catalog(): array
                 'match_source' => 'none',
                 'genres' => [],
             ];
+            if (is_array($prev) && library_has_custom_episode_title($prev)) {
+                $item['episode_title'] = (string) ($prev['episode_title'] ?? '');
+                $item['episode_title_source'] = 'user';
+            }
 
             $matchKey = scan_match_key($title, $year);
             $source = $knownMatches[$matchKey] ?? null;

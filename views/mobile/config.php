@@ -370,6 +370,24 @@ if ($configTab !== 'music' && $configTab !== 'general') {
         <input type="text" name="kodi_path_prefix" class="folder-input" value="<?= h($kodiPrefix) ?>" placeholder="smb://nas/Video" spellcheck="false" autocapitalize="off" autocomplete="off">
       </label>
       <p class="hint">Optional fallback for a source that has no SMB path. The matching NAS folder is removed and this prefix is put in front. A source SMB path on the Video or Music tab is used instead. Leave this empty and a source with no SMB path sends smb:// plus this site’s host and the full NAS path. The log records the path Kodi was asked to open.</p>
+      <label class="grok-toggle">
+        <input type="checkbox" name="kodi_macrodroid" value="1"<?= !empty($settings['kodi_macrodroid']) ? ' checked' : '' ?>>
+        <span>Signal MacroDroid before Play</span>
+      </label>
+      <p class="hint">Off by default. When on, Play sends a GET to the selected player’s address, waits, then sends Player.Open. A failed signal is written to the log and playback still continues. Leave this off and Play talks only to Kodi.</p>
+      <label class="field">
+        <span class="field-label">MacroDroid port</span>
+        <input type="text" name="kodi_macrodroid_port" class="folder-input" value="<?= h((string) ($settings['kodi_macrodroid_port'] ?? '9091')) ?>" inputmode="numeric" placeholder="9091" spellcheck="false" autocapitalize="off" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">MacroDroid path</span>
+        <input type="text" name="kodi_macrodroid_path" class="folder-input" value="<?= h((string) ($settings['kodi_macrodroid_path'] ?? '/launch-kodi')) ?>" placeholder="/launch-kodi" spellcheck="false" autocapitalize="off" autocomplete="off">
+      </label>
+      <label class="field">
+        <span class="field-label">Wait after signal (seconds)</span>
+        <input type="text" name="kodi_macrodroid_delay" class="folder-input" value="<?= h((string) ($settings['kodi_macrodroid_delay'] ?? '3')) ?>" inputmode="numeric" placeholder="3" spellcheck="false" autocapitalize="off" autocomplete="off">
+      </label>
+      <p class="hint">The request is http://{selected host}:{port}{path}, for example http://192.168.1.20:9091/launch-kodi. Match the port and path to the HTTP Request trigger in MacroDroid. The wait gives the Shield time to bring Kodi forward. Use 0 to skip the wait. These fields are ignored while the switch is off.</p>
     </section>
     </div>
 

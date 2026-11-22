@@ -169,6 +169,137 @@ function kodi_play_path(array $item): string
 }
 
 /**
+ * Host as it belongs in an http:// URL. A bare IPv6 address is wrapped in brackets.
+ */
+function kodi_http_host(string $host): string
+{
+    $host = trim($host);
+    if ($host !== '' && str_contains($host, ':') && !str_starts_with($host, '[')) {
+        return '[' . $host . ']';
+    }
+    return $host;
+}
+
+function kodi_macrodroid_enabled(): bool
+{
+    return function_exists('settings_bool') && settings_bool(settings_get()['kodi_macrodroid'] ?? false);
+}
+
+function kodi_macrodroid_port(): int
+{
+    $port = (int) (settings_get()['kodi_macrodroid_port'] ?? 9091);
+    if ($port < 1 || $port > 65535) {
+        return 9091;
+    }
+    return $port;
+}
+
+function kodi_macrodroid_path(): string
+{
+    $path = trim((string) (settings_get()['kodi_macrodroid_path'] ?? ''));
+    if ($path === '' || !str_starts_with($path, '/')) {
+        return '/launch-kodi';
+    }
+    return $path;
+}
+
+function kodi_macrodroid_delay(): int
+{
+    $delay = (int) (settings_get()['kodi_macrodroid_delay'] ?? 3);
+    if ($delay < 0) {
+        return 0;
+    }
+    if ($delay > 15) {
+        return 15;
+    }
+    return $delay;
+}
+
+function kodi_macrodroid_snippet(string $raw): string
+{
+    $text = trim((string) (preg_replace('/\s+/', ' ', $raw) ?? ''));
+    if (strlen($text) > 160) {
+        $text = substr($text, 0, 157) . '...';
+    }
+    return $text;
+}
+
+/**
+ * GET the MacroDroid HTTP trigger on the selected Kodi player's address.
+ * A network failure is logged and does not throw. Playback still continues.
+ *
+ * @param array{id?: string, name?: string, host?: string, port?: int, user?: string, pass?: string} $host
+ * @return array{ok: bool, error: string, status: int, url: string}
+ */
+function kodi_macrodroid_signal(array $host): array
+{
+    $name = trim((string) ($host['name'] ?? 'Kodi'));
+    if ($name === '') {
+        $name = 'Kodi';
+    }
+    $target = trim((string) ($host['host'] ?? ''));
+    $port = kodi_macrodroid_port();
+    $path = kodi_macrodroid_path();
+    $url = 'http://' . kodi_http_host($target) . ':' . $port . $path;
+    $fail = static function (string $error, int $status = 0) use ($name, $target, $port, $url): array {
+        if (function_exists('app_log')) {
+            app_log('kodi', 'MacroDroid signal to ' . $name . ' failed: ' . $error . ' ' . $url, [
+                'host' => $target,
+                'port' => $port,
+                'status' => $status,
+            ], 'warn');
+        }
+        return ['ok' => false, 'error' => $error, 'status' => $status, 'url' => $url];
+    };
+    if ($target === '') {
+        return $fail('the selected player has no host.');
+    }
+    if (!function_exists('curl_init')) {
+        return $fail('this PHP build has no curl extension.');
+    }
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return $fail('the request could not be started.');
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_HTTPGET => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 4,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_USERAGENT => 'MediaInformant/1.0',
+        CURLOPT_FOLLOWLOCATION => false,
+    ]);
+    $raw = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $errno = curl_errno($ch);
+    curl_close($ch);
+    if ($raw === false) {
+        $reason = $errno === 28 ? 'timed out.' : 'could not connect.';
+        return $fail($reason, $status);
+    }
+    $snippet = kodi_macrodroid_snippet((string) $raw);
+    if ($status < 200 || $status >= 300) {
+        $reason = 'HTTP ' . $status . '.';
+        if ($snippet !== '') {
+            $reason .= ' Response: ' . $snippet;
+        }
+        return $fail($reason, $status);
+    }
+    $message = 'MacroDroid signal to ' . $name . ': HTTP ' . $status . '. ' . $url;
+    if ($snippet !== '') {
+        $message .= ' Response: ' . $snippet;
+    }
+    if (function_exists('app_log')) {
+        app_log('kodi', $message, [
+            'host' => $target,
+            'port' => $port,
+            'status' => $status,
+        ]);
+    }
+    return ['ok' => true, 'error' => '', 'status' => $status, 'url' => $url];
+}
+
+/**
  * @param array{id?: string, name?: string, host?: string, port?: int, user?: string, pass?: string} $host
  * @return array{ok: bool, error: string, message: string, path: string}
  */
@@ -201,11 +332,7 @@ function kodi_player_open(array $host, string $path): array
     if ($body === false) {
         return ['ok' => false, 'error' => 'Could not build the Kodi request.', 'message' => '', 'path' => $path];
     }
-    $httpHost = $target;
-    if (str_contains($target, ':') && !str_starts_with($target, '[')) {
-        $httpHost = '[' . $target . ']';
-    }
-    $url = 'http://' . $httpHost . ':' . $port . '/jsonrpc';
+    $url = 'http://' . kodi_http_host($target) . ':' . $port . '/jsonrpc';
     $ch = curl_init($url);
     if ($ch === false) {
         return ['ok' => false, 'error' => 'Could not start the Kodi request.', 'message' => '', 'path' => $path];
@@ -275,6 +402,12 @@ function kodi_player_open(array $host, string $path): array
     }
     if ($curlErr !== '' && function_exists('app_log')) {
         app_log('kodi', $curlErr, ['host' => $target], 'debug');
+    }
+    if (function_exists('app_log')) {
+        app_log('kodi', 'Player.Open succeeded on ' . $name . '.', [
+            'host' => $target,
+            'port' => $port,
+        ]);
     }
     return ['ok' => true, 'error' => '', 'message' => 'Playing on ' . $name . '.', 'path' => $path];
 }

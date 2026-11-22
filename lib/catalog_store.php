@@ -318,6 +318,9 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     if (($extras['year_source'] ?? '') === 'user') {
         $item['year_source'] = 'user';
     }
+    if (($extras['episode_title_source'] ?? '') === 'user') {
+        $item['episode_title_source'] = 'user';
+    }
     if (!empty($extras['poster_cleared'])) {
         $item['poster_cleared'] = true;
     }
@@ -909,6 +912,9 @@ function catalog_store_upsert_item(PDO $pdo, string $catalog, array $item, int $
     ];
     if (($item['year_source'] ?? '') === 'user') {
         $extras['year_source'] = 'user';
+    }
+    if (($item['episode_title_source'] ?? '') === 'user') {
+        $extras['episode_title_source'] = 'user';
     }
     if (!empty($item['poster_cleared'])) {
         $extras['poster_cleared'] = true;

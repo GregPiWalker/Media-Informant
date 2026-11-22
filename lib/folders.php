@@ -304,7 +304,9 @@ function library_reclassify_folder(string $root, string $relDir): int
         $item['kind'] = (string) ($parsed['kind'] ?? $item['kind'] ?? 'movie');
         $item['season'] = $parsed['season'];
         $item['episode'] = $parsed['episode'];
-        $item['episode_title'] = (string) ($parsed['episode_title'] ?? '');
+        if (!library_has_custom_episode_title($item)) {
+            $item['episode_title'] = (string) ($parsed['episode_title'] ?? '');
+        }
         $item['part'] = (string) ($parsed['part'] ?? '');
         if (library_item_kind($item) === 'show') {
             $item['grouped'] = true;

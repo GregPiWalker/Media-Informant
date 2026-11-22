@@ -196,6 +196,14 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
         $overview = substr($overview, 0, 8000);
     }
     $genres = library_posted_genres($_POST['genres'] ?? []);
+    $saveEpisodeTitle = library_item_kind($item) === 'show' && array_key_exists('episode_title', $_POST);
+    $postedEpisodeTitle = '';
+    if ($saveEpisodeTitle) {
+        $postedEpisodeTitle = trim((string) $_POST['episode_title']);
+        if (strlen($postedEpisodeTitle) > 200) {
+            $postedEpisodeTitle = substr($postedEpisodeTitle, 0, 200);
+        }
+    }
     $yearParsed = library_posted_year($_POST['year'] ?? '');
     $posterParsed = $yearParsed['error'] === ''
         ? library_take_poster_upload($id, isset($_POST['remove_poster']))
@@ -209,6 +217,9 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
         'genres' => $genres,
         'year' => $yearParsed['error'] === '' ? $postedYear : trim((string) ($_POST['year'] ?? '')),
     ];
+    if ($saveEpisodeTitle) {
+        $editDraft['episode_title'] = $postedEpisodeTitle;
+    }
     if ($yearParsed['error'] !== '') {
         $error = $yearParsed['error'];
         $editing = true;
@@ -216,11 +227,20 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
         $error = $posterParsed['error'];
         $editing = true;
     } else {
-    $updated = cache_update_item($id, static function (array $row) use ($displayTitle, $overview, $genres, $postedYear, $applyPoster, $posterPath): array {
+    $updated = cache_update_item($id, static function (array $row) use ($displayTitle, $overview, $genres, $postedYear, $applyPoster, $posterPath, $saveEpisodeTitle, $postedEpisodeTitle): array {
         $row['display_title'] = $displayTitle;
         $row['title_source'] = 'user';
         $row['overview'] = $overview;
         $row['genres'] = $genres;
+        if ($saveEpisodeTitle) {
+            if ($postedEpisodeTitle === '') {
+                $row['episode_title'] = '';
+                unset($row['episode_title_source']);
+            } else {
+                $row['episode_title'] = $postedEpisodeTitle;
+                $row['episode_title_source'] = 'user';
+            }
+        }
         return library_apply_edit_media($row, $postedYear, $applyPoster, is_string($posterPath) ? $posterPath : null);
     });
     if ($updated === null) {
@@ -232,6 +252,14 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
         $item['genres'] = $genres;
         $item['year'] = $postedYear;
         $item['year_source'] = 'user';
+        if ($saveEpisodeTitle) {
+            $item['episode_title'] = $postedEpisodeTitle;
+            if ($postedEpisodeTitle === '') {
+                unset($item['episode_title_source']);
+            } else {
+                $item['episode_title_source'] = 'user';
+            }
+        }
     } else {
         $tmdbId = (int) ($updated['tmdb_id'] ?? 0);
         if ($tmdbId > 0) {

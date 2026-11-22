@@ -57,6 +57,10 @@ function settings_defaults(): array
         'catalog_mode' => 'both',
         'kodi_hosts' => [],
         'kodi_path_prefix' => '',
+        'kodi_macrodroid' => false,
+        'kodi_macrodroid_port' => 9091,
+        'kodi_macrodroid_path' => '/launch-kodi',
+        'kodi_macrodroid_delay' => 3,
     ];
 }
 
@@ -469,6 +473,79 @@ function settings_parse_kodi(array $data, bool $strict): array
     return ['hosts' => $hosts, 'rows' => $display, 'prefix' => $prefix, 'error' => ''];
 }
 
+function settings_kodi_macrodroid_path_ok(string $path): bool
+{
+    if ($path === '' || strlen($path) > 200 || !str_starts_with($path, '/')) {
+        return false;
+    }
+    if (str_contains($path, '://') || str_contains($path, '\\') || preg_match('/\s/', $path)) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Global MacroDroid pre-step for the selected Kodi host.
+ * The host address is the player's. Port, path, and wait are shared.
+ *
+ * @param array<string, mixed> $data
+ * @return array{enabled: bool, port: int, path: string, delay: int, port_text: string, path_text: string, delay_text: string, error: string}
+ */
+function settings_kodi_macrodroid(array $data, bool $strict): array
+{
+    $defaults = settings_defaults();
+    $enabled = settings_bool($data['kodi_macrodroid'] ?? $defaults['kodi_macrodroid']);
+    $portText = trim((string) ($data['kodi_macrodroid_port'] ?? $defaults['kodi_macrodroid_port']));
+    $pathText = str_replace(["\r", "\n"], '', trim((string) ($data['kodi_macrodroid_path'] ?? $defaults['kodi_macrodroid_path'])));
+    $delayText = trim((string) ($data['kodi_macrodroid_delay'] ?? $defaults['kodi_macrodroid_delay']));
+
+    $port = (int) $defaults['kodi_macrodroid_port'];
+    $portOk = $portText === '';
+    if ($portText !== '' && ctype_digit($portText)) {
+        $port = (int) $portText;
+        $portOk = $port >= 1 && $port <= 65535;
+    }
+    if (!$portOk) {
+        $port = (int) $defaults['kodi_macrodroid_port'];
+    }
+
+    $path = (string) $defaults['kodi_macrodroid_path'];
+    $pathOk = $pathText === '' || settings_kodi_macrodroid_path_ok($pathText);
+    if ($pathText !== '' && $pathOk) {
+        $path = $pathText;
+    }
+
+    $delay = (int) $defaults['kodi_macrodroid_delay'];
+    $delayOk = $delayText === '';
+    if ($delayText !== '' && ctype_digit($delayText)) {
+        $delay = (int) $delayText;
+        $delayOk = $delay <= 15;
+    }
+    if (!$delayOk) {
+        $delay = (int) $defaults['kodi_macrodroid_delay'];
+    }
+
+    $error = '';
+    if ($strict && $enabled && !$portOk) {
+        $error = 'MacroDroid port must be a number from 1 to 65535.';
+    } elseif ($strict && $enabled && !$pathOk) {
+        $error = 'MacroDroid path must start with / and contain no spaces, such as /launch-kodi.';
+    } elseif ($strict && $enabled && !$delayOk) {
+        $error = 'MacroDroid wait must be a whole number of seconds from 0 to 15.';
+    }
+
+    return [
+        'enabled' => $enabled,
+        'port' => $port,
+        'path' => $path,
+        'delay' => $delay,
+        'port_text' => ($portOk || $portText === '') ? (string) $port : $portText,
+        'path_text' => ($pathOk || $pathText === '') ? $path : $pathText,
+        'delay_text' => ($delayOk || $delayText === '') ? (string) $delay : $delayText,
+        'error' => $error,
+    ];
+}
+
 function settings_normalize(array $data): array
 {
     $defaults = settings_defaults();
@@ -538,6 +615,7 @@ function settings_normalize(array $data): array
         $musicSmb = [];
     }
     $kodi = settings_parse_kodi($data, false);
+    $macro = settings_kodi_macrodroid($data, false);
 
     return [
         'version' => 1,
@@ -554,6 +632,10 @@ function settings_normalize(array $data): array
         'catalog_mode' => settings_catalog_mode_value($data['catalog_mode'] ?? $defaults['catalog_mode']),
         'kodi_hosts' => $kodi['hosts'],
         'kodi_path_prefix' => $kodi['prefix'],
+        'kodi_macrodroid' => $macro['enabled'],
+        'kodi_macrodroid_port' => $macro['port'],
+        'kodi_macrodroid_path' => $macro['path'],
+        'kodi_macrodroid_delay' => $macro['delay'],
     ];
 }
 

@@ -49,6 +49,24 @@ if ($path === '') {
     kodi_play_json(['ok' => false, 'error' => 'This item has no file to play.']);
 }
 
+if (kodi_macrodroid_enabled()) {
+    if (function_exists('set_time_limit')) {
+        set_time_limit(60);
+    }
+    kodi_macrodroid_signal($host);
+    $delay = kodi_macrodroid_delay();
+    if ($delay > 0) {
+        $waitName = trim((string) ($host['name'] ?? 'Kodi'));
+        if ($waitName === '') {
+            $waitName = 'Kodi';
+        }
+        if (function_exists('app_log')) {
+            app_log('kodi', 'Waiting ' . $delay . 's after the MacroDroid signal before Player.Open on ' . $waitName . '.');
+        }
+        sleep($delay);
+    }
+}
+
 $result = kodi_player_open($host, $path);
 if (empty($result['ok'])) {
     kodi_play_json(['ok' => false, 'error' => (string) ($result['error'] ?? 'Kodi did not start playback.')]);

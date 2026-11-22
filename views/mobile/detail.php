@@ -113,6 +113,9 @@ if ($found) {
     }
 }
 $isEpisode = $kind === 'show' && ($seasonNum !== null || $episodeNum !== null || $episodeTitle !== '');
+if ($isEpisode && $editing && isset($editDraft) && is_array($editDraft) && array_key_exists('episode_title', $editDraft)) {
+    $episodeTitle = (string) $editDraft['episode_title'];
+}
 $runtimeLabel = '';
 if (function_exists('tmdb_runtime_text')) {
     if ($isEpisode && is_array($item)) {
@@ -353,7 +356,7 @@ render_header(['section' => 'video']);
       <?php if ($episodeCode !== ''): ?>
       <p class="detail-episode-code"><?= h($episodeCode) ?></p>
       <?php endif; ?>
-      <?php if ($episodeTitle !== ''): ?>
+      <?php if (!$editing && $episodeTitle !== ''): ?>
       <p class="detail-episode-title"><?= h($episodeTitle) ?></p>
       <?php endif; ?>
       <?php else: ?>
@@ -382,8 +385,16 @@ render_header(['section' => 'video']);
         <h2>Title</h2>
         <label class="visually-hidden" for="edit-title">Title</label>
         <input id="edit-title" type="text" name="display_title" class="title-input folder-input" value="<?= h($display) ?>" maxlength="200" required autocomplete="off" spellcheck="false">
-        <p class="hint">This name is only for this file. Two files can share one TMDB match — for example Part 1 and Part 2 of the same movie.</p>
+        <p class="hint"><?php if ($isEpisode): ?>This is the show name shown in the heading. It applies only to this file.<?php else: ?>This name is only for this file. Two files can share one TMDB match — for example Part 1 and Part 2 of the same movie.<?php endif; ?></p>
       </section>
+      <?php if ($isEpisode): ?>
+      <section class="detail-section">
+        <h2>Episode title</h2>
+        <label class="visually-hidden" for="edit-episode-title">Episode title</label>
+        <input id="edit-episode-title" type="text" name="episode_title" class="title-input folder-input" value="<?= h($episodeTitle) ?>" maxlength="200" autocomplete="off" spellcheck="false">
+        <p class="hint">This name is only for this episode and is shown under the season and episode number. Leave it blank to use the name from the filename.</p>
+      </section>
+      <?php endif; ?>
       <section class="detail-section">
         <h2>Year</h2>
         <label class="visually-hidden" for="edit-year">Year</label>

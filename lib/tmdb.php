@@ -1368,7 +1368,8 @@ function tmdb_enrich_item_episode(array $item, int $seriesId): array
         tmdb_verbose_log('TMDB episode miss series=' . $seriesId . ' s=' . $season . ' e=' . (string) ($episode ?? ''));
         return $item;
     }
-    if ($ep['episode_title'] !== '') {
+    if ($ep['episode_title'] !== ''
+        && (!function_exists('library_has_custom_episode_title') || !library_has_custom_episode_title($item))) {
         $item['episode_title'] = $ep['episode_title'];
     }
     if ($ep['overview'] !== '') {
