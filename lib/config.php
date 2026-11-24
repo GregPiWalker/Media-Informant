@@ -232,6 +232,35 @@ function format_scanned_at(?int $timestamp): string
     return date('M j, Y', $timestamp);
 }
 
+function format_watched_at(?int $timestamp): string
+{
+    if (!$timestamp) {
+        return '';
+    }
+    $diff = time() - $timestamp;
+    if ($diff < 0) {
+        return 'Last watched ' . date('M j, Y', $timestamp);
+    }
+    if ($diff < 60) {
+        return 'Last watched just now';
+    }
+    if ($diff < 3600) {
+        $n = intdiv($diff, 60);
+        return $n === 1 ? 'Last watched 1 minute ago' : 'Last watched ' . $n . ' minutes ago';
+    }
+    if ($diff < 86400) {
+        $n = intdiv($diff, 3600);
+        return $n === 1 ? 'Last watched 1 hour ago' : 'Last watched ' . $n . ' hours ago';
+    }
+    if ($diff < 172800) {
+        return 'Last watched yesterday';
+    }
+    if ($diff < 2592000) {
+        return 'Last watched ' . intdiv($diff, 86400) . ' days ago';
+    }
+    return 'Last watched ' . date('M j, Y', $timestamp);
+}
+
 function render_start(string $title): void
 {
     if (function_exists('db_migrate_on_open')) {
@@ -286,7 +315,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=71">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=72">
 </head>
 <body>
 <?php
@@ -482,7 +511,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=73" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=74" defer></script>
 </body>
 </html>
 <?php

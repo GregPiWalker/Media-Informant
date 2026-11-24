@@ -211,11 +211,15 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
     $postedYear = $yearParsed['year'];
     $applyPoster = (bool) $posterParsed['apply'];
     $posterPath = $posterParsed['poster_path'];
+    $storedNotes = function_exists('catalog_notes_normalize')
+        ? catalog_notes_normalize((string) ($_POST['notes'] ?? ''))
+        : null;
     $editDraft = [
         'title' => $displayTitle,
         'overview' => $overview,
         'genres' => $genres,
         'year' => $yearParsed['error'] === '' ? $postedYear : trim((string) ($_POST['year'] ?? '')),
+        'notes' => $storedNotes ?? '',
     ];
     if ($saveEpisodeTitle) {
         $editDraft['episode_title'] = $postedEpisodeTitle;
@@ -260,6 +264,7 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
                 $item['episode_title_source'] = 'user';
             }
         }
+        $item['notes'] = $storedNotes ?? '';
     } else {
         $tmdbId = (int) ($updated['tmdb_id'] ?? 0);
         if ($tmdbId > 0) {
@@ -275,11 +280,17 @@ if (!$sourceBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 
                 cache_write_title($tmdbId, $titleMeta);
             }
         }
-        if (function_exists('app_log')) {
-            app_log('title', 'Saved edits for “' . $displayTitle . '”.', ['id' => $id, 'genres' => count($genres)]);
+        if (!function_exists('catalog_save_notes') || !catalog_save_notes('video', $id, $storedNotes)) {
+            $error = 'Could not save notes. Check that cache/ is writable.';
+            $editing = true;
+            $item['notes'] = $storedNotes ?? '';
+        } else {
+            if (function_exists('app_log')) {
+                app_log('title', 'Saved edits for “' . $displayTitle . '”.', ['id' => $id, 'genres' => count($genres), 'notes' => $storedNotes !== null ? 'yes' : 'no']);
+            }
+            header('Location: ' . title_self_url($id, $gkey), true, 303);
+            exit;
         }
-        header('Location: ' . title_self_url($id, $gkey), true, 303);
-        exit;
     }
     }
 }

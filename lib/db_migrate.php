@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS items (
   overview TEXT,
   poster_path TEXT,
   extras_json TEXT,
+  watched_at INTEGER,
+  notes TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -98,7 +100,34 @@ function db_migrate(PDO $pdo, string $catalog): void
             last_absent_at INTEGER
         )');
         db_set_schema_version($pdo, 2);
+        $current = 2;
     }
+    if ($current < 3) {
+        if (!db_column_exists($pdo, 'items', 'watched_at')) {
+            $pdo->exec('ALTER TABLE items ADD COLUMN watched_at INTEGER');
+        }
+        if (!db_column_exists($pdo, 'items', 'notes')) {
+            $pdo->exec('ALTER TABLE items ADD COLUMN notes TEXT');
+        }
+        db_set_schema_version($pdo, 3);
+    }
+}
+
+function db_column_exists(PDO $pdo, string $table, string $column): bool
+{
+    if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $table) !== 1) {
+        return false;
+    }
+    $stmt = $pdo->query('PRAGMA table_info(' . $table . ')');
+    if ($stmt === false) {
+        return false;
+    }
+    foreach ($stmt->fetchAll() as $row) {
+        if (is_array($row) && (string) ($row['name'] ?? '') === $column) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function db_set_schema_version(PDO $pdo, int $version): void

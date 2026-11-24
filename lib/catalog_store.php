@@ -213,7 +213,7 @@ function catalog_store_load(string $catalog = 'video'): array
     $sql = 'SELECT f.id AS file_id, f.path AS file_path, f.parsed_title, f.parsed_year, f.size, f.mtime,
             f.state, f.match_source AS file_match_source, f.grok_verified, f.confidence, f.kind AS file_kind,
             i.id AS item_id, i.title AS item_title, i.sort_title, i.year AS item_year, i.tmdb_id, i.tmdb_media_type,
-            i.overview, i.poster_path, i.extras_json, i.grouping, i.parent_id,
+            i.overview, i.poster_path, i.watched_at, i.notes, i.extras_json, i.grouping, i.parent_id,
             t.slug AS type_slug,
             p.title AS parent_title, p.grouping AS parent_grouping, p.extras_json AS parent_extras, p.tmdb_id AS parent_tmdb,
             gp.title AS grand_title, gp.grouping AS grand_grouping
@@ -355,6 +355,14 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     }
     if (trim((string) ($extras['scan_service'] ?? '')) !== '') {
         $item['scan_service'] = catalog_scan_service_keep_value($extras['scan_service']);
+    }
+    $watchedAt = $row['watched_at'] ?? null;
+    if (is_numeric($watchedAt) && (int) $watchedAt > 0) {
+        $item['watched_at'] = (int) $watchedAt;
+    }
+    $notes = $row['notes'] ?? null;
+    if (is_string($notes) && trim($notes) !== '') {
+        $item['notes'] = str_replace(["\r\n", "\r"], "\n", $notes);
     }
     return $item;
 }
@@ -1064,7 +1072,7 @@ function catalog_store_find(string $catalog, string $id): ?array
     $sql = 'SELECT f.id AS file_id, f.path AS file_path, f.parsed_title, f.parsed_year, f.size, f.mtime,
             f.state, f.match_source AS file_match_source, f.grok_verified, f.confidence, f.kind AS file_kind,
             i.id AS item_id, i.title AS item_title, i.sort_title, i.year AS item_year, i.tmdb_id, i.tmdb_media_type,
-            i.overview, i.poster_path, i.extras_json, i.grouping, i.parent_id,
+            i.overview, i.poster_path, i.watched_at, i.notes, i.extras_json, i.grouping, i.parent_id,
             t.slug AS type_slug,
             p.title AS parent_title, p.grouping AS parent_grouping, p.extras_json AS parent_extras, p.tmdb_id AS parent_tmdb,
             gp.title AS grand_title, gp.grouping AS grand_grouping
@@ -1158,8 +1166,8 @@ function catalog_store_rename_file(string $catalog, string $root, string $oldRel
             return true;
         }
 
-        $copiedItem = $pdo->prepare('INSERT INTO items (id, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, extras_json, created_at, updated_at)
-            SELECT ?, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, ?, created_at, ?
+        $copiedItem = $pdo->prepare('INSERT INTO items (id, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, extras_json, created_at, updated_at, watched_at, notes)
+            SELECT ?, type_id, parent_id, grouping, title, sort_title, year, tmdb_id, tmdb_media_type, overview, poster_path, ?, created_at, ?, watched_at, notes
             FROM items WHERE id = ?');
         $copiedItem->execute([$newId, $extrasJson, $now, $itemId]);
         $leafItem = $copiedItem->rowCount() > 0 ? $newId : ($itemId !== '' ? $itemId : $newId);
@@ -1260,5 +1268,74 @@ function catalog_store_record_scan(string $catalog, array $job, bool $cancelled)
         ]);
     } catch (Throwable $e) {
         // optional table
+    }
+}
+
+/**
+ * Empty notes are stored as NULL so the detail page can omit the section.
+ */
+function catalog_notes_normalize(string $raw): ?string
+{
+    $text = str_replace(["\r\n", "\r"], "\n", $raw);
+    if (strlen($text) > 8000) {
+        $text = substr($text, 0, 8000);
+    }
+    $text = trim($text);
+    return $text === '' ? null : $text;
+}
+
+function catalog_touch_item(PDO $pdo, string $column, string $id, int|string|null $value): int
+{
+    if ($column !== 'watched_at' && $column !== 'notes') {
+        return 0;
+    }
+    $stmt = $pdo->prepare('UPDATE items SET ' . $column . ' = ? WHERE id = ? OR id IN (SELECT item_id FROM files WHERE id = ?)');
+    $stmt->execute([$value, $id, $id]);
+    if ($stmt->rowCount() > 0) {
+        return $stmt->rowCount();
+    }
+    $check = $pdo->prepare('SELECT 1 FROM items WHERE id = ? OR id IN (SELECT item_id FROM files WHERE id = ?) LIMIT 1');
+    $check->execute([$id, $id]);
+    return $check->fetchColumn() === false ? 0 : -1;
+}
+
+function catalog_mark_watched(string $catalog, string $id, string $label = ''): bool
+{
+    if (preg_match('/^[a-f0-9]{16}$/', $id) !== 1) {
+        return false;
+    }
+    $pdo = db_open($catalog);
+    if ($pdo === null) {
+        return false;
+    }
+    try {
+        $changed = catalog_touch_item($pdo, 'watched_at', $id, time());
+        if ($changed === 0) {
+            return false;
+        }
+        if ($changed > 0 && function_exists('app_log')) {
+            $label = trim(preg_replace('/\s+/', ' ', $label) ?? $label);
+            $message = $label !== '' ? 'Recorded last watched for “' . $label . '”.' : 'Recorded last watched.';
+            app_log('kodi', $message, ['id' => $id, 'catalog' => db_normalize_catalog($catalog)]);
+        }
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function catalog_save_notes(string $catalog, string $id, ?string $notes): bool
+{
+    if (preg_match('/^[a-f0-9]{16}$/', $id) !== 1) {
+        return false;
+    }
+    $pdo = db_open($catalog);
+    if ($pdo === null) {
+        return false;
+    }
+    try {
+        return catalog_touch_item($pdo, 'notes', $id, $notes) !== 0;
+    } catch (Throwable $e) {
+        return false;
     }
 }

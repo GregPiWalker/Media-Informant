@@ -949,6 +949,11 @@ button.col-option,
   display: none !important;
 }
 
+.catalog:not([data-watched~="yes"]) [data-watched="yes"],
+.catalog:not([data-watched~="no"]) [data-watched="no"] {
+  display: none !important;
+}
+
 .expand-btn {
   appearance: none;
   display: flex;
@@ -1629,10 +1634,22 @@ button.col-option,
 
 .detail-year,
 .detail-rating,
-.detail-runtime {
+.detail-runtime,
+.detail-watched {
   margin-top: 0.3rem;
   color: var(--dim-fg);
   font-size: 1rem;
+}
+
+.detail-notes-text {
+  white-space: pre-wrap;
+  color: var(--window-fg);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.detail-notes-input {
+  min-height: 6.5rem;
 }
 
 .detail-episode-code {

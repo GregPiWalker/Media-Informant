@@ -856,6 +856,10 @@
         categories: (catalog.getAttribute('data-categories') || '').trim().split(/\s+/).filter(Boolean),
         categories_known: Array.prototype.map.call(catalog.querySelectorAll('[data-category-filter]'), function (box) {
           return box.getAttribute('data-category-filter');
+        }).filter(Boolean),
+        watched: (catalog.getAttribute('data-watched') || 'yes no').trim().split(/\s+/).filter(Boolean),
+        watched_known: Array.prototype.map.call(catalog.querySelectorAll('[data-watched-filter]'), function (box) {
+          return box.getAttribute('data-watched-filter');
         }).filter(Boolean)
       });
       try { localStorage.setItem('media_catalog', raw); } catch (e) {}
@@ -980,6 +984,7 @@
     var allowKey = null;
     var kindSet = null;
     var catSet = null;
+    var watchSet = null;
     var noKids = [];
 
     function indexCatalog() {
@@ -1029,11 +1034,12 @@
     }
 
     function ensureAllow() {
-      var key = (catalog.getAttribute('data-kinds') || '') + '\n' + (catalog.getAttribute('data-categories') || '');
+      var key = (catalog.getAttribute('data-kinds') || '') + '\n' + (catalog.getAttribute('data-categories') || '') + '\n' + (catalog.getAttribute('data-watched') || '');
       if (key === allowKey) return;
       allowKey = key;
       kindSet = allowSet(catalog.getAttribute('data-kinds'));
       catSet = allowSet(catalog.getAttribute('data-categories'));
+      watchSet = allowSet(catalog.getAttribute('data-watched'));
     }
 
     function setRowHidden(row, hidden) {
@@ -1050,9 +1056,46 @@
       return !!catSet[el.getAttribute('data-category') || 'none'];
     }
 
+    // Folder, season, and episode headers omit data-watched. A mix of watched
+    // and unwatched children stays visible so each file can still be filtered.
+    function watchStateOf(el) {
+      if (el._watchState) return el._watchState;
+      var marked = el.getAttribute('data-watched');
+      var state = 'no';
+      if (marked === 'yes' || marked === 'no' || marked === 'mixed') {
+        state = marked;
+      } else {
+        var id = el.getAttribute('data-group');
+        var kids = id ? kidsOf(id) : noKids;
+        if (kids.length) {
+          var anyYes = false;
+          var anyNo = false;
+          var i;
+          var st;
+          for (i = 0; i < kids.length; i += 1) {
+            st = watchStateOf(kids[i]);
+            if (st === 'yes' || st === 'mixed') anyYes = true;
+            if (st === 'no' || st === 'mixed') anyNo = true;
+          }
+          if (anyYes && anyNo) state = 'mixed';
+          else if (anyYes) state = 'yes';
+        }
+      }
+      el._watchState = state;
+      return state;
+    }
+
+    function watchAllowed(el) {
+      if (!watchSet) return true;
+      var state = watchStateOf(el);
+      if (state === 'mixed') return !!(watchSet.yes || watchSet.no);
+      if (state === 'yes') return !!watchSet.yes;
+      return !!watchSet.no;
+    }
+
     function rowAllowed(el) {
       ensureAllow();
-      return kindAllowed(el) && categoryAllowed(el);
+      return kindAllowed(el) && categoryAllowed(el) && watchAllowed(el);
     }
 
     function searchQuery() {
@@ -1155,7 +1198,13 @@
       });
       syncPosterBuckets();
       var empty = document.querySelector('[data-search-empty]');
-      if (empty) empty.hidden = !((query || (catalog.getAttribute('data-kinds') || '') === '') && visible === 0);
+      if (empty) {
+        var watchParts = (catalog.getAttribute('data-watched') || 'yes no').trim().split(/\s+/);
+        var watchNarrowed = watchParts.indexOf('yes') === -1 || watchParts.indexOf('no') === -1;
+        var showEmpty = visible === 0 && (query || (catalog.getAttribute('data-kinds') || '') === '' || watchNarrowed);
+        empty.hidden = !showEmpty;
+        if (showEmpty) empty.textContent = query ? 'No titles match that search.' : 'No titles match that filter.';
+      }
     }
 
     catalog.querySelectorAll('[data-catalog-view]').forEach(function (btn) {
@@ -1532,6 +1581,22 @@
       });
     });
 
+    catalog.querySelectorAll('[data-watched-filter]').forEach(function (box) {
+      box.addEventListener('change', function () {
+        var flags = [];
+        catalog.querySelectorAll('[data-watched-filter]').forEach(function (item) {
+          if (item.checked) flags.push(item.getAttribute('data-watched-filter'));
+        });
+        if (flags.length === 0) {
+          box.checked = true;
+          flags = [box.getAttribute('data-watched-filter')];
+        }
+        catalog.setAttribute('data-watched', flags.join(' '));
+        catalogSave();
+        applySearch();
+      });
+    });
+
     catalog.querySelectorAll('[data-col-id]').forEach(function (box) {
       box.addEventListener('change', function () {
         if (box.disabled) {
@@ -1601,6 +1666,19 @@
             catalog.setAttribute('data-categories', cats.join(' '));
             catalog.querySelectorAll('[data-category-filter]').forEach(function (box) {
               box.checked = cats.indexOf(box.getAttribute('data-category-filter')) !== -1;
+            });
+          }
+          if (Array.isArray(parsed.watched)) {
+            var allowedWatch = ['yes', 'no'];
+            var watched = parsed.watched.filter(function (id) { return allowedWatch.indexOf(id) !== -1; });
+            var knownWatch = Array.isArray(parsed.watched_known) ? parsed.watched_known : [];
+            allowedWatch.forEach(function (id) {
+              if (knownWatch.indexOf(id) === -1 && watched.indexOf(id) === -1) watched.push(id);
+            });
+            if (watched.length === 0) watched = allowedWatch.slice();
+            catalog.setAttribute('data-watched', watched.join(' '));
+            catalog.querySelectorAll('[data-watched-filter]').forEach(function (box) {
+              box.checked = watched.indexOf(box.getAttribute('data-watched-filter')) !== -1;
             });
           }
           var nextView = catalog.getAttribute('data-view') || 'poster';

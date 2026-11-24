@@ -25,6 +25,22 @@ function catalog_source_attr(CatalogRecord $record): string
     return $record->sourceAbsent ? ' data-source-absent="1"' : '';
 }
 
+function catalog_watch_attr(CatalogRecord $record): string
+{
+    $flag = $record->watchedAt !== null && $record->watchedAt > 0 ? 'yes' : 'no';
+    return ' data-watched="' . $flag . '"';
+}
+
+function catalog_group_card_watch_attr(CatalogGroup $group): string
+{
+    foreach ($group->members as $member) {
+        if ($member->watchedAt !== null && $member->watchedAt > 0) {
+            return ' data-watched="yes"';
+        }
+    }
+    return ' data-watched="no"';
+}
+
 function catalog_thumb_button(CatalogRecord $record, string $size, string $label, string $extra = '', string $buttonClass = ''): string
 {
     $bits = [];
@@ -148,7 +164,7 @@ function catalog_render_list_folder_child(CatalogGroup $group, string $parentId)
         <?php foreach ($partMembers as $record):
             $partName = $record->partLabel !== '' ? $record->partLabel : $record->title;
             ?>
-    <tr class="catalog-part" hidden data-nest="2" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+    <tr class="catalog-part" hidden data-nest="2" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_watch_attr($record) ?><?= catalog_sort_attrs($record) ?>>
       <td data-col="poster"></td>
       <td data-col="title">
         <div class="catalog-group-cell">
@@ -164,7 +180,7 @@ function catalog_render_list_folder_child(CatalogGroup $group, string $parentId)
         return;
     }
     ?>
-    <tr class="catalog-episode" hidden data-nest="1" data-card data-parent="<?= h($parentId) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?>>
+    <tr class="catalog-episode" hidden data-nest="1" data-card data-parent="<?= h($parentId) ?>" data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_source_attr($head) ?><?= catalog_watch_attr($head) ?><?= catalog_sort_attrs($head) ?>>
       <td data-col="poster"></td>
       <td data-col="title">
         <div class="catalog-group-cell">
@@ -217,7 +233,7 @@ $view = $prefs->view;
     .catalog:not([data-categories~="<?= h($catId) ?>"]) [data-category="<?= h($catId) ?>"] { display: none !important; }
     <?php endforeach; ?>
   </style>
-  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>">
+  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>" data-watched="<?= h($prefs->watchedAttr()) ?>">
     <?php if (!empty($unscannedRoots)): ?>
     <div class="catalog-scan-hint">
       <p class="form-banner" role="status">
@@ -279,6 +295,16 @@ $view = $prefs->view;
         <?php endif; ?>
       </div>
       <?php endif; ?>
+      <div class="kind-filter" role="group" aria-label="Filter by watched">
+        <label class="kind-chip">
+          <input type="checkbox" data-watched-filter="yes"<?= $prefs->showsWatched('yes') ? ' checked' : '' ?>>
+          Watched
+        </label>
+        <label class="kind-chip">
+          <input type="checkbox" data-watched-filter="no"<?= $prefs->showsWatched('no') ? ' checked' : '' ?>>
+          Unwatched
+        </label>
+      </div>
       <?php if ($view === 'poster'): ?>
       <div class="col-panel" id="sort-panel" data-sort-panel hidden role="menu" aria-label="Sort posters">
         <?php foreach (['title' => 'Title', 'year' => 'Year', 'status' => 'Status', 'genres' => 'Genres'] as $sortId => $sortLabel): ?>
@@ -365,7 +391,7 @@ $view = $prefs->view;
             <?php foreach ($partMembers as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->title;
                 ?>
-            <tr class="catalog-part" hidden data-nest="1" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+            <tr class="catalog-part" hidden data-nest="1" data-card data-parent="<?= h($group->id) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_watch_attr($record) ?><?= catalog_sort_attrs($record) ?>>
               <td data-col="poster"></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
@@ -477,7 +503,7 @@ $view = $prefs->view;
             <?php foreach ($parts as $record):
                 $partName = $record->partLabel !== '' ? $record->partLabel : $record->episodeLabel;
                 ?>
-            <tr class="catalog-part" hidden data-nest="<?= (int) $partNest ?>" data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_sort_attrs($record) ?>>
+            <tr class="catalog-part" hidden data-nest="<?= (int) $partNest ?>" data-card data-parent="<?= h($cluster['id']) ?>" data-kind="<?= h($record->kind) ?>" data-category="<?= h(catalog_cat_attr($record)) ?>" data-search="<?= h($record->search) ?>"<?= catalog_source_attr($record) ?><?= catalog_watch_attr($record) ?><?= catalog_sort_attrs($record) ?>>
               <td data-col="poster"></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
@@ -493,7 +519,7 @@ $view = $prefs->view;
             <?php else:
                 $rowNest = $directFolders ? 1 : 2;
                 ?>
-            <tr class="catalog-episode" hidden data-nest="<?= (int) $rowNest ?>" data-card data-parent="<?= h($clusterParent) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($clusterSearch) ?>"<?= catalog_source_attr($first) ?><?= catalog_sort_attrs($first) ?>>
+            <tr class="catalog-episode" hidden data-nest="<?= (int) $rowNest ?>" data-card data-parent="<?= h($clusterParent) ?>" data-kind="<?= h($first->kind) ?>" data-category="<?= h(catalog_cat_attr($first)) ?>" data-search="<?= h($clusterSearch) ?>"<?= catalog_source_attr($first) ?><?= catalog_watch_attr($first) ?><?= catalog_sort_attrs($first) ?>>
               <td data-col="poster"></td>
               <td data-col="title">
                 <div class="catalog-group-cell">
@@ -514,7 +540,7 @@ $view = $prefs->view;
             <?php endforeach; ?>
             <?php endforeach; ?>
             <?php else: ?>
-            <tr data-card data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?>>
+            <tr data-card data-kind="<?= h($head->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($head->search) ?>"<?= catalog_source_attr($head) ?><?= catalog_watch_attr($head) ?><?= catalog_sort_attrs($head) ?>>
               <td data-col="poster">
                 <?= catalog_thumb_button($head, 'sm', $head->title) ?>
               </td>
@@ -547,7 +573,7 @@ $view = $prefs->view;
                 ?>
         <h2 class="poster-bucket" data-poster-bucket><?= h($bucket) ?></h2>
             <?php endif; ?>
-        <a class="card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?>>
+        <a class="card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_group_card_watch_attr($group) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?>>
           <div class="poster">
             <?php if ($head->poster): ?>
             <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">
@@ -599,7 +625,7 @@ $view = $prefs->view;
               $head = $group->head;
               $title = $group->isSeries() ? $head->seriesTitle : $head->title;
               ?>
-          <a class="card genre-card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?>>
+          <a class="card genre-card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_group_card_watch_attr($group) ?>>
             <div class="poster">
               <?php if ($head->poster): ?>
               <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">

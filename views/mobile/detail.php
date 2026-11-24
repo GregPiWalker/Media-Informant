@@ -20,6 +20,8 @@ $manual = false;
 $itemId = '';
 $sourceAbsent = false;
 $ratingLabel = '';
+$notes = '';
+$watchedLabel = '';
 $editing = !empty($editing);
 $error = (string) ($error ?? '');
 
@@ -44,6 +46,13 @@ if ($found) {
     }
     if (array_key_exists('overview', $item) && is_string($item['overview'])) {
         $overview = $item['overview'];
+    }
+    if (isset($item['notes']) && is_string($item['notes'])) {
+        $notes = $item['notes'];
+    }
+    if (function_exists('format_watched_at')) {
+        $watchedStamp = $item['watched_at'] ?? null;
+        $watchedLabel = format_watched_at(is_numeric($watchedStamp) ? (int) $watchedStamp : null);
     }
 
     if (is_array($meta)) {
@@ -85,6 +94,9 @@ if ($found) {
         }
         if (array_key_exists('year', $editDraft)) {
             $year = $editDraft['year'];
+        }
+        if (array_key_exists('notes', $editDraft)) {
+            $notes = (string) $editDraft['notes'];
         }
     }
 }
@@ -371,6 +383,9 @@ render_header(['section' => 'video']);
       <?php if ($runtimeLabel !== ''): ?>
       <p class="detail-runtime"><?= h($runtimeLabel) ?></p>
       <?php endif; ?>
+      <?php if ($watchedLabel !== ''): ?>
+      <p class="detail-watched"><?= h($watchedLabel) ?></p>
+      <?php endif; ?>
       <?php if (library_item_hidden($item)): ?>
       <p class="hint">This file is hidden from the catalog.</p>
       <?php endif; ?>
@@ -439,6 +454,12 @@ render_header(['section' => 'video']);
         ?>
         <script type="application/json" id="known-genres"><?= $knownJson !== false ? $knownJson : '[]' ?></script>
       </section>
+      <section class="detail-section detail-notes">
+        <h2>Notes</h2>
+        <label class="visually-hidden" for="edit-notes">Notes</label>
+        <textarea id="edit-notes" name="notes" class="overview-input detail-notes-input" rows="4" maxlength="8000"><?= h($notes) ?></textarea>
+        <p class="hint">Plain text for this file. Leave this blank to leave notes off the page.</p>
+      </section>
       <div class="detail-edit-actions">
         <button type="submit" class="btn btn-accent btn-block">Save</button>
         <a class="btn btn-ghost btn-block" href="<?= h(app_href('video/title.php?' . $titleQs)) ?>">Cancel</a>
@@ -477,6 +498,13 @@ render_header(['section' => 'video']);
         <li><?= h($name) ?></li>
         <?php endforeach; ?>
       </ul>
+    </section>
+    <?php endif; ?>
+
+    <?php if (!$editing && trim($notes) !== ''): ?>
+    <section class="detail-section detail-notes">
+      <h2>Notes</h2>
+      <p class="detail-notes-text"><?= h($notes) ?></p>
     </section>
     <?php endif; ?>
 

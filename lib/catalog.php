@@ -76,6 +76,7 @@ final class CatalogPreferences
     /** @param list<string> $columns */
     /** @param list<string> $kinds */
     /** @param list<string> $categories */
+    /** @param list<string> $watched */
     public function __construct(
         public string $view,
         public array $columns,
@@ -83,6 +84,7 @@ final class CatalogPreferences
         public string $dir,
         public array $kinds = ['movie', 'show', 'documentary'],
         public array $categories = [],
+        public array $watched = ['yes', 'no'],
     ) {
     }
 
@@ -195,7 +197,31 @@ final class CatalogPreferences
             }
         }
 
-        return new self($view, $visible, $sort, $dir, $kindOut, $catOut);
+        $allWatched = ['yes', 'no'];
+        $savedWatched = $data['watched'] ?? null;
+        if (!is_array($savedWatched)) {
+            $watchOut = $allWatched;
+        } else {
+            $watchOut = [];
+            foreach ($savedWatched as $flag) {
+                if (in_array($flag, $allWatched, true) && !in_array($flag, $watchOut, true)) {
+                    $watchOut[] = $flag;
+                }
+            }
+            $knownWatched = $data['watched_known'] ?? null;
+            if (is_array($knownWatched)) {
+                foreach ($allWatched as $flag) {
+                    if (!in_array($flag, $knownWatched, true) && !in_array($flag, $watchOut, true)) {
+                        $watchOut[] = $flag;
+                    }
+                }
+            }
+            if ($watchOut === []) {
+                $watchOut = $allWatched;
+            }
+        }
+
+        return new self($view, $visible, $sort, $dir, $kindOut, $catOut, $watchOut);
     }
 
     public function colsAttr(): string
@@ -221,6 +247,16 @@ final class CatalogPreferences
     public function showsCategory(string $id): bool
     {
         return in_array($id, $this->categories, true);
+    }
+
+    public function watchedAttr(): string
+    {
+        return implode(' ', $this->watched);
+    }
+
+    public function showsWatched(string $flag): bool
+    {
+        return in_array($flag, $this->watched, true);
     }
 
     public function shows(string $columnId): bool
@@ -260,6 +296,7 @@ final class CatalogRecord
         public ?int $displayEpisode = null,
         public string $sourceFolder = '',
         public string $sourceFolderKey = '',
+        public ?int $watchedAt = null,
     ) {
     }
 
@@ -451,6 +488,7 @@ final class CatalogRecord
             $grouped && $kind === 'show' ? $listEpisode : null,
             $sourceFolder,
             $sourceFolderKey,
+            catalog_watched_stamp($item),
         );
     }
 
@@ -488,8 +526,19 @@ final class CatalogRecord
             ],
             $genres,
             (string) ($item['status'] ?? 'unmatched'),
+            watchedAt: catalog_watched_stamp($item),
         );
     }
+}
+
+function catalog_watched_stamp(array $item): ?int
+{
+    $stamp = $item['watched_at'] ?? null;
+    if (!is_numeric($stamp)) {
+        return null;
+    }
+    $stamp = (int) $stamp;
+    return $stamp > 0 ? $stamp : null;
 }
 
 /** @param list<string> $genres */

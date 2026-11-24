@@ -31,9 +31,13 @@ if (!preg_match('/^[a-f0-9]{16}$/', $id)) {
     kodi_play_json(['ok' => false, 'error' => 'That title was not found.'], 404);
 }
 
+$playCatalog = 'video';
 $item = function_exists('catalog_store_find') ? catalog_store_find('video', $id) : null;
 if ($item === null && function_exists('catalog_store_find')) {
     $item = catalog_store_find('music', $id);
+    if ($item !== null) {
+        $playCatalog = 'music';
+    }
 }
 if ($item === null) {
     kodi_play_json(['ok' => false, 'error' => 'That title was not found.'], 404);
@@ -70,5 +74,9 @@ if (kodi_macrodroid_enabled()) {
 $result = kodi_player_open($host, $path);
 if (empty($result['ok'])) {
     kodi_play_json(['ok' => false, 'error' => (string) ($result['error'] ?? 'Kodi did not start playback.')]);
+}
+if (function_exists('catalog_mark_watched')) {
+    $watchedLabel = trim((string) ($item['display_title'] ?? $item['title'] ?? ''));
+    catalog_mark_watched($playCatalog, $id, $watchedLabel);
 }
 kodi_play_json(['ok' => true, 'message' => (string) ($result['message'] ?? 'Playing.')]);
