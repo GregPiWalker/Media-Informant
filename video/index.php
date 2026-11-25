@@ -37,7 +37,24 @@ foreach ($items as $item) {
     $records[] = CatalogRecord::fromVideo($item);
 }
 $groups = catalog_sort_groups(catalog_collect_groups($records), $prefs);
-$genreGroups = $prefs->view === 'genre' ? catalog_genre_rails($groups) : [];
+$genreFocus = isset($_GET['genre']) ? catalog_genre_focus_name((string) $_GET['genre']) : '';
+if ($genreFocus !== '') {
+    $requested = strtolower((string) ($_GET['view'] ?? ''));
+    if ($requested === 'list' || $requested === 'poster') {
+        $prefs->view = $requested;
+    } elseif ($prefs->view === 'list' || $prefs->browse === 'list') {
+        $prefs->view = 'list';
+    } else {
+        $prefs->view = 'poster';
+    }
+    $groups = catalog_groups_for_genre($groups, $genreFocus);
+}
+if ($prefs->view === 'poster') {
+    $groups = catalog_sort_poster_groups($groups, $prefs);
+}
+$genreGroups = ($prefs->view === 'genre' && $genreFocus === '')
+    ? catalog_genre_rails($groups, $prefs->genreSort)
+    : [];
 $scannedAt = isset($library['scanned_at']) ? (int) $library['scanned_at'] : null;
 $unscannedRoots = function_exists('source_roots_without_titles')
     ? source_roots_without_titles($allowedRoots, $library['items'] ?? [])

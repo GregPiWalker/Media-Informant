@@ -213,7 +213,7 @@ function catalog_store_load(string $catalog = 'video'): array
     $sql = 'SELECT f.id AS file_id, f.path AS file_path, f.parsed_title, f.parsed_year, f.size, f.mtime,
             f.state, f.match_source AS file_match_source, f.grok_verified, f.confidence, f.kind AS file_kind,
             i.id AS item_id, i.title AS item_title, i.sort_title, i.year AS item_year, i.tmdb_id, i.tmdb_media_type,
-            i.overview, i.poster_path, i.watched_at, i.notes, i.extras_json, i.grouping, i.parent_id,
+            i.overview, i.poster_path, i.watched_at, i.notes, i.created_at, i.extras_json, i.grouping, i.parent_id,
             t.slug AS type_slug,
             p.title AS parent_title, p.grouping AS parent_grouping, p.extras_json AS parent_extras, p.tmdb_id AS parent_tmdb,
             gp.title AS grand_title, gp.grouping AS grand_grouping
@@ -363,6 +363,10 @@ function catalog_hydrate_file(array $row, PDOStatement $candStmt): array
     $notes = $row['notes'] ?? null;
     if (is_string($notes) && trim($notes) !== '') {
         $item['notes'] = str_replace(["\r\n", "\r"], "\n", $notes);
+    }
+    $addedAt = $row['created_at'] ?? null;
+    if (is_numeric($addedAt) && (int) $addedAt > 0) {
+        $item['added_at'] = (int) $addedAt;
     }
     return $item;
 }
@@ -1072,7 +1076,7 @@ function catalog_store_find(string $catalog, string $id): ?array
     $sql = 'SELECT f.id AS file_id, f.path AS file_path, f.parsed_title, f.parsed_year, f.size, f.mtime,
             f.state, f.match_source AS file_match_source, f.grok_verified, f.confidence, f.kind AS file_kind,
             i.id AS item_id, i.title AS item_title, i.sort_title, i.year AS item_year, i.tmdb_id, i.tmdb_media_type,
-            i.overview, i.poster_path, i.watched_at, i.notes, i.extras_json, i.grouping, i.parent_id,
+            i.overview, i.poster_path, i.watched_at, i.notes, i.created_at, i.extras_json, i.grouping, i.parent_id,
             t.slug AS type_slug,
             p.title AS parent_title, p.grouping AS parent_grouping, p.extras_json AS parent_extras, p.tmdb_id AS parent_tmdb,
             gp.title AS grand_title, gp.grouping AS grand_grouping
@@ -1299,7 +1303,7 @@ function catalog_touch_item(PDO $pdo, string $column, string $id, int|string|nul
     return $check->fetchColumn() === false ? 0 : -1;
 }
 
-function catalog_mark_watched(string $catalog, string $id, string $label = ''): bool
+function catalog_mark_watched(string $catalog, string $id, string $label = '', bool $quiet = false): bool
 {
     if (preg_match('/^[a-f0-9]{16}$/', $id) !== 1) {
         return false;
@@ -1313,7 +1317,7 @@ function catalog_mark_watched(string $catalog, string $id, string $label = ''): 
         if ($changed === 0) {
             return false;
         }
-        if ($changed > 0 && function_exists('app_log')) {
+        if ($changed > 0 && !$quiet && function_exists('app_log')) {
             $label = trim(preg_replace('/\s+/', ' ', $label) ?? $label);
             $message = $label !== '' ? 'Recorded last watched for “' . $label . '”.' : 'Recorded last watched.';
             app_log('kodi', $message, ['id' => $id, 'catalog' => db_normalize_catalog($catalog)]);
@@ -1322,6 +1326,67 @@ function catalog_mark_watched(string $catalog, string $id, string $label = ''): 
     } catch (Throwable $e) {
         return false;
     }
+}
+
+function catalog_clear_watched(string $catalog, string $id): bool
+{
+    if (preg_match('/^[a-f0-9]{16}$/', $id) !== 1) {
+        return false;
+    }
+    $pdo = db_open($catalog);
+    if ($pdo === null) {
+        return false;
+    }
+    try {
+        return catalog_touch_item($pdo, 'watched_at', $id, null) !== 0;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * Mark or clear every id. One log line for the whole title. Paths and notes are not logged.
+ *
+ * @param list<string> $ids
+ */
+function catalog_set_watched_many(string $catalog, array $ids, bool $watched, string $label = ''): bool
+{
+    $clean = [];
+    foreach ($ids as $id) {
+        $id = strtolower(trim((string) $id));
+        if (preg_match('/^[a-f0-9]{16}$/', $id) !== 1 || in_array($id, $clean, true)) {
+            continue;
+        }
+        $clean[] = $id;
+        if (count($clean) >= 500) {
+            break;
+        }
+    }
+    if ($clean === []) {
+        return false;
+    }
+    $count = 0;
+    foreach ($clean as $id) {
+        $ok = $watched
+            ? catalog_mark_watched($catalog, $id, '', true)
+            : catalog_clear_watched($catalog, $id);
+        if (!$ok) {
+            return false;
+        }
+        $count++;
+    }
+    if ($count > 0 && function_exists('app_log')) {
+        $label = trim(preg_replace('/\s+/', ' ', $label) ?? $label);
+        if (strlen($label) > 200) {
+            $label = substr($label, 0, 200);
+        }
+        $verb = $watched ? 'Marked watched' : 'Marked unwatched';
+        $message = $label !== ''
+            ? $verb . ' for “' . $label . '” (' . $count . ').'
+            : $verb . ' (' . $count . ').';
+        app_log('title', $message, ['count' => $count, 'catalog' => db_normalize_catalog($catalog)]);
+    }
+    return $count > 0;
 }
 
 function catalog_save_notes(string $catalog, string $id, ?string $notes): bool
