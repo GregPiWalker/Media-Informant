@@ -869,6 +869,194 @@ function grok_chat_with_fallback(array $messages, int $maxTokens = 2500): array
     return $result;
 }
 
+function grok_key_check_path(): string
+{
+    return CACHE_DIR . '/grok-key-check.json';
+}
+
+function grok_key_fingerprint(string $key): string
+{
+    return hash('sha256', 'media-informant-grok:' . $key);
+}
+
+/** Last definitive test for this exact key: '', 'valid', or 'invalid'. */
+function grok_key_check_state(string $key): string
+{
+    $key = trim($key);
+    if ($key === '') {
+        return '';
+    }
+    $path = grok_key_check_path();
+    $row = function_exists('cache_read_json') ? cache_read_json($path) : null;
+    if (!is_array($row)) {
+        return '';
+    }
+    $hash = (string) ($row['hash'] ?? '');
+    $want = grok_key_fingerprint($key);
+    if ($hash === '' || !hash_equals($want, $hash)) {
+        return '';
+    }
+    return !empty($row['ok']) ? 'valid' : 'invalid';
+}
+
+function grok_key_check_store(string $key, bool $ok): void
+{
+    $key = trim($key);
+    if ($key === '' || !function_exists('cache_write_atomic')) {
+        return;
+    }
+    if (function_exists('cache_init')) {
+        cache_init();
+    }
+    cache_write_atomic(grok_key_check_path(), [
+        'hash' => grok_key_fingerprint($key),
+        'ok' => $ok,
+        'at' => time(),
+    ]);
+}
+
+function grok_key_test_scrub(string $text, string $key): string
+{
+    if ($key !== '') {
+        $text = str_replace($key, '[redacted]', $text);
+    }
+    $text = grok_scrub($text);
+    $text = trim((string) (preg_replace('/\s+/', ' ', $text) ?? $text));
+    if (strlen($text) > 140) {
+        $text = substr($text, 0, 137) . '…';
+    }
+    return $text;
+}
+
+function grok_key_test_rejected(int $status, string $error): bool
+{
+    if ($status === 401 || $status === 403) {
+        return true;
+    }
+    $error = strtolower($error);
+    return str_contains($error, 'api key')
+        || str_contains($error, 'unauthorized')
+        || str_contains($error, 'authentication');
+}
+
+/**
+ * One tiny chat call with the supplied key. Does not read or write settings.
+ *
+ * @return array{ok: bool, status: int, content: string, error: string}
+ */
+function grok_key_test_call(string $key, string $model): array
+{
+    if (function_exists('set_time_limit')) {
+        @set_time_limit(30);
+    }
+    $body = json_encode([
+        'model' => $model,
+        'temperature' => 0,
+        'max_tokens' => 16,
+        'messages' => [
+            ['role' => 'system', 'content' => 'Reply with the single word hello.'],
+            ['role' => 'user', 'content' => 'hello'],
+        ],
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($body === false) {
+        return ['ok' => false, 'status' => 0, 'content' => '', 'error' => 'Could not encode the test.'];
+    }
+    $ch = curl_init(XAI_API_URL);
+    if ($ch === false) {
+        return ['ok' => false, 'status' => 0, 'content' => '', 'error' => 'Could not start the test.'];
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_HTTPHEADER => [
+            'Authorization: Bearer ' . $key,
+            'Content-Type: application/json',
+        ],
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_CONNECTTIMEOUT => 8,
+        CURLOPT_USERAGENT => 'MediaInformant/1.0',
+    ]);
+    $raw = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr = curl_error($ch);
+    curl_close($ch);
+    if ($raw === false) {
+        $error = $curlErr !== '' ? $curlErr : 'Could not reach Grok.';
+        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_key_test_scrub($error, $key)];
+    }
+    $decoded = json_decode((string) $raw, true);
+    $content = '';
+    $apiErr = '';
+    if (is_array($decoded)) {
+        $content = trim((string) ($decoded['choices'][0]['message']['content'] ?? $decoded['output_text'] ?? ''));
+        $rawErr = $decoded['error']['message'] ?? $decoded['error'] ?? '';
+        $apiErr = is_string($rawErr) ? $rawErr : '';
+    }
+    if ($status !== 200) {
+        $error = $apiErr !== '' ? $apiErr : ('HTTP ' . $status);
+        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_key_test_scrub($error, $key)];
+    }
+    if ($content === '' && $apiErr !== '') {
+        return ['ok' => false, 'status' => $status, 'content' => '', 'error' => grok_key_test_scrub($apiErr, $key)];
+    }
+    return ['ok' => $content !== '', 'status' => $status, 'content' => $content, 'error' => ''];
+}
+
+/**
+ * Asks Grok to say hello with the key from the Config field.
+ *
+ * @return array{ok: bool, valid: bool, rejected: bool, message: string}
+ */
+function grok_key_test(string $key): array
+{
+    $key = trim($key);
+    if ($key === '') {
+        return ['ok' => false, 'valid' => false, 'rejected' => false, 'message' => 'Enter an API key to test.'];
+    }
+    if (strlen($key) > 500) {
+        return ['ok' => false, 'valid' => false, 'rejected' => false, 'message' => 'That key is too long to test.'];
+    }
+    if (!function_exists('curl_init')) {
+        return ['ok' => false, 'valid' => false, 'rejected' => false, 'message' => 'PHP curl is not available, so the key could not be tested.'];
+    }
+    $primary = (string) XAI_MODEL;
+    $result = grok_key_test_call($key, $primary);
+    if (empty($result['ok'])) {
+        $status = (int) ($result['status'] ?? 0);
+        $error = (string) ($result['error'] ?? '');
+        $fallback = (string) XAI_MODEL_FALLBACK;
+        $modelMiss = $status === 404 || $status === 400 || str_contains(strtolower($error), 'model');
+        if ($fallback !== '' && $fallback !== $primary && $modelMiss && !grok_key_test_rejected($status, $error)) {
+            $result = grok_key_test_call($key, $fallback);
+        }
+    }
+    $status = (int) ($result['status'] ?? 0);
+    $error = (string) ($result['error'] ?? '');
+    if (!empty($result['ok']) || ($status === 200 && $error === '')) {
+        grok_key_check_store($key, true);
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok key test accepted.');
+        }
+        $message = trim((string) ($result['content'] ?? '')) !== ''
+            ? 'This key can reach Grok.'
+            : 'This key was accepted.';
+        return ['ok' => true, 'valid' => true, 'rejected' => false, 'message' => $message];
+    }
+    if (grok_key_test_rejected($status, $error)) {
+        grok_key_check_store($key, false);
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok key test rejected.', ['status' => $status], 'warn');
+        }
+        return ['ok' => true, 'valid' => false, 'rejected' => true, 'message' => 'This key was rejected.'];
+    }
+    if (function_exists('app_log')) {
+        app_log('grok', 'Grok key test failed.', ['status' => $status], 'warn');
+    }
+    $message = $error !== '' ? $error : 'Grok did not answer.';
+    return ['ok' => false, 'valid' => false, 'rejected' => false, 'message' => $message];
+}
+
 function grok_collect_unmatched_ids(array $library): array
 {
     $ids = [];

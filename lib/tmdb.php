@@ -657,7 +657,9 @@ function tmdb_search_first_results(string $title, ?int $year, string $filename =
                     ? search_query_skip_as_weak($q, $isTv)
                     : (!$isTv && function_exists('search_query_is_weak') && search_query_is_weak($q));
                 tmdb_verbose_log('TMDB ' . $ep['source'] . ' query "' . $q . '" (' . $attempt['label'] . ($weak ? ', weak' : '') . ') hits=' . $hits);
-                if ($hits > 0 && $weak && !$isTv) {
+                $keepSequenceOne = function_exists('search_query_keeps_sequence_one_hit')
+                    && search_query_keeps_sequence_one_hit($q, $title, $filename);
+                if ($hits > 0 && $weak && !$isTv && !$keepSequenceOne) {
                     tmdb_verbose_log('TMDB weak query ignored: "' . $q . '"');
                     usleep(TMDB_REQUEST_SLEEP_US);
                     continue;

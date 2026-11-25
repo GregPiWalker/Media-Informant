@@ -40,6 +40,235 @@ function match_filename_year(string $filename): ?int
     return $year >= 1870 && $year <= 2100 ? $year : null;
 }
 
+/**
+ * Store a TMDB choice the same way a manual pick loads details.
+ *
+ * @return array{ok:bool, error:string, title:string, tmdb_id:int}
+ */
+function match_commit_tmdb(string $id, int $tmdbId, string $mediaType, string $matchSource): array
+{
+    $failed = [
+        'ok' => false,
+        'error' => 'Could not load that title from TMDB. Try another result.',
+        'title' => '',
+        'tmdb_id' => $tmdbId,
+    ];
+    if ($tmdbId < 1) {
+        return $failed;
+    }
+    if ($mediaType !== 'tv' && $mediaType !== 'movie') {
+        $mediaType = 'movie';
+    }
+    $meta = function_exists('cache_read_title_for')
+        ? cache_read_title_for($tmdbId, $mediaType)
+        : cache_read_title($tmdbId);
+    $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
+    $missingRating = !tmdb_has_rating($meta);
+    $missingRuntime = !tmdb_has_runtime($meta);
+    if ($missingOverview || $missingRating || $missingRuntime) {
+        $fetched = tmdb_fetch_details($tmdbId, $mediaType);
+        if (is_array($fetched) && (string) ($fetched['media_type'] ?? '') === $mediaType) {
+            if ($missingOverview) {
+                $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
+            } else {
+                if ($missingRating) {
+                    $meta = tmdb_copy_rating($meta, $fetched);
+                }
+                if ($missingRuntime && tmdb_has_runtime($fetched)) {
+                    $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
+                }
+            }
+            if (function_exists('cache_write_title_for')) {
+                cache_write_title_for($tmdbId, $meta, $mediaType);
+            } else {
+                cache_write_title($tmdbId, $meta);
+            }
+        }
+    }
+    if ($meta === null) {
+        return $failed;
+    }
+    $updated = cache_update_item($id, static function (array $row) use ($meta, $matchSource): array {
+        return cache_apply_tmdb_match($row, $meta, $matchSource);
+    });
+    if ($updated === null) {
+        $failed['error'] = 'Could not update the catalog. Check cache/ permissions.';
+        return $failed;
+    }
+    return [
+        'ok' => true,
+        'error' => '',
+        'title' => (string) ($meta['title'] ?? (string) $tmdbId),
+        'tmdb_id' => $tmdbId,
+    ];
+}
+
+/**
+ * Store a RiffTrax or MST3K choice.
+ *
+ * @return array{ok:bool, error:string, title:string, lookup_id:string}
+ */
+function match_commit_lookup(string $id, string $site, string $lookupId, string $matchSource): array
+{
+    $failed = [
+        'ok' => false,
+        'error' => 'Could not load that title from ' . $site . '. Try another result.',
+        'title' => '',
+        'lookup_id' => $lookupId,
+    ];
+    $lookupId = trim($lookupId);
+    $service = function_exists('lookup_service') ? lookup_service($site) : null;
+    $picked = ($service && function_exists('curl_init') && $lookupId !== '') ? $service->fetch($lookupId) : null;
+    if (!$picked instanceof VideoMetadata) {
+        return $failed;
+    }
+    $updated = cache_update_item($id, static function (array $row) use ($picked, $matchSource): array {
+        return lookup_apply_metadata($row, $picked, $matchSource);
+    });
+    if ($updated === null) {
+        $failed['error'] = 'Could not update the catalog. Check cache/ permissions.';
+        return $failed;
+    }
+    return [
+        'ok' => true,
+        'error' => '',
+        'title' => (string) $picked->title,
+        'lookup_id' => (string) $picked->lookupId,
+    ];
+}
+
+function match_saved_redirect(string $id): void
+{
+    header('Location: title.php?id=' . rawurlencode($id), true, 303);
+    exit;
+}
+
+/**
+ * Unmatched Match title. One complete result is saved. Two or more on the
+ * first page go to Grok when an API key is configured. May redirect.
+ *
+ * @param list<array<string, mixed>> $results
+ * @return array{error:string, grokNote:string}
+ */
+function match_auto_resolve(
+    string $id,
+    array $item,
+    array $results,
+    int $page,
+    int $totalPages,
+    string $mode,
+    string $searchSource,
+    string $queryText,
+    string $filename,
+    string $searchVia,
+    string $searchMedia
+): array {
+    $none = ['error' => '', 'grokNote' => ''];
+    if ($mode === 'popular' || $page > 1 || $results === []) {
+        return $none;
+    }
+    if (library_item_status($item) === 'matched') {
+        return $none;
+    }
+    $count = count($results);
+    $site = $searchSource === 'RiffTrax' || $searchSource === 'MST3K';
+    if ($count === 1 && $totalPages <= 1) {
+        $row = $results[0];
+        if (!is_array($row)) {
+            return $none;
+        }
+        if ($site) {
+            $source = $searchSource === 'MST3K' ? 'mst3k' : 'rifftrax';
+            $lookupId = trim((string) ($row['lookup_id'] ?? ''));
+            if ($lookupId === '') {
+                $lookupId = trim((string) ($row['id'] ?? ''));
+            }
+            $saved = match_commit_lookup($id, $searchSource, $lookupId, $source);
+            if (!$saved['ok']) {
+                return ['error' => $saved['error'], 'grokNote' => ''];
+            }
+            if (function_exists('app_log')) {
+                $topic = $searchSource === 'MST3K' ? 'mst3k' : 'rifftrax';
+                app_log($topic, 'Automatic ' . $searchSource . ' match: ' . $saved['title'] . '. file=' . $filename, [
+                    'id' => $id,
+                    'lookup_id' => $saved['lookup_id'],
+                ]);
+            }
+        } else {
+            $mediaType = (string) ($row['media_type'] ?? $searchMedia);
+            $saved = match_commit_tmdb($id, (int) ($row['tmdb_id'] ?? 0), $mediaType, 'direct');
+            if (!$saved['ok']) {
+                return ['error' => $saved['error'], 'grokNote' => ''];
+            }
+            if (function_exists('app_log')) {
+                app_log('match', 'Automatic TMDB match: ' . $saved['title'] . '. file=' . $filename, [
+                    'id' => $id,
+                    'tmdb_id' => $saved['tmdb_id'],
+                ]);
+            }
+        }
+        match_saved_redirect($id);
+    }
+    if ($count < 2) {
+        return $none;
+    }
+    require_once dirname(__DIR__) . '/lib/grok.php';
+    $grokOn = function_exists('grok_resolve_available') && grok_resolve_available();
+    if (!$grokOn) {
+        if (function_exists('app_log')) {
+            app_log('grok', 'Grok is not configured, so ' . $count . ' ' . $searchSource . ' title(s) for "' . $queryText . '" were not sent. file=' . $filename);
+        }
+        return $none;
+    }
+    if (function_exists('app_log')) {
+        $viaBit = $searchVia !== '' ? ' via ' . $searchVia : '';
+        app_log('grok', 'Asking Grok to choose among ' . $count . ' ' . $searchSource . ' title(s) for "' . $queryText . '"' . $viaBit . '. file=' . $filename);
+    }
+    $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $results, $queryText) : null;
+    if (!is_array($choice) || (int) ($choice['id'] ?? 0) < 1) {
+        return ['error' => '', 'grokNote' => 'Grok could not choose a title from these results. Pick one below.'];
+    }
+    $choiceSource = (string) ($choice['source'] ?? '');
+    if ($site) {
+        if (strcasecmp($choiceSource, $searchSource) !== 0) {
+            return ['error' => '', 'grokNote' => 'Grok could not choose a title from these results. Pick one below.'];
+        }
+        $saved = match_commit_lookup($id, $searchSource, (string) $choice['id'], 'grok');
+    } elseif (strcasecmp($choiceSource, 'TMDB') !== 0) {
+        return ['error' => '', 'grokNote' => 'Grok could not choose a title from these results. Pick one below.'];
+    } else {
+        $mediaType = $searchMedia;
+        foreach ($results as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $rowId = (int) ($row['tmdb_id'] ?? $row['id'] ?? 0);
+            if ($rowId !== (int) $choice['id']) {
+                continue;
+            }
+            $hint = (string) ($row['media_type'] ?? '');
+            if ($hint === 'tv' || $hint === 'movie') {
+                $mediaType = $hint;
+            }
+            break;
+        }
+        $saved = match_commit_tmdb($id, (int) $choice['id'], $mediaType, 'grok');
+    }
+    if (!$saved['ok']) {
+        return ['error' => $saved['error'], 'grokNote' => ''];
+    }
+    if (function_exists('app_log')) {
+        $context = ['id' => $id];
+        if ($site) {
+            $context['lookup_id'] = $saved['lookup_id'];
+        } else {
+            $context['tmdb_id'] = $saved['tmdb_id'];
+        }
+        app_log('grok', 'Grok chose ' . $searchSource . ' "' . $saved['title'] . '" for ' . $filename . '.', $context);
+    }
+    match_saved_redirect($id);
+}
+
 cache_init();
 
 $id = isset($_GET['id']) && is_string($_GET['id']) ? $_GET['id'] : '';
@@ -80,26 +309,17 @@ if (!$fileBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'P
     }
     if ($action === 'choose' && $postedSite !== '') {
         $nid = trim((string) ($_POST['lookup_id'] ?? ''));
-        $service = function_exists('lookup_service') ? lookup_service($postedSite) : null;
-        $picked = ($service && function_exists('curl_init')) ? $service->fetch($nid) : null;
-        if (!$picked instanceof VideoMetadata) {
-            $error = 'Could not load that title from ' . $postedSite . '. Try another result.';
+        $saved = match_commit_lookup($id, $postedSite, $nid, 'manual');
+        if (!$saved['ok']) {
+            $error = $saved['error'];
         } else {
-            $updated = cache_update_item($id, static function (array $row) use ($picked): array {
-                return lookup_apply_metadata($row, $picked, 'manual');
-            });
-            if ($updated === null) {
-                $error = 'Could not update the catalog. Check cache/ permissions.';
-            } else {
-                if (function_exists('app_log')) {
-                    app_log('match', 'Manual ' . $postedSite . ' match: ' . (string) $picked->title . '.', [
-                        'id' => $id,
-                        'lookup_id' => $picked->lookupId,
-                    ]);
-                }
-                header('Location: title.php?id=' . rawurlencode($id), true, 303);
-                exit;
+            if (function_exists('app_log')) {
+                app_log('match', 'Manual ' . $postedSite . ' match: ' . $saved['title'] . '.', [
+                    'id' => $id,
+                    'lookup_id' => $saved['lookup_id'],
+                ]);
             }
+            match_saved_redirect($id);
         }
     } elseif (!tmdb_has_key() && $action === 'choose') {
         $error = 'Set a TMDB API key in Config before matching titles.';
@@ -122,50 +342,17 @@ if (!$fileBlocked && $item !== null && ($_SERVER['REQUEST_METHOD'] ?? '') === 'P
         $mediaType = $postedType === 'tv' || $postedType === 'movie'
             ? $postedType
             : ((string) ($item['kind'] ?? '') === 'show' ? 'tv' : 'movie');
-        $meta = $tmdbId > 0
-            ? (function_exists('cache_read_title_for') ? cache_read_title_for($tmdbId, $mediaType) : cache_read_title($tmdbId))
-            : null;
-        $missingOverview = !is_array($meta) || trim((string) ($meta['overview'] ?? '')) === '';
-        $missingRating = !tmdb_has_rating($meta);
-        $missingRuntime = !tmdb_has_runtime($meta);
-        if ($tmdbId > 0 && ($missingOverview || $missingRating || $missingRuntime)) {
-            $fetched = tmdb_fetch_details($tmdbId, $mediaType);
-            if (is_array($fetched) && (string) ($fetched['media_type'] ?? '') === $mediaType) {
-                if ($missingOverview) {
-                    $meta = is_array($meta) ? array_merge($meta, $fetched) : $fetched;
-                } else {
-                    if ($missingRating) {
-                        $meta = tmdb_copy_rating($meta, $fetched);
-                    }
-                    if ($missingRuntime && tmdb_has_runtime($fetched)) {
-                        $meta['runtime'] = tmdb_minutes_value($fetched['runtime'] ?? null);
-                    }
-                }
-                if (function_exists('cache_write_title_for')) {
-                    cache_write_title_for($tmdbId, $meta, $mediaType);
-                } else {
-                    cache_write_title($tmdbId, $meta);
-                }
-            }
-        }
-        if ($meta === null) {
-            $error = 'Could not load that title from TMDB. Try another result.';
+        $saved = match_commit_tmdb($id, $tmdbId, $mediaType, 'manual');
+        if (!$saved['ok']) {
+            $error = $saved['error'];
         } else {
-            $updated = cache_update_item($id, static function (array $row) use ($meta): array {
-                return cache_apply_tmdb_match($row, $meta, 'manual');
-            });
-            if ($updated === null) {
-                $error = 'Could not update the catalog. Check cache/ permissions.';
-            } else {
-                if (function_exists('app_log')) {
-                    app_log('match', 'Manual match: ' . (string) ($meta['title'] ?? $tmdbId) . '.', [
-                        'id' => $id,
-                        'tmdb_id' => $tmdbId,
-                    ]);
-                }
-                header('Location: title.php?id=' . rawurlencode($id), true, 303);
-                exit;
+            if (function_exists('app_log')) {
+                app_log('match', 'Manual match: ' . $saved['title'] . '.', [
+                    'id' => $id,
+                    'tmdb_id' => $saved['tmdb_id'],
+                ]);
             }
+            match_saved_redirect($id);
         }
     }
 }
@@ -236,6 +423,7 @@ $page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
 $mode = 'search';
 $payload = ['results' => [], 'page' => 1, 'total_pages' => 1];
 $relaxedYear = false;
+$droppedSequenceOne = false;
 $grokNote = '';
 $hasKey = tmdb_has_key();
 $siteSearch = $searchSource === 'RiffTrax' || $searchSource === 'MST3K';
@@ -243,6 +431,8 @@ $canSearch = $scanServiceNote !== ''
     ? false
     : ($siteSearch ? function_exists('curl_init') : $hasKey);
 
+$queryText = $q;
+$searchVia = '';
 if (!$fileBlocked && $item !== null && $siteSearch && $canSearch) {
     $prefFile = $searchSource === 'MST3K' ? $mstFile : $riffFile;
     $queryText = $q !== '' ? $q : (string) ($prefFile['title'] ?? '');
@@ -255,47 +445,11 @@ if (!$fileBlocked && $item !== null && $siteSearch && $canSearch) {
         'path' => (string) ($item['path'] ?? ''),
     ]) : [];
     $rows = lookup_candidate_rows($hits);
-    $via = is_object($service) && method_exists($service, 'lastVia') ? $service->lastVia() : 'none';
+    $searchVia = is_object($service) && method_exists($service, 'lastVia') ? $service->lastVia() : 'none';
     $logTopic = $searchSource === 'MST3K' ? 'mst3k' : 'rifftrax';
     if (function_exists('app_log')) {
-        app_log($logTopic, $searchSource . ' search for "' . $queryText . '" via ' . $via
+        app_log($logTopic, $searchSource . ' search for "' . $queryText . '" via ' . $searchVia
             . ' returned ' . count($rows) . ' title(s). file=' . $filename);
-    }
-    if ($rows !== []) {
-        require_once dirname(__DIR__) . '/lib/grok.php';
-        $grokOn = function_exists('grok_resolve_available') && grok_resolve_available();
-        if (!$grokOn) {
-            if (function_exists('app_log')) {
-                app_log('grok', 'Grok is not configured, so ' . count($rows) . ' ' . $searchSource . ' title(s) for "' . $queryText . '" were not sent. file=' . $filename);
-            }
-        } else {
-            if (function_exists('app_log')) {
-                app_log('grok', 'Asking Grok to choose among ' . count($rows) . ' ' . $searchSource . ' title(s) for "' . $queryText . '" via ' . $via . '. file=' . $filename);
-            }
-            $choice = function_exists('grok_choose_for_item') ? grok_choose_for_item($item, $rows, $queryText) : null;
-            if (is_array($choice) && $service instanceof VideoLookupService) {
-                $picked = $service->fetch((string) $choice['id']);
-                if ($picked instanceof VideoMetadata) {
-                    $updated = cache_update_item($id, static function (array $row) use ($picked): array {
-                        return lookup_apply_metadata($row, $picked, 'grok');
-                    });
-                    if ($updated !== null) {
-                        if (function_exists('app_log')) {
-                            app_log('grok', 'Grok chose ' . $searchSource . ' "' . $picked->title . '" for ' . $filename . '.', [
-                                'id' => $id,
-                                'lookup_id' => $picked->lookupId,
-                            ]);
-                        }
-                        header('Location: title.php?id=' . rawurlencode($id), true, 303);
-                        exit;
-                    }
-                    $error = 'Could not update the catalog. Check cache/ permissions.';
-                }
-            }
-            if ($error === '') {
-                $grokNote = 'Grok could not choose a title from these results. Pick one below.';
-            }
-        }
     }
     $payload = [
         'results' => $rows,
@@ -306,6 +460,20 @@ if (!$fileBlocked && $item !== null && $siteSearch && $canSearch) {
     if ($q !== '') {
         $payload = tmdb_search_results($q, $year, $page, $searchMedia);
         $relaxedYear = !empty($payload['relaxed_year']);
+        if ($page <= 1 && ($payload['results'] ?? []) === [] && function_exists('search_query_strip_sequence_one')) {
+            $withoutIndex = search_query_strip_sequence_one($q);
+            if ($withoutIndex !== null && strcasecmp($withoutIndex, $q) !== 0) {
+                if (function_exists('app_log')) {
+                    app_log('tmdb', 'TMDB match search for "' . $q . '" had no hits; trying "' . $withoutIndex . '". file=' . $filename);
+                }
+                $retry = tmdb_search_results($withoutIndex, $year, 1, $searchMedia);
+                if (($retry['results'] ?? []) !== []) {
+                    $payload = $retry;
+                    $relaxedYear = !empty($payload['relaxed_year']);
+                    $droppedSequenceOne = true;
+                }
+            }
+        }
     } else {
         $mode = 'popular';
         $payload = tmdb_popular_results($page, $searchMedia);
@@ -315,6 +483,27 @@ if (!$fileBlocked && $item !== null && $siteSearch && $canSearch) {
 $results = $payload['results'];
 $page = (int) ($payload['page'] ?? $page);
 $totalPages = (int) ($payload['total_pages'] ?? 1);
+if (!$fileBlocked && is_array($item) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+    $auto = match_auto_resolve(
+        $id,
+        $item,
+        is_array($results) ? $results : [],
+        $page,
+        $totalPages,
+        $mode,
+        $searchSource,
+        $queryText,
+        $filename,
+        $searchVia,
+        $searchMedia
+    );
+    if ($error === '' && $auto['error'] !== '') {
+        $error = $auto['error'];
+    }
+    if ($auto['grokNote'] !== '') {
+        $grokNote = $auto['grokNote'];
+    }
+}
 $currentTmdb = is_array($item) && !empty($item['tmdb_id']) ? (int) $item['tmdb_id'] : 0;
 $currentLookup = is_array($item) ? (string) ($item['lookup_id'] ?? '') : '';
 

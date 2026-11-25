@@ -24,6 +24,8 @@ require_once __DIR__ . '/parser.php';
  *     folder, not only the episode filename.
  * - TV: Archer/01_Mole Hunt (Aka Pilot).mp4 → query is Archer, not the filename.
  *     A one-word series name is not a weak movie query.
+ * - Extraction 1.mp4 and Extraction 01.mp4 also try Extraction. A later
+ *     number such as Extraction 2 is left as written.
  */
 
 function search_query_junk_pattern(): string
@@ -201,6 +203,59 @@ function search_query_skip_as_weak(string $q, bool $isTv): bool
         return $reason !== '' && $reason !== 'empty series name';
     }
     return search_query_is_weak($q);
+}
+
+/**
+ * Drop only a leading or trailing sequence index of 1 or 01.
+ * "Extraction 1", "Extraction-01", and "01 Extraction" become "Extraction".
+ * "Extraction 2", "Extraction 10", and "Extraction 02" are unchanged.
+ */
+function search_query_strip_sequence_one(string $s): ?string
+{
+    $s = trim(preg_replace('/\s+/', ' ', $s) ?? $s);
+    if ($s === '') {
+        return null;
+    }
+    $next = preg_replace('/^(?:01|1)[\s._-]+/u', '', $s, 1);
+    if (!is_string($next) || strcasecmp(trim($next), $s) === 0) {
+        $next = preg_replace('/[\s._-]+(?:01|1)$/u', '', $s, 1);
+    }
+    if (!is_string($next)) {
+        return null;
+    }
+    $next = trim($next, " \t.-_");
+    if ($next === '' || strcasecmp($next, $s) === 0) {
+        return null;
+    }
+    if (!preg_match('/[a-z]{2,}/i', $next)) {
+        return null;
+    }
+    return $next;
+}
+
+/**
+ * A movie query that is only the title with its first sequence number removed
+ * is still worth using, even when the remainder is a single word.
+ */
+function search_query_keeps_sequence_one_hit(string $query, string $title, string $filename = ''): bool
+{
+    $query = trim($query);
+    if ($query === '') {
+        return false;
+    }
+    foreach ([$title, $filename] as $src) {
+        if ($src === '') {
+            continue;
+        }
+        $candidates = [$src, search_query_clean($src)];
+        foreach ($candidates as $one) {
+            $stripped = search_query_strip_sequence_one($one);
+            if ($stripped !== null && strcasecmp($stripped, $query) === 0) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 function search_query_peel_trailing(string $s): ?string
@@ -522,7 +577,13 @@ function tmdb_search_queries(string $parsedTitle, string $rawFilename = '', ?int
         }
         // /search/tv finds the series. The episode filename is not a query.
         // One-word show names are pushed even though movie scans call them weak.
-        foreach ([$show, search_query_drop_article($show)] as $seriesQuery) {
+        $seriesQueries = [$show, search_query_drop_article($show)];
+        $showOne = search_query_strip_sequence_one($show);
+        if ($showOne !== null) {
+            $seriesQueries[] = $showOne;
+            $seriesQueries[] = search_query_drop_article($showOne);
+        }
+        foreach ($seriesQueries as $seriesQuery) {
             $seriesQuery = trim($seriesQuery);
             if ($seriesQuery === '') {
                 continue;
@@ -558,9 +619,17 @@ function tmdb_search_queries(string $parsedTitle, string $rawFilename = '', ?int
             $primary = $cleanFile;
         }
         search_query_push($out, $primary, $seen, true);
+        $sequenceOne = search_query_strip_sequence_one($primary);
+        if ($sequenceOne !== null) {
+            search_query_push($out, $sequenceOne, $seen, true);
+        }
     }
     if (!$isTv && $cleanFile !== '' && strcasecmp($cleanFile, $primary) !== 0) {
         search_query_push($out, $cleanFile, $seen, true);
+        $fileOne = search_query_strip_sequence_one($cleanFile);
+        if ($fileOne !== null) {
+            search_query_push($out, $fileOne, $seen, true);
+        }
     }
 
     $peeled = search_query_peel_trailing($primary);

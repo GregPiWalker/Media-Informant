@@ -152,6 +152,8 @@ if ($mode === 'popular') {
     MST3K results
     <?php elseif ($onRiff): ?>
     RiffTrax results
+    <?php elseif (!empty($droppedSequenceOne)): ?>
+    No hits with that sequence number — showing the title without it
     <?php elseif ($relaxedYear): ?>
     No hits for that year — showing all years
     <?php else: ?>

@@ -60,6 +60,10 @@ function grok_token_rates(string $model): array
     return $fallback + ['fallback' => true];
 }
 define('GROK_BATCH_SIZE', 25);
+/** Titles sent to Grok in one Smart Search call. Clamp is 10–60. */
+define('SMART_SEARCH_BATCH_SIZE', 36);
+/** How many Smart Search batches one question may run. Clamp is 1–8. */
+define('SMART_SEARCH_MAX_BATCHES', 5);
 define('GROK_MIN_CONFIDENCE', 0.75);
 define('GROK_BATCH_SLEEP_US', 400000);
 define('GROK_BATCHES_PER_REQUEST', 3);
@@ -315,7 +319,7 @@ function render_start(string $title): void
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - light theme_160.png'))) ?>" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="<?= h(app_href('images/' . rawurlencode('informant logo - dark theme_160.png'))) ?>" media="(prefers-color-scheme: dark)">
-<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=73">
+<link rel="stylesheet" href="<?= h(app_href('assets/mobile.css')) ?>?v=78">
 </head>
 <body>
 <?php
@@ -406,10 +410,18 @@ function render_header(array $opts = []): void
     </a>
   </nav>
   <?php endif; ?>
-  <?php if ($showSearch): ?>
-  <div class="search-wrap">
+  <?php if ($showSearch):
+      $smartSearch = $section === 'video'
+          && function_exists('settings_xai_key')
+          && trim(settings_xai_key()) !== ''
+          && function_exists('curl_init');
+      ?>
+  <div class="search-wrap<?= $smartSearch ? ' has-smart' : '' ?>">
     <label class="visually-hidden" for="catalog-search">Search titles</label>
     <input id="catalog-search" type="search" class="search-input" data-search-input placeholder="Find a title" autocomplete="off" autocapitalize="off" enterkeyhint="search" spellcheck="false">
+    <?php if ($smartSearch): ?>
+    <a class="search-smart" href="<?= h(app_href('video/smart.php')) ?>">Smart</a>
+    <?php endif; ?>
     <button type="button" class="search-clear" data-search-clear hidden aria-label="Clear search">
       <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
     </button>
@@ -511,7 +523,7 @@ function render_end(): void
     <ol class="log-console-list" data-log-list></ol>
   </div>
 </div>
-<script src="<?= h(app_href('assets/app.js')) ?>?v=76" defer></script>
+<script src="<?= h(app_href('assets/app.js')) ?>?v=83" defer></script>
 </body>
 </html>
 <?php

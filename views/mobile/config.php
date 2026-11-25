@@ -96,9 +96,9 @@ render_start('Config · Media Informant');
 render_header(['section' => 'config', 'branches' => true]);
 
 $languages = settings_languages();
-$configTab = (string) ($configTab ?? 'video');
-if ($configTab !== 'music' && $configTab !== 'general') {
-    $configTab = 'video';
+$configTab = (string) ($configTab ?? 'general');
+if ($configTab !== 'video' && $configTab !== 'music' && $configTab !== 'general') {
+    $configTab = 'general';
 }
 ?>
 <main class="page config-page">
@@ -347,13 +347,26 @@ if ($configTab !== 'music' && $configTab !== 'general') {
       </label>
     </section>
 
-    <section class="form-section">
+    <?php
+    $grokKeyState = (string) ($grokKeyState ?? '');
+    if ($grokKeyState !== 'valid' && $grokKeyState !== 'invalid') {
+        $grokKeyState = '';
+    }
+    $grokKeyNote = $grokKeyState === 'valid'
+        ? 'This key can reach Grok.'
+        : ($grokKeyState === 'invalid' ? 'This key was rejected.' : '');
+    ?>
+    <section class="form-section" data-grok-key data-grok-test-url="<?= h(app_href('config/grok-test.php')) ?>"<?= $grokKeyState !== '' ? ' data-grok-status="' . h($grokKeyState) . '"' : '' ?>>
       <h2>xAI Grok</h2>
-      <p class="hint">Optional stage 2 of Scan for ambiguous TMDB hits. Get a key at <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a>. Toggle Grok on the scan page without stopping.</p>
-      <label class="field">
-        <span class="field-label">API key</span>
-        <input type="password" name="xai_api_key" class="folder-input" value="<?= h((string) ($settings['xai_api_key'] ?? '')) ?>" spellcheck="false" autocapitalize="off" autocomplete="off">
-      </label>
+      <p class="hint">Optional stage 2 of Scan for ambiguous TMDB hits. Get a key at <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer">console.x.ai</a>. Toggle Grok on the scan page without stopping. Test sends a short hello and does not save the key.</p>
+      <div class="grok-key-row">
+        <label class="field grok-key-field">
+          <span class="field-label">API key</span>
+          <input type="password" name="xai_api_key" class="folder-input" data-grok-key-input value="<?= h((string) ($settings['xai_api_key'] ?? '')) ?>" spellcheck="false" autocapitalize="off" autocomplete="off">
+        </label>
+        <button type="button" class="btn btn-ghost" data-grok-test>Test</button>
+      </div>
+      <p class="grok-key-status" data-grok-key-status<?= $grokKeyNote === '' ? ' hidden' : '' ?>><?= h($grokKeyNote) ?></p>
     </section>
 
     <section class="form-section">

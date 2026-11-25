@@ -601,9 +601,14 @@
       toggle.setAttribute('aria-expanded', 'false');
       toggle.classList.remove('is-active');
     }
-    var play = document.querySelector('[data-kodi-play]');
     var playName = (pick.textContent || '').replace(/^\s+|\s+$/g, '');
-    if (play && playName) play.textContent = 'Play on ' + playName;
+    if (playName) {
+      var plays = document.querySelectorAll('[data-kodi-play]');
+      var playLabel = 'Play on ' + playName;
+      for (var p = 0; p < plays.length; p++) plays[p].textContent = playLabel;
+      var labeled = document.querySelectorAll('[data-kodi-label]');
+      for (var q = 0; q < labeled.length; q++) labeled[q].setAttribute('data-kodi-label', playLabel);
+    }
   });
 
   document.addEventListener('click', function (event) {
@@ -613,12 +618,15 @@
     if (play.disabled) return;
     var url = play.getAttribute('data-kodi-url') || '';
     var id = play.getAttribute('data-kodi-id') || '';
-    var status = document.querySelector('[data-kodi-status]');
+    var scope = play.closest('[data-kodi-scope]');
+    var status = scope ? scope.querySelector('[data-kodi-status]') : document.querySelector('[data-kodi-status]');
     if (!url || !id) return;
     play.disabled = true;
+    var statusScoped = '';
     if (status) {
+      statusScoped = status.classList.contains('smart-hit-status') ? ' smart-hit-status' : '';
       status.hidden = false;
-      status.className = 'form-banner';
+      status.className = 'form-banner' + statusScoped;
       status.setAttribute('role', 'status');
       status.textContent = 'Sending to Kodi…';
     }
@@ -630,7 +638,7 @@
         if (!status) return;
         var ok = !!(data && data.ok);
         status.hidden = false;
-        status.className = 'form-banner ' + (ok ? 'is-ok' : 'is-error');
+        status.className = 'form-banner ' + (ok ? 'is-ok' : 'is-error') + statusScoped;
         status.setAttribute('role', ok ? 'status' : 'alert');
         status.textContent = ok
           ? ((data && data.message) || 'Playing.')
@@ -640,7 +648,7 @@
       .catch(function () {
         if (!status) return;
         status.hidden = false;
-        status.className = 'form-banner is-error';
+        status.className = 'form-banner is-error' + statusScoped;
         status.setAttribute('role', 'alert');
         status.textContent = 'Could not reach Kodi.';
       })
@@ -689,8 +697,8 @@
   var configTabs = document.querySelectorAll('[data-config-tab]');
   if (configTabs.length) {
     function showConfigTab(id) {
-      if (id !== 'music' && id !== 'general') {
-        id = 'video';
+      if (id !== 'video' && id !== 'music' && id !== 'general') {
+        id = 'general';
       }
       configTabs.forEach(function (tab) {
         var on = tab.getAttribute('data-config-tab') === id;
@@ -710,7 +718,7 @@
     }
     configTabs.forEach(function (tab) {
       tab.addEventListener('click', function () {
-        showConfigTab(tab.getAttribute('data-config-tab') || 'video');
+        showConfigTab(tab.getAttribute('data-config-tab') || 'general');
       });
     });
   }
@@ -4039,4 +4047,436 @@
   window.addEventListener('pageshow', function (event) {
     if (event.persisted) refreshReset();
   });
+
+  var smartRoot = document.querySelector('[data-smart-search]');
+  if (smartRoot && smartRoot.getAttribute('data-configured') === '1') {
+    var smartLog = smartRoot.querySelector('[data-smart-log]');
+    var smartCost = smartRoot.querySelector('[data-smart-cost]');
+    var smartError = smartRoot.querySelector('[data-smart-error]');
+    var smartRetryWrap = smartRoot.querySelector('[data-smart-retry-wrap]');
+    var smartForm = smartRoot.querySelector('[data-smart-form]');
+    var smartInput = smartRoot.querySelector('[data-smart-input]');
+    var smartSend = smartRoot.querySelector('[data-smart-send]');
+    var smartTimer = 0;
+    var smartSignature = '';
+    var smartState = { messages: [], status: 'idle' };
+
+    function smartText(value) {
+      return (value == null ? '' : String(value));
+    }
+
+    function smartInitial(title) {
+      var text = smartText(title).replace(/^\s+/, '');
+      return text ? text.charAt(0).toUpperCase() : '?';
+    }
+
+    function smartReadState() {
+      var node = document.getElementById('smart-search-state');
+      if (!node) return;
+      try {
+        var parsed = JSON.parse(node.textContent || '');
+        if (parsed && typeof parsed === 'object') smartApply(parsed, false);
+      } catch (err) {}
+    }
+
+    function smartApply(data, scroll) {
+      if (!data || typeof data !== 'object') return;
+      smartState = data;
+      if (smartCost) {
+        smartCost.textContent = 'This turn ' + (data.turn_cost || '$0.0000') + ' · Chat ' + (data.total_cost || '$0.0000');
+      }
+      if (smartError) {
+        var err = smartText(data.error);
+        smartError.hidden = err === '';
+        smartError.textContent = err;
+      }
+      if (smartRetryWrap) smartRetryWrap.hidden = data.status !== 'error';
+      var clearing = data.status === 'discard' || data.pending_discard;
+      var running = data.status === 'running' || clearing;
+      if (smartInput) smartInput.disabled = !!running;
+      if (smartSend) smartSend.disabled = !!running;
+      var signature = [
+        data.status || '',
+        data.progress || '',
+        (data.messages && data.messages.length) || 0,
+        data.error || '',
+        data.turn_cost || '',
+        data.total_cost || '',
+        clearing ? '1' : '0'
+      ].join('\n');
+      if (signature !== smartSignature) {
+        smartSignature = signature;
+        smartRender(data);
+        if (scroll) {
+          window.scrollTo(0, Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
+        }
+      }
+      if (smartTimer) {
+        window.clearTimeout(smartTimer);
+        smartTimer = 0;
+      }
+      if (running) {
+        smartTimer = window.setTimeout(function () { smartContinue(); }, 700);
+      }
+    }
+
+    var smartHitOpen = {};
+    var smartHitKeys = '';
+    var smartHitsSeq = 0;
+
+    function smartHitsKey(index, msg) {
+      var results = msg && msg.results ? msg.results : [];
+      var parts = [String(index), String(results.length)];
+      var titleLimit = results.length < 3 ? results.length : 3;
+      for (var i = 0; i < titleLimit; i++) {
+        parts.push(smartText(results[i] && results[i].title).replace(/[\r\n\u001f]/g, ' '));
+      }
+      parts.push(smartText(msg && msg.body).replace(/[\r\n\u001f]/g, ' ').slice(0, 48));
+      return parts.join('\u001f');
+    }
+
+    function smartHitsSummary(results) {
+      var count = results.length;
+      var label = count === 1 ? '1 title' : (count + ' titles');
+      var names = [];
+      var nameLimit = count < 4 ? count : 4;
+      for (var i = 0; i < nameLimit; i++) {
+        var title = smartText(results[i] && results[i].title).replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+        if (title) names.push(title);
+      }
+      if (!names.length) return label;
+      return label + ' \u00b7 ' + names.join(', ');
+    }
+
+    function smartRender(data) {
+      if (!smartLog) return;
+      while (smartLog.firstChild) smartLog.removeChild(smartLog.firstChild);
+      smartHitsSeq = 0;
+      var messages = data.messages || [];
+      if (!messages.length && data.status !== 'running') {
+        var hint = document.createElement('p');
+        hint.className = 'smart-search-hint';
+        hint.textContent = 'Ask about titles already matched with TMDB. This does not look up new titles. For example: sci-fi from the 80s with time travel. A follow-up narrows these results.';
+        smartLog.appendChild(hint);
+      }
+      var plan = [];
+      var resultIndex = 0;
+      for (var i = 0; i < messages.length; i++) {
+        var msg = messages[i];
+        var results = msg && msg.role === 'assistant' && msg.results ? msg.results : [];
+        if (msg && msg.role === 'assistant' && results.length) {
+          plan.push({ msg: msg, key: smartHitsKey(resultIndex, msg) });
+          resultIndex += 1;
+        } else {
+          plan.push({ msg: msg, key: '' });
+        }
+      }
+      var keys = [];
+      for (var k = 0; k < plan.length; k++) {
+        if (plan[k].key) keys.push(plan[k].key);
+      }
+      var joined = keys.join('\n');
+      var sameSets = joined !== '' && joined === smartHitKeys;
+      smartHitKeys = joined;
+      var lastKey = keys.length ? keys[keys.length - 1] : '';
+      for (var n = 0; n < plan.length; n++) {
+        var item = plan[n];
+        var open = false;
+        if (item.key) {
+          if (!sameSets) {
+            open = item.key === lastKey;
+          } else if (Object.prototype.hasOwnProperty.call(smartHitOpen, item.key)) {
+            open = !!smartHitOpen[item.key];
+          } else {
+            open = item.key === lastKey;
+          }
+          smartHitOpen[item.key] = open;
+        }
+        smartRenderMessage(item.msg, item.key, open);
+      }
+      var clearing = data.status === 'discard' || data.pending_discard;
+      if ((data.status === 'running' || clearing) && (data.progress || clearing)) {
+        var progress = document.createElement('p');
+        progress.className = 'smart-search-progress';
+        progress.setAttribute('role', 'status');
+        progress.textContent = smartText(data.progress) || 'Clearing the search…';
+        smartLog.appendChild(progress);
+      }
+    }
+
+    function smartRenderMessage(msg, hitKey, hitOpen) {
+      var role = msg && msg.role === 'assistant' ? 'assistant' : 'user';
+      var block = document.createElement('article');
+      block.className = 'smart-msg smart-msg-' + role;
+      var body = document.createElement('p');
+      body.className = 'smart-msg-body';
+      body.textContent = smartText(msg && msg.body);
+      block.appendChild(body);
+      var results = msg && msg.results ? msg.results : [];
+      if (role === 'assistant' && results.length) {
+        var wrap = document.createElement('div');
+        wrap.className = 'smart-hits';
+        wrap.setAttribute('data-smart-hits', '');
+        wrap.setAttribute('data-smart-hits-key', hitKey || '');
+        var listId = 'smart-hits-list-' + String(smartHitsSeq);
+        smartHitsSeq += 1;
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'smart-hits-toggle';
+        toggle.setAttribute('data-smart-hits-toggle', '');
+        toggle.setAttribute('aria-expanded', hitOpen ? 'true' : 'false');
+        toggle.setAttribute('aria-controls', listId);
+        var caret = document.createElement('span');
+        caret.className = 'expand-caret';
+        caret.setAttribute('aria-hidden', 'true');
+        var summary = document.createElement('span');
+        summary.className = 'smart-hits-summary';
+        summary.textContent = smartHitsSummary(results);
+        toggle.appendChild(caret);
+        toggle.appendChild(summary);
+        var list = document.createElement('div');
+        list.className = 'smart-hits-list';
+        list.id = listId;
+        list.setAttribute('data-smart-hits-list', '');
+        if (!hitOpen) list.hidden = true;
+        for (var i = 0; i < results.length; i++) list.appendChild(smartHit(results[i]));
+        wrap.appendChild(toggle);
+        wrap.appendChild(list);
+        block.appendChild(wrap);
+      }
+      smartLog.appendChild(block);
+    }
+
+    function smartHit(card) {
+      var row = document.createElement('article');
+      row.className = 'smart-hit';
+      var thumb;
+      if (card.href) {
+        thumb = document.createElement('a');
+        thumb.href = card.href;
+      } else {
+        thumb = document.createElement('div');
+      }
+      thumb.className = 'smart-hit-thumb';
+      if (card.poster) {
+        var img = document.createElement('img');
+        img.src = card.poster;
+        img.alt = '';
+        img.width = 50;
+        img.height = 75;
+        thumb.appendChild(img);
+      } else {
+        var fallback = document.createElement('span');
+        fallback.className = 'smart-hit-fallback';
+        fallback.textContent = smartInitial(card.title);
+        thumb.appendChild(fallback);
+      }
+      row.appendChild(thumb);
+      var copy = document.createElement('div');
+      copy.className = 'smart-hit-copy';
+      var title = document.createElement(card.href ? 'a' : 'span');
+      title.className = 'smart-hit-title';
+      if (card.href) title.href = card.href;
+      title.textContent = smartText(card.title) || 'Untitled';
+      copy.appendChild(title);
+      var meta = document.createElement('p');
+      meta.className = 'smart-hit-meta';
+      meta.textContent = card.year ? smartText(card.year) : 'Year unknown';
+      copy.appendChild(meta);
+      if (card.overview) {
+        var overview = document.createElement('p');
+        overview.className = 'smart-hit-overview';
+        overview.textContent = smartText(card.overview);
+        copy.appendChild(overview);
+      }
+      if (smartRoot.getAttribute('data-kodi') === '1' && card.play_id) {
+        var scope = document.createElement('div');
+        scope.setAttribute('data-kodi-scope', '');
+        var play = document.createElement('button');
+        play.type = 'button';
+        play.className = 'btn btn-accent smart-hit-play';
+        play.setAttribute('data-kodi-play', '');
+        play.setAttribute('data-kodi-id', card.play_id);
+        play.setAttribute('data-kodi-url', smartRoot.getAttribute('data-kodi-url') || '');
+        play.textContent = smartRoot.getAttribute('data-kodi-label') || 'Play on Kodi';
+        var status = document.createElement('p');
+        status.className = 'form-banner smart-hit-status';
+        status.setAttribute('data-kodi-status', '');
+        status.hidden = true;
+        status.setAttribute('role', 'status');
+        scope.appendChild(play);
+        scope.appendChild(status);
+        copy.appendChild(scope);
+      }
+      row.appendChild(copy);
+      return row;
+    }
+
+    function smartContinue() {
+      smartPost('continue').then(function (data) {
+        smartApply(data, true);
+      }).catch(function () {
+        if (smartError) {
+          smartError.hidden = false;
+          smartError.textContent = 'Could not reach Smart Search.';
+        }
+        smartTimer = window.setTimeout(function () { smartContinue(); }, 1500);
+      });
+    }
+
+    function smartPost(action, text) {
+      var body = new FormData();
+      body.append('action', action);
+      if (text) body.append('text', text);
+      return fetch(smartRoot.getAttribute('data-run-url') || '', {
+        method: 'POST',
+        body: body,
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(function (res) { return res.json(); });
+    }
+
+    if (smartForm) {
+      smartForm.addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (!smartInput || smartInput.disabled) return;
+        var text = smartText(smartInput.value).replace(/^\s+|\s+$/g, '');
+        if (!text) return;
+        smartInput.disabled = true;
+        if (smartSend) smartSend.disabled = true;
+        smartPost('send', text).then(function (data) {
+          if (data && data.ok !== false) smartInput.value = '';
+          smartApply(data, true);
+        }).catch(function () {
+          smartPost('continue').then(function (data) {
+            if (data && data.status === 'running' && smartInput) smartInput.value = '';
+            smartApply(data, true);
+          }).catch(function () {
+            if (smartInput) smartInput.disabled = false;
+            if (smartSend) smartSend.disabled = false;
+            if (smartError) {
+              smartError.hidden = false;
+              smartError.textContent = 'Could not reach Smart Search.';
+            }
+          });
+        });
+      });
+    }
+
+    if (smartInput) {
+      smartInput.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.shiftKey) return;
+        event.preventDefault();
+        if (smartSend && !smartSend.disabled) smartSend.click();
+      });
+    }
+
+    var smartNew = smartRoot.querySelector('[data-smart-new]');
+    if (smartNew) {
+      smartNew.addEventListener('click', function () {
+        var messages = smartState.messages || [];
+        if (messages.length && !window.confirm('Discard this search?')) return;
+        smartPost('discard').then(function (data) {
+          if (smartInput) smartInput.value = '';
+          smartApply(data, false);
+        }).catch(function () {
+          if (smartError) {
+            smartError.hidden = false;
+            smartError.textContent = 'Could not discard this search.';
+          }
+        });
+      });
+    }
+
+    var smartRetry = smartRoot.querySelector('[data-smart-retry]');
+    if (smartRetry) {
+      smartRetry.addEventListener('click', function () {
+        smartPost('retry').then(function (data) { smartApply(data, true); }).catch(function () {
+          if (smartError) {
+            smartError.hidden = false;
+            smartError.textContent = 'Could not reach Smart Search.';
+          }
+        });
+      });
+    }
+
+    if (smartLog) {
+      smartLog.addEventListener('click', function (event) {
+        var toggle = event.target.closest('[data-smart-hits-toggle]');
+        if (!toggle || !smartLog.contains(toggle)) return;
+        var wrap = toggle.closest('[data-smart-hits]');
+        if (!wrap) return;
+        var list = wrap.querySelector('[data-smart-hits-list]');
+        var open = toggle.getAttribute('aria-expanded') !== 'true';
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (list) list.hidden = !open;
+        var key = wrap.getAttribute('data-smart-hits-key') || '';
+        if (key) smartHitOpen[key] = open;
+      });
+    }
+
+    smartReadState();
+  }
+
+  var grokKey = document.querySelector('[data-grok-key]');
+  if (grokKey) {
+    var grokInput = grokKey.querySelector('[data-grok-key-input]');
+    var grokButton = grokKey.querySelector('[data-grok-test]');
+    var grokStatus = grokKey.querySelector('[data-grok-key-status]');
+    var grokTested = grokInput ? grokInput.value : '';
+
+    function grokTrim(value) {
+      return String(value == null ? '' : value).replace(/^\s+|\s+$/g, '');
+    }
+
+    function grokPaint(status, message) {
+      if (status === 'valid' || status === 'invalid') grokKey.setAttribute('data-grok-status', status);
+      else grokKey.removeAttribute('data-grok-status');
+      if (!grokStatus) return;
+      grokStatus.textContent = message || '';
+      grokStatus.hidden = !message;
+    }
+
+    if (grokInput) {
+      grokInput.addEventListener('input', function () {
+        if (grokInput.value !== grokTested) grokPaint('', '');
+      });
+    }
+
+    if (grokButton && grokInput) {
+      grokButton.addEventListener('click', function () {
+        if (grokButton.disabled) return;
+        var sent = grokTrim(grokInput.value);
+        grokButton.disabled = true;
+        grokButton.classList.add('is-busy');
+        grokButton.setAttribute('aria-busy', 'true');
+        grokButton.textContent = 'Testing\u2026';
+        var body = new FormData();
+        body.append('xai_api_key', sent);
+        fetch(grokKey.getAttribute('data-grok-test-url') || '', {
+          method: 'POST',
+          body: body,
+          credentials: 'same-origin',
+          cache: 'no-store'
+        }).then(function (res) {
+          return res.json();
+        }).then(function (data) {
+          if (grokTrim(grokInput.value) !== sent) return;
+          var message = data && data.message ? String(data.message) : 'This key could not be tested.';
+          if (data && data.valid) grokPaint('valid', message);
+          else grokPaint('invalid', message);
+          grokTested = grokInput.value;
+        }).catch(function () {
+          if (grokTrim(grokInput.value) !== sent) return;
+          grokPaint('invalid', 'Could not reach the key test.');
+          grokTested = grokInput.value;
+        }).then(function () {
+          grokButton.disabled = false;
+          grokButton.classList.remove('is-busy');
+          grokButton.removeAttribute('aria-busy');
+          grokButton.textContent = 'Test';
+        });
+      });
+    }
+  }
 })();

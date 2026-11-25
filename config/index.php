@@ -5,6 +5,7 @@ require dirname(__DIR__) . '/lib/config.php';
 require_once dirname(__DIR__) . '/lib/cache.php';
 require_once dirname(__DIR__) . '/lib/settings.php';
 require dirname(__DIR__) . '/lib/scanner.php';
+require_once dirname(__DIR__) . '/lib/grok.php';
 
 cache_init();
 
@@ -186,9 +187,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 'music_roots' => is_array($payload['music_roots']) ? count($payload['music_roots']) : 0,
             ]);
         }
-        $tab = (string) ($_POST['config_tab'] ?? 'video');
-        if ($tab !== 'music' && $tab !== 'general') {
-            $tab = 'video';
+        $tab = (string) ($_POST['config_tab'] ?? 'general');
+        if ($tab !== 'video' && $tab !== 'music' && $tab !== 'general') {
+            $tab = 'general';
         }
         header('Location: index.php?saved=1&tab=' . rawurlencode($tab), true, 303);
         exit;
@@ -251,9 +252,13 @@ if ($kodiRows === []) {
     $kodiRows[] = ['id' => '', 'name' => '', 'host' => '', 'port' => '', 'user' => '', 'pass' => ''];
 }
 
-$configTab = (string) ($_GET['tab'] ?? $_POST['config_tab'] ?? 'video');
-if ($configTab !== 'music' && $configTab !== 'general') {
-    $configTab = 'video';
+$grokKeyState = function_exists('grok_key_check_state')
+    ? grok_key_check_state((string) ($settings['xai_api_key'] ?? ''))
+    : '';
+
+$configTab = (string) ($_GET['tab'] ?? $_POST['config_tab'] ?? 'general');
+if ($configTab !== 'video' && $configTab !== 'music' && $configTab !== 'general') {
+    $configTab = 'general';
 }
 
 require app_view('config');
