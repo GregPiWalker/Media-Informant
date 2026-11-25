@@ -85,10 +85,6 @@ final class CatalogPreferences
         public array $kinds = ['movie', 'show', 'documentary'],
         public array $categories = [],
         public array $watched = ['yes', 'no'],
-        public string $posterSort = 'title',
-        public string $posterDir = 'asc',
-        public string $genreSort = 'alpha',
-        public string $browse = 'poster',
     ) {
     }
 
@@ -225,18 +221,7 @@ final class CatalogPreferences
             }
         }
 
-        $posterSort = (string) ($data['poster_sort'] ?? 'title');
-        if (!in_array($posterSort, ['title', 'year', 'rating', 'added'], true)) {
-            $posterSort = 'title';
-        }
-        $posterDir = strtolower((string) ($data['poster_dir'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
-        $genreSort = (string) ($data['genre_sort'] ?? 'alpha') === 'count' ? 'count' : 'alpha';
-        $browse = (string) ($data['browse'] ?? '');
-        if ($browse !== 'list' && $browse !== 'poster') {
-            $browse = $view === 'list' ? 'list' : 'poster';
-        }
-
-        return new self($view, $visible, $sort, $dir, $kindOut, $catOut, $watchOut, $posterSort, $posterDir, $genreSort, $browse);
+        return new self($view, $visible, $sort, $dir, $kindOut, $catOut, $watchOut);
     }
 
     public function colsAttr(): string
@@ -312,9 +297,6 @@ final class CatalogRecord
         public string $sourceFolder = '',
         public string $sourceFolderKey = '',
         public ?int $watchedAt = null,
-        public ?float $rating = null,
-        public ?int $addedAt = null,
-        public string $blurb = '',
     ) {
     }
 
@@ -507,9 +489,6 @@ final class CatalogRecord
             $sourceFolder,
             $sourceFolderKey,
             catalog_watched_stamp($item),
-            catalog_item_rating($item),
-            catalog_item_added($item),
-            catalog_item_blurb($item),
         );
     }
 
@@ -560,57 +539,6 @@ function catalog_watched_stamp(array $item): ?int
     }
     $stamp = (int) $stamp;
     return $stamp > 0 ? $stamp : null;
-}
-
-function catalog_item_rating(array $item): ?float
-{
-    if (!isset($item['vote_average']) || !is_numeric($item['vote_average'])) {
-        return null;
-    }
-    $score = (float) $item['vote_average'];
-    if ($score <= 0 || $score > 10) {
-        return null;
-    }
-    if (array_key_exists('vote_count', $item) && $item['vote_count'] !== null && $item['vote_count'] !== '' && (int) $item['vote_count'] < 1) {
-        return null;
-    }
-    return $score;
-}
-
-function catalog_item_added(array $item): ?int
-{
-    $stamp = $item['added_at'] ?? null;
-    if (!is_numeric($stamp)) {
-        return null;
-    }
-    $stamp = (int) $stamp;
-    return $stamp > 0 ? $stamp : null;
-}
-
-function catalog_item_blurb(array $item, int $limit = 180): string
-{
-    $text = trim((string) ($item['overview'] ?? ''));
-    if ($text === '') {
-        return '';
-    }
-    $collapsed = preg_replace('/\s+/u', ' ', $text);
-    if (!is_string($collapsed)) {
-        $collapsed = preg_replace('/\s+/', ' ', $text);
-    }
-    $text = trim(is_string($collapsed) ? $collapsed : $text);
-    if ($text === '') {
-        return '';
-    }
-    $length = function_exists('mb_strlen') ? mb_strlen($text, 'UTF-8') : strlen($text);
-    if ($length <= $limit) {
-        return $text;
-    }
-    $cut = function_exists('mb_substr') ? mb_substr($text, 0, $limit, 'UTF-8') : substr($text, 0, $limit);
-    $space = function_exists('mb_strrpos') ? mb_strrpos($cut, ' ', 0, 'UTF-8') : strrpos($cut, ' ');
-    if ($space !== false && $space > (int) ($limit * 0.6)) {
-        $cut = function_exists('mb_substr') ? mb_substr($cut, 0, (int) $space, 'UTF-8') : substr($cut, 0, (int) $space);
-    }
-    return rtrim((string) $cut, " \t.,;:—-") . '…';
 }
 
 /** @param list<string> $genres */
@@ -675,27 +603,6 @@ function catalog_poster_bucket(CatalogGroup $group, string $sort): string
         $genre = catalog_first_genre_name($head->genres);
         return $genre !== '' ? $genre : 'Uncategorized';
     }
-    if ($sort === 'rating') {
-        $best = catalog_group_best_rating($group);
-        if ($best === null) {
-            return 'Unrated';
-        }
-        $band = (int) floor($best);
-        if ($band >= 10) {
-            return '10';
-        }
-        if ($band < 1) {
-            return 'Under 1';
-        }
-        return (string) $band;
-    }
-    if ($sort === 'added') {
-        $added = catalog_group_min_added($group);
-        if ($added === null) {
-            return 'Unknown';
-        }
-        return date('Y', $added);
-    }
     $title = (string) ($head->sortKeys['title'] ?? '');
     if ($title === '') {
         $title = $group->isSeries() ? $head->seriesTitle : $head->title;
@@ -739,42 +646,6 @@ function catalog_movie_folder(string $root, string $path, string $filename = '')
     return '';
 }
 
-function catalog_group_best_rating(CatalogGroup $group): ?float
-{
-    $best = null;
-    foreach ($group->members as $member) {
-        if ($member->rating !== null && ($best === null || $member->rating > $best)) {
-            $best = $member->rating;
-        }
-    }
-    return $best;
-}
-
-function catalog_group_min_added(CatalogGroup $group): ?int
-{
-    $min = null;
-    foreach ($group->members as $member) {
-        if ($member->addedAt !== null && $member->addedAt > 0 && ($min === null || $member->addedAt < $min)) {
-            $min = $member->addedAt;
-        }
-    }
-    return $min;
-}
-
-function catalog_group_rating_key(CatalogGroup $group): string
-{
-    $best = catalog_group_best_rating($group);
-    if ($best === null) {
-        return '0';
-    }
-    return sprintf('1%08.3f', $best);
-}
-
-function catalog_group_added_key(CatalogGroup $group): string
-{
-    return sprintf('%010d', catalog_group_min_added($group) ?? 0);
-}
-
 /** @return array<string, string> */
 function catalog_poster_buckets(CatalogGroup $group): array
 {
@@ -783,8 +654,6 @@ function catalog_poster_buckets(CatalogGroup $group): array
         'year' => catalog_poster_bucket($group, 'year'),
         'status' => catalog_poster_bucket($group, 'status'),
         'genres' => catalog_poster_bucket($group, 'genres'),
-        'rating' => catalog_poster_bucket($group, 'rating'),
-        'added' => catalog_poster_bucket($group, 'added'),
     ];
 }
 
@@ -1141,83 +1010,6 @@ function catalog_group_href(CatalogGroup $group): string
     return 'group.php?key=' . rawurlencode($group->id);
 }
 
-/**
- * Poster sheet and sort fields for one title card.
- * Rating and date-added keys are group-level so they are not copied from the head row.
- *
- * @return array{
- *   title: string,
- *   year: string,
- *   rating_label: string,
- *   rating_key: string,
- *   added_key: string,
- *   blurb: string,
- *   play_id: string,
- *   watch_ids: string,
- *   seasons: int,
- *   episodes: int,
- *   parts: int,
- *   href: string
- * }
- */
-function catalog_group_facts(CatalogGroup $group): array
-{
-    $head = $group->head;
-    $title = $group->isSeries()
-        ? ($head->seriesTitle !== '' ? $head->seriesTitle : $head->title)
-        : $head->title;
-    $best = catalog_group_best_rating($group);
-    $blurb = '';
-    $playId = '';
-    $ids = [];
-    foreach ($group->members as $member) {
-        if ($blurb === '' && $member->blurb !== '') {
-            $blurb = $member->blurb;
-        }
-        if (preg_match('/^[a-f0-9]{16}$/', $member->id) !== 1) {
-            continue;
-        }
-        $ids[] = $member->id;
-        if ($playId === '' && ($member->watchedAt === null || $member->watchedAt <= 0)) {
-            $playId = $member->id;
-        }
-        if (count($ids) >= 500) {
-            break;
-        }
-    }
-    if ($playId === '' && $ids !== []) {
-        $playId = $ids[0];
-    }
-    $seasons = 0;
-    $episodes = 0;
-    $parts = 0;
-    if ($group->isPartMovie()) {
-        $parts = count($group->members);
-    } elseif ($group->isSeries()) {
-        foreach ($group->seasonGroups() as $seasonGroup) {
-            $season = $seasonGroup['season'] ?? null;
-            if ($season !== null && (int) $season >= 1) {
-                $seasons++;
-            }
-        }
-        $episodes = count($group->episodeClusters());
-    }
-    return [
-        'title' => $title,
-        'year' => (string) ($head->cells['year'] ?? ''),
-        'rating_label' => $best !== null ? number_format($best, 1, '.', '') . ' / 10' : '',
-        'rating_key' => catalog_group_rating_key($group),
-        'added_key' => catalog_group_added_key($group),
-        'blurb' => $blurb,
-        'play_id' => $playId,
-        'watch_ids' => implode(' ', $ids),
-        'seasons' => $seasons,
-        'episodes' => $episodes,
-        'parts' => $parts,
-        'href' => $group->isSeries() ? catalog_group_href($group) : $head->href,
-    ];
-}
-
 function catalog_file_href_from_group(CatalogRecord $record, string $groupId): string
 {
     return 'title.php?id=' . rawurlencode($record->id) . '&gkey=' . rawurlencode($groupId);
@@ -1312,51 +1104,6 @@ function catalog_sort_groups(array $groups, CatalogPreferences $prefs): array
         return $cmp * $dir;
     });
     return $groups;
-}
-
-/** @param list<CatalogGroup> $groups */
-function catalog_poster_sort_key(CatalogGroup $group, string $col): string
-{
-    if ($col === 'rating') {
-        return catalog_group_rating_key($group);
-    }
-    if ($col === 'added') {
-        return catalog_group_added_key($group);
-    }
-    if ($col === 'year') {
-        return (string) ($group->head->sortKeys['year'] ?? '0000');
-    }
-    $title = $group->isSeries()
-        ? ($group->head->seriesTitle !== '' ? $group->head->seriesTitle : $group->head->title)
-        : $group->head->title;
-    return lower($title);
-}
-
-/** @param list<CatalogGroup> $groups */
-function catalog_sort_poster_groups(array $groups, CatalogPreferences $prefs): array
-{
-    $col = $prefs->posterSort;
-    $dir = $prefs->posterDir === 'desc' ? -1 : 1;
-    $decorated = [];
-    foreach ($groups as $group) {
-        $decorated[] = [
-            catalog_poster_sort_key($group, $col),
-            (string) ($group->head->sortKeys['title'] ?? ''),
-            $group,
-        ];
-    }
-    usort($decorated, static function (array $a, array $b) use ($dir): int {
-        $cmp = strnatcasecmp($a[0], $b[0]);
-        if ($cmp === 0) {
-            $cmp = strnatcasecmp($a[1], $b[1]);
-        }
-        return $cmp * $dir;
-    });
-    $out = [];
-    foreach ($decorated as $row) {
-        $out[] = $row[2];
-    }
-    return $out;
 }
 
 /**
@@ -1585,127 +1332,8 @@ function catalog_sort_records(array $records, CatalogPreferences $prefs): array
     return $records;
 }
 
-function catalog_genre_focus_name(string $raw): string
-{
-    $name = trim(str_replace(["\r", "\n", "\t"], ' ', $raw));
-    $name = trim((string) (preg_replace('/\s+/', ' ', $name) ?? $name));
-    if (function_exists('mb_substr')) {
-        return mb_substr($name, 0, 80, 'UTF-8');
-    }
-    return substr($name, 0, 80);
-}
-
 /** @param list<CatalogGroup> $groups */
-function catalog_groups_for_genre(array $groups, string $name): array
-{
-    $name = trim($name);
-    if ($name === '') {
-        return $groups;
-    }
-    $uncat = strcasecmp($name, 'Uncategorized') === 0;
-    $out = [];
-    foreach ($groups as $group) {
-        $genres = $group->genres();
-        if ($genres === []) {
-            if ($uncat) {
-                $out[] = $group;
-            }
-            continue;
-        }
-        foreach ($genres as $genre) {
-            if (strcasecmp($genre, $name) === 0) {
-                $out[] = $group;
-                break;
-            }
-        }
-    }
-    return $out;
-}
-
-/**
- * Up to four posters, preferring titles that already have artwork.
- *
- * @param list<CatalogGroup> $groups
- * @return list<array{poster: string, initial: string}>
- */
-function catalog_genre_thumbs(array $groups, int $limit = 4): array
-{
-    $posters = [];
-    $fallbacks = [];
-    foreach ($groups as $group) {
-        $title = $group->isSeries()
-            ? ($group->head->seriesTitle !== '' ? $group->head->seriesTitle : $group->head->title)
-            : $group->head->title;
-        $poster = (string) ($group->head->poster ?? '');
-        $row = [
-            'poster' => $poster,
-            'initial' => function_exists('initial') ? initial($title) : '',
-        ];
-        if ($poster !== '') {
-            $posters[] = $row;
-            if (count($posters) >= $limit) {
-                return $posters;
-            }
-            continue;
-        }
-        $fallbacks[] = $row;
-    }
-    foreach ($fallbacks as $row) {
-        $posters[] = $row;
-        if (count($posters) >= $limit) {
-            break;
-        }
-    }
-    return $posters;
-}
-
-/**
- * @param list<CatalogGroup> $groups
- * @return array{kinds: string, categories: string, search: string}
- */
-function catalog_genre_card_fields(string $name, array $groups): array
-{
-    $kinds = [];
-    $cats = [];
-    $search = lower($name);
-    $length = strlen($search);
-    foreach ($groups as $group) {
-        foreach ($group->members as $member) {
-            $kind = $member->kind !== '' ? $member->kind : 'movie';
-            if (!in_array($kind, $kinds, true)) {
-                $kinds[] = $kind;
-            }
-            $cat = $member->category !== '' ? $member->category : 'none';
-            if (!in_array($cat, $cats, true)) {
-                $cats[] = $cat;
-            }
-        }
-        if ($length >= 4000) {
-            continue;
-        }
-        $blob = $group->search();
-        if ($blob === '') {
-            continue;
-        }
-        $room = 4000 - $length - 1;
-        if ($room < 1) {
-            continue;
-        }
-        if (strlen($blob) > $room) {
-            $blob = substr($blob, 0, $room);
-        }
-        $search .= ' ' . $blob;
-        $length += 1 + strlen($blob);
-    }
-    return [
-        'kinds' => implode(' ', $kinds),
-        'categories' => implode(' ', $cats),
-        'search' => $search,
-    ];
-}
-
-/** @param list<CatalogGroup> $groups */
-function catalog_genre_rails(array $groups, string $sort = 'alpha'): array
+function catalog_genre_rails(array $groups): array
 {
     $rails = [];
     $uncat = [];
@@ -1719,24 +1347,9 @@ function catalog_genre_rails(array $groups, string $sort = 'alpha'): array
             $rails[$genre][] = $group;
         }
     }
-    if ($sort === 'count') {
-        uksort($rails, static function (string $a, string $b) use ($rails): int {
-            $cmp = count($rails[$b]) <=> count($rails[$a]);
-            if ($cmp !== 0) {
-                return $cmp;
-            }
-            return strnatcasecmp($a, $b);
-        });
-    } else {
-        uksort($rails, static function (string $a, string $b): int {
-            return strnatcasecmp($a, $b);
-        });
-    }
-    if (isset($rails['Uncategorized'])) {
-        $named = $rails['Uncategorized'];
-        unset($rails['Uncategorized']);
-        $rails['Uncategorized'] = $named;
-    }
+    uksort($rails, static function (string $a, string $b): int {
+        return strnatcasecmp($a, $b);
+    });
     if ($uncat !== []) {
         $rails['Uncategorized'] = $uncat;
     }

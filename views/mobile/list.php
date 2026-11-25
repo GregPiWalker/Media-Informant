@@ -93,37 +93,6 @@ function catalog_sort_attr_map(array $keys): string
     return $out;
 }
 
-/** @param array<string, mixed> $facts */
-function catalog_poster_badge(CatalogGroup $group, array $facts): string
-{
-    if ($group->isPartMovie()) {
-        $count = (int) ($facts['parts'] ?? count($group->members));
-        return $count . ' ' . ($count === 1 ? 'part' : 'parts');
-    }
-    if ($group->isSeries()) {
-        $seasons = (int) ($facts['seasons'] ?? 0);
-        if ($seasons > 0) {
-            return $seasons . ' ' . ($seasons === 1 ? 'season' : 'seasons');
-        }
-        $episodes = (int) ($facts['episodes'] ?? 0);
-        return $episodes . ' eps';
-    }
-    $head = $group->head;
-    if ($head->status === 'unidentified') {
-        return 'Unidentified';
-    }
-    if ($head->status !== 'matched') {
-        return 'Unmatched';
-    }
-    if ($head->matchSource === 'grok') {
-        return 'Grok';
-    }
-    if ($head->matchSource === 'manual') {
-        return 'Manual';
-    }
-    return '';
-}
-
 /**
  * Parent row for movies that share a folder under a video root.
  * Children are indented like episodes under a season.
@@ -234,36 +203,6 @@ render_header(['search' => true, 'section' => 'video', 'branches' => true]);
 $fileCount = count($records);
 $groupCount = count($groups);
 $view = $prefs->view;
-$genreFocus = isset($genreFocus) ? (string) $genreFocus : '';
-$shownFiles = $fileCount;
-if ($genreFocus !== '') {
-    $shownFiles = 0;
-    foreach ($groups as $shownGroup) {
-        $shownFiles += count($shownGroup->members);
-    }
-}
-$kodiOn = function_exists('kodi_enabled') && kodi_enabled();
-$kodiPlayLabel = 'Play on Kodi';
-if ($kodiOn && function_exists('kodi_selected_host')) {
-    $kodiPlayHost = kodi_selected_host();
-    $kodiPlayName = is_array($kodiPlayHost) ? trim((string) ($kodiPlayHost['name'] ?? '')) : '';
-    if ($kodiPlayName === '' && is_array($kodiPlayHost)) {
-        $kodiPlayName = trim((string) ($kodiPlayHost['host'] ?? ''));
-    }
-    if ($kodiPlayName !== '') {
-        $kodiPlayLabel = 'Play on ' . $kodiPlayName;
-    }
-}
-$posterChoices = [
-    ['title', 'asc', 'Title A–Z'],
-    ['title', 'desc', 'Title Z–A'],
-    ['year', 'desc', 'Year newest'],
-    ['year', 'asc', 'Year oldest'],
-    ['rating', 'desc', 'Rating high'],
-    ['rating', 'asc', 'Rating low'],
-    ['added', 'desc', 'Date added newest'],
-    ['added', 'asc', 'Date added oldest'],
-];
 ?>
 <main class="page">
   <?php if (!empty($dbError)): ?>
@@ -294,7 +233,7 @@ $posterChoices = [
     .catalog:not([data-categories~="<?= h($catId) ?>"]) [data-category="<?= h($catId) ?>"] { display: none !important; }
     <?php endforeach; ?>
   </style>
-  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-poster-sort="<?= h($prefs->posterSort) ?>" data-poster-dir="<?= h($prefs->posterDir) ?>" data-genre-sort="<?= h($prefs->genreSort) ?>" data-browse="<?= h($prefs->browse === 'list' ? 'list' : 'poster') ?>"<?php if ($genreFocus !== ''): ?> data-genre="<?= h($genreFocus) ?>"<?php endif; ?> data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>" data-watched="yes no" data-kodi="<?= $kodiOn ? '1' : '0' ?>" data-watch-url="<?= h(app_href('video/watch.php')) ?>">
+  <div class="catalog" data-catalog data-view="<?= h($view) ?>" data-view-rendered="<?= h($view) ?>" data-cols="<?= h($prefs->colsAttr()) ?>" data-sort="<?= h($prefs->sort) ?>" data-dir="<?= h($prefs->dir) ?>" data-kinds="<?= h($prefs->kindsAttr()) ?>" data-categories="<?= h($prefs->categoriesAttr()) ?>" data-watched="<?= h($prefs->watchedAttr()) ?>">
     <?php if (!empty($unscannedRoots)): ?>
     <div class="catalog-scan-hint">
       <p class="form-banner" role="status">
@@ -308,8 +247,8 @@ $posterChoices = [
     <div class="catalog-toolbar">
       <p class="catalog-meta">
         <?= (int) $groupCount ?> <?= $groupCount === 1 ? 'title' : 'titles' ?>
-        <?php if ($shownFiles !== $groupCount): ?>
-        · <?= (int) $shownFiles ?> files
+        <?php if ($fileCount !== $groupCount): ?>
+        · <?= (int) $fileCount ?> files
         <?php endif; ?>
         · <?= h(format_scanned_at($scannedAt)) ?>
       </p>
@@ -333,9 +272,6 @@ $posterChoices = [
         </label>
         <?php if ($view === 'poster'): ?>
         <button type="button" class="kind-chip catalog-sort-btn" data-sort-open aria-haspopup="true" aria-controls="sort-panel" aria-expanded="false">Sort</button>
-        <?php elseif ($view === 'genre'): ?>
-        <button type="button" class="kind-chip<?= $prefs->genreSort === 'alpha' ? ' is-active' : '' ?>" data-genre-sort="alpha" aria-pressed="<?= $prefs->genreSort === 'alpha' ? 'true' : 'false' ?>">A–Z</button>
-        <button type="button" class="kind-chip<?= $prefs->genreSort === 'count' ? ' is-active' : '' ?>" data-genre-sort="count" aria-pressed="<?= $prefs->genreSort === 'count' ? 'true' : 'false' ?>">Most titles</button>
         <?php endif; ?>
       </div>
       <?php if ($categoryList !== [] || !empty($categoryHasNone)): ?>
@@ -359,30 +295,27 @@ $posterChoices = [
         <?php endif; ?>
       </div>
       <?php endif; ?>
+      <div class="kind-filter" role="group" aria-label="Filter by watched">
+        <label class="kind-chip">
+          <input type="checkbox" data-watched-filter="yes"<?= $prefs->showsWatched('yes') ? ' checked' : '' ?>>
+          Watched
+        </label>
+        <label class="kind-chip">
+          <input type="checkbox" data-watched-filter="no"<?= $prefs->showsWatched('no') ? ' checked' : '' ?>>
+          Unwatched
+        </label>
+      </div>
       <?php if ($view === 'poster'): ?>
       <div class="col-panel" id="sort-panel" data-sort-panel hidden role="menu" aria-label="Sort posters">
-        <?php foreach ($posterChoices as $posterChoice):
-            $choice = $posterChoice[0];
-            $choiceDir = $posterChoice[1];
-            $choiceLabel = $posterChoice[2];
-            $choiceOn = $prefs->posterSort === $choice && $prefs->posterDir === $choiceDir;
-            ?>
-        <button type="button" class="col-option sort-option<?= $choiceOn ? ' is-active' : '' ?>" data-poster-choice="<?= h($choice) ?>" data-poster-dir="<?= h($choiceDir) ?>" role="menuitemradio" aria-checked="<?= $choiceOn ? 'true' : 'false' ?>">
-          <?= h($choiceLabel) ?>
+        <?php foreach (['title' => 'Title', 'year' => 'Year', 'status' => 'Status', 'genres' => 'Genres'] as $sortId => $sortLabel): ?>
+        <button type="button" class="col-option sort-option<?= $prefs->sort === $sortId ? ' is-active' : '' ?>" data-sort="<?= h($sortId) ?>" role="menuitemradio" aria-checked="<?= $prefs->sort === $sortId ? 'true' : 'false' ?>">
+          <?= h($sortLabel) ?>
+          <span class="sort-ind" data-sort-ind="<?= h($sortId) ?>"></span>
         </button>
         <?php endforeach; ?>
       </div>
       <?php endif; ?>
     </div>
-    <?php if ($genreFocus !== ''): ?>
-    <div class="genre-focus">
-      <button type="button" class="btn btn-ghost" data-catalog-view="genre">Genres</button>
-      <h1><?= h($genreFocus) ?></h1>
-    </div>
-    <?php if ($groups === []): ?>
-    <p class="hint genre-hint">No titles in <?= h($genreFocus) ?>.</p>
-    <?php endif; ?>
-    <?php endif; ?>
     <p class="empty-search" hidden data-search-empty>No titles match that search.</p>
 
     <?php if ($view === 'list'): ?>
@@ -633,17 +566,14 @@ $posterChoices = [
         $posterBucket = '';
         foreach ($groups as $group):
             $head = $group->head;
-            $facts = catalog_group_facts($group);
-            $title = (string) $facts['title'];
-            $bucket = catalog_poster_bucket($group, $prefs->posterSort);
-            $badge = catalog_poster_badge($group, $facts);
-            $cardHref = app_href('video/' . (string) $facts['href']);
+            $title = $group->isSeries() ? $head->seriesTitle : $head->title;
+            $bucket = catalog_poster_bucket($group, $prefs->sort);
             if ($bucket !== $posterBucket):
                 $posterBucket = $bucket;
                 ?>
         <h2 class="poster-bucket" data-poster-bucket><?= h($bucket) ?></h2>
             <?php endif; ?>
-        <a class="card" href="<?= h($cardHref) ?>" data-card data-quick data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_group_card_watch_attr($group) ?><?= catalog_sort_attrs($head) ?> data-sort-rating="<?= h((string) $facts['rating_key']) ?>" data-sort-added="<?= h((string) $facts['added_key']) ?>"<?= catalog_poster_bucket_attrs($group) ?> data-quick-title="<?= h($title) ?>" data-quick-year="<?= h((string) $facts['year']) ?>" data-quick-rating="<?= h((string) $facts['rating_label']) ?>" data-quick-blurb="<?= h((string) $facts['blurb']) ?>" data-quick-play="<?= h((string) $facts['play_id']) ?>" data-watch-ids="<?= h((string) $facts['watch_ids']) ?>" data-quick-seasons="<?= (int) $facts['seasons'] ?>" data-quick-episodes="<?= (int) $facts['episodes'] ?>" data-quick-parts="<?= (int) $facts['parts'] ?>" data-quick-href="<?= h($cardHref) ?>">
+        <a class="card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_group_card_watch_attr($group) ?><?= catalog_sort_attrs($head) ?><?= catalog_poster_bucket_attrs($group) ?>>
           <div class="poster">
             <?php if ($head->poster): ?>
             <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">
@@ -656,8 +586,18 @@ $posterChoices = [
               <h2 class="card-title"><?= h($title) ?></h2>
               <p class="card-year">
                 <?= $head->cells['year'] !== '—' ? h($head->cells['year']) : 'Year unknown' ?>
-                <?php if ($badge !== ''): ?>
-                <span class="badge"><?= h($badge) ?></span>
+                <?php if ($group->isPartMovie()): ?>
+                <span class="badge"><?= count($group->members) ?> parts</span>
+                <?php elseif ($group->isSeries()): ?>
+                <span class="badge"><?= count($group->episodeClusters()) ?> eps</span>
+                <?php elseif ($head->status === 'unidentified'): ?>
+                <span class="badge">Unidentified</span>
+                <?php elseif ($head->status !== 'matched'): ?>
+                <span class="badge">Unmatched</span>
+                <?php elseif ($head->matchSource === 'grok'): ?>
+                <span class="badge">Grok</span>
+                <?php elseif ($head->matchSource === 'manual'): ?>
+                <span class="badge">Manual</span>
                 <?php endif; ?>
               </p>
             </div>
@@ -674,58 +614,50 @@ $posterChoices = [
       <p class="hint genre-hint">No titles to group.</p>
       <?php else: ?>
       <p class="hint genre-hint">A series appears once per genre. Unmatched files land in Uncategorized. Scan or match titles to fill genres.</p>
-      <div class="genre-index" data-genre-index>
-        <?php
-        $genreBase = app_href('video/index.php');
-        $genreBrowse = $prefs->browse === 'list' ? 'list' : 'poster';
-        foreach ($genreGroups as $genre => $rail):
-            $genreFields = catalog_genre_card_fields((string) $genre, $rail);
-            $thumbs = catalog_genre_thumbs($rail);
-            $genreHref = $genreBase . '?genre=' . rawurlencode((string) $genre) . '&view=' . $genreBrowse;
-            ?>
-        <a class="genre-index-card" href="<?= h($genreHref) ?>" data-genre-card data-genre-name="<?= h((string) $genre) ?>" data-genre-base="<?= h($genreBase) ?>" data-count="<?= count($rail) ?>" data-kinds="<?= h($genreFields['kinds']) ?>" data-categories="<?= h($genreFields['categories']) ?>" data-search="<?= h($genreFields['search']) ?>">
-          <div class="genre-thumbs" data-n="<?= count($thumbs) ?>">
-            <?php foreach ($thumbs as $thumb): ?>
-              <?php if ($thumb['poster'] !== ''): ?>
-              <img src="<?= h($thumb['poster']) ?>" alt="" loading="lazy" decoding="async">
+      <?php foreach ($genreGroups as $genre => $rail): ?>
+      <section class="genre-block" data-genre-rail>
+        <header class="genre-head">
+          <h2><?= h($genre) ?></h2>
+          <p><?= count($rail) ?></p>
+        </header>
+        <div class="genre-rail">
+          <?php foreach ($rail as $group):
+              $head = $group->head;
+              $title = $group->isSeries() ? $head->seriesTitle : $head->title;
+              ?>
+          <a class="card genre-card" href="<?= h(app_href('video/' . ($group->isSeries() ? catalog_group_href($group) : $head->href))) ?>" data-card data-kind="<?= h($group->kind) ?>" data-category="<?= h(catalog_cat_attr($head)) ?>" data-search="<?= h($group->search()) ?>"<?= catalog_source_attr($head) ?><?= catalog_group_card_watch_attr($group) ?>>
+            <div class="poster">
+              <?php if ($head->poster): ?>
+              <img src="<?= h($head->poster) ?>" alt="" width="342" height="513" loading="lazy" decoding="async">
               <?php else: ?>
-              <span class="genre-thumb-fallback" aria-hidden="true"><?= h($thumb['initial']) ?></span>
+              <div class="poster-fallback" aria-hidden="true">
+                <span><?= h(initial($title)) ?></span>
+              </div>
               <?php endif; ?>
-            <?php endforeach; ?>
-          </div>
-          <span class="genre-index-name"><?= h((string) $genre) ?></span>
-          <span class="genre-index-count"><?= count($rail) ?> <?= count($rail) === 1 ? 'title' : 'titles' ?></span>
-        </a>
-        <?php endforeach; ?>
-      </div>
+              <div class="card-meta">
+                <h2 class="card-title"><?= h($title) ?></h2>
+                <p class="card-year">
+                  <?= $head->cells['year'] !== '—' ? h($head->cells['year']) : '' ?>
+                  <?php if ($group->isPartMovie()): ?>
+                  <span class="badge"><?= count($group->members) ?> parts</span>
+                  <?php elseif ($group->isSeries()): ?>
+                  <span class="badge"><?= count($group->episodeClusters()) ?> eps</span>
+                  <?php elseif ($head->matchSource === 'grok'): ?>
+                  <span class="badge">Grok</span>
+                  <?php elseif ($head->matchSource === 'manual'): ?>
+                  <span class="badge">Manual</span>
+                  <?php endif; ?>
+                </p>
+              </div>
+            </div>
+          </a>
+          <?php endforeach; ?>
+        </div>
+      </section>
+      <?php endforeach; ?>
       <?php endif; ?>
     </section>
     <?php endif; ?>
-    <div class="quick-sheet" data-quick-sheet hidden role="dialog" aria-modal="true" aria-labelledby="quick-sheet-title">
-      <button type="button" class="quick-sheet-backdrop" data-quick-close tabindex="-1" aria-label="Close"></button>
-      <div class="quick-sheet-panel">
-        <h2 id="quick-sheet-title" data-quick-title></h2>
-        <p class="quick-sheet-meta" data-quick-meta></p>
-        <p class="quick-sheet-blurb" data-quick-blurb hidden></p>
-        <div class="quick-sheet-actions">
-          <?php if ($kodiOn): ?>
-          <button type="button" class="btn btn-accent" data-kodi-play data-kodi-id="" data-kodi-url="<?= h(app_href('video/play-kodi.php')) ?>" hidden><?= h($kodiPlayLabel) ?></button>
-          <p class="form-banner quick-sheet-status" data-kodi-status hidden role="status"></p>
-          <?php endif; ?>
-          <a class="btn btn-ghost" data-quick-details href="#">Details</a>
-          <button type="button" class="btn btn-ghost" data-quick-watch>Mark watched</button>
-          <button type="button" class="btn btn-ghost" data-quick-close>Close</button>
-        </div>
-      </div>
-    </div>
-    <div class="section-nav" data-section-nav>
-      <button type="button" class="section-nav-btn section-nav-prev" data-section-dir="prev" aria-label="Previous section">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M6 14l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-      <button type="button" class="section-nav-btn section-nav-next" data-section-dir="next" aria-label="Next section">
-        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M6 10l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </button>
-    </div>
   </div>
   <?php endif; ?>
 </main>
